@@ -1,0 +1,18 @@
+// OSM PBF 文件容器格式（fileformat.proto）
+// 说明：官方定义里 Blob.data 是 oneof，这里改成独立的 optional 字段，
+// 以避开 protoc-c 1.3.1 对 oneof 的兼容问题——读取时判断哪个字段 has_data 即可。
+syntax = "proto2";
+
+message Blob {
+  optional int32 raw_size   = 2;   // 解压后字节数，解压缓冲区大小就靠它
+  optional bytes raw        = 1;   // 未压缩
+  optional bytes zlib_data  = 3;   // zlib（OSM PBF 绝大多数是它）
+  optional bytes lz4_data   = 4;
+  optional bytes zstd_data  = 5;
+}
+
+message BlobHeader {
+  required string type      = 1;   // "OSMHeader" / "OSMData"
+  optional bytes indexdata  = 2;
+  required int32 datasize   = 3;   // 紧跟其后的 Blob 的字节数
+}

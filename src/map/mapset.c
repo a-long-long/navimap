@@ -1,0 +1,561 @@
+#include "map/mapset.h"
+
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <dirent.h>
+#include <sys/stat.h>
+#include <math.h>
+
+#include "map/coordkey.h"
+#include "utils/geo.h"
+
+/* ------------------------------------------------------------------ */
+/* 单省加载                                                              */
+/* ------------------------------------------------------------------ */
+
+static int manifest_bbox(const char *dir, int32_t out[4])
+{
+    char p[4096];
+    snprintf(p, sizeof(p), "%s/manifest.txt", dir);
+    FILE *f = fopen(p, "r");
+    if (!f) return -1;
+    char line[512];
+    int got = 0;
+    while (fgets(line, sizeof(line), f)) {
+        if (strncmp(line, "bbox_e7", 7) == 0) {
+            int v[4];
+            if (sscanf(line, "bbox_e7 %d %d %d %d", &v[0], &v[1], &v[2], &v[3]) == 4) {
+                memcpy(out, v, sizeof(v));
+                got = 1;
+            }
+            break;
+        }
+    }
+    fclose(f);
+    return got ? 0 : -1;
+}
+
+static void src_close(MapSrc *s)
+{
+    nmbin_close(&s->nodes);
+    nmbin_close(&s->edges);
+    if (s->has_restr) nmbin_close(&s->restrictions);
+    if (s->has_features) {
+        nmbin_close(&s->lines);
+        nmbin_close(&s->areas);
+        nmbin_close(&s->polyrefs);
+    }
+    if (s->has_tiles) {
+        nmbin_close(&s->tiles);
+        nmbin_close(&s->edgelist);
+    }
+    name_pool_close(&s->np);
+    free(s->area_bbox);
+    free(s->line_bbox);
+    memset(s, 0, sizeof(*s));
+}
+
+/* 只打开文件、不碰身份（name/dir/bbox/dup_of/loaded 由调用方保持）。
+ * 重载走这个，身份不变；首次打开由 src_open 先置身份再调它。 */
+static int src_open_files(MapSrc *s)
+{
+    char p[4096];
+    char err[256];
+
+    /* 必需文件：nodes/edges。加载即校验版本与自洽性——这是此前一直欠着的
+     * 加载端防线：此前 app_init 只看 magic，格式升级或半截文件会静默画错图。 */
+    snprintf(p, sizeof(p), "%s/nodes.bin", s->dir);
+    if (nmbin_open(p, &s->nodes) != 0) {
+        fprintf(stderr, "图集: %s 打不开 %s，跳过\n", s->name, p);
+        return -1;
+    }
+    if (nmbin_check(&s->nodes, err, sizeof(err)) != 0) {
+        fprintf(stderr, "图集: %s nodes.bin 校验失败（%s），跳过该省\n", s->name, err);
+        goto fail;
+    }
+    snprintf(p, sizeof(p), "%s/edges.bin", s->dir);
+    if (nmbin_open(p, &s->edges) != 0) {
+        fprintf(stderr, "图集: %s 打不开 %s，跳过\n", s->name, p);
+        goto fail;
+    }
+    if (nmbin_check(&s->edges, err, sizeof(err)) != 0) {
+        fprintf(stderr, "图集: %s edges.bin 校验失败（%s），跳过该省\n", s->name, err);
+        goto fail;
+    }
+
+    /* 转向限制可选：路由用，没有就当省内没有任何禁转 */
+    snprintf(p, sizeof(p), "%s/restrictions.bin", s->dir);
+    s->has_restr = (nmbin_open(p, &s->restrictions) == 0);
+    if (s->has_restr && nmbin_check(&s->restrictions, err, sizeof(err)) != 0) {
+        fprintf(stderr, "图集: %s restrictions.bin 校验失败（%s），按无限制处理\n",
+                s->name, err);
+        nmbin_close(&s->restrictions);
+        s->has_restr = 0;
+    }
+
+    /* 线/面要素可选：三者齐备才算有 */
+    s->has_features = 1;
+    snprintf(p, sizeof(p), "%s/lines.bin", s->dir);
+    if (nmbin_open(p, &s->lines) != 0) s->has_features = 0;
+    if (s->has_features) {
+        snprintf(p, sizeof(p), "%s/areas.bin", s->dir);
+        if (nmbin_open(p, &s->areas) != 0) s->has_features = 0;
+    }
+    if (s->has_features) {
+        snprintf(p, sizeof(p), "%s/polyrefs.bin", s->dir);
+        if (nmbin_open(p, &s->polyrefs) != 0) s->has_features = 0;
+    }
+    if (!s->has_features)
+        fprintf(stderr, "图集: %s 无 lines/areas/polyrefs，只显示路网\n", s->name);
+
+    /* 空间索引可选：两者齐备才算有 */
+    s->has_tiles = 1;
+    snprintf(p, sizeof(p), "%s/tiles.bin", s->dir);
+    if (nmbin_open(p, &s->tiles) != 0) s->has_tiles = 0;
+    if (s->has_tiles) {
+        snprintf(p, sizeof(p), "%s/edgelist.bin", s->dir);
+        if (nmbin_open(p, &s->edgelist) != 0) s->has_tiles = 0;
+    }
+
+    /* 路名池可选 */
+    snprintf(p, sizeof(p), "%s/names.bin", s->dir);
+    if (name_pool_open(&s->np, p) != 0)
+        fprintf(stderr, "图集: %s 无路名池（不画路名标注）\n", s->name);
+
+    /* 视口裁剪用的 bbox。没有 manifest（旧目录）就置全域，宁可多画。 */
+    if (manifest_bbox(s->dir, s->bbox) != 0) {
+        s->bbox[0] = -900000000; s->bbox[1] = -1800000000;
+        s->bbox[2] =  900000000; s->bbox[3] =  1800000000;
+    }
+    return 0;
+
+fail:
+    /* nmbin_close / name_pool_close 对全零结构都是安全空操作，
+       逐个 close 一遍即可，不用记录哪些开过 */
+    nmbin_close(&s->nodes);
+    nmbin_close(&s->edges);
+    nmbin_close(&s->restrictions);
+    nmbin_close(&s->lines);
+    nmbin_close(&s->areas);
+    nmbin_close(&s->polyrefs);
+    nmbin_close(&s->tiles);
+    nmbin_close(&s->edgelist);
+    name_pool_close(&s->np);
+    return -1;
+}
+
+/* 首次打开：先清身份再置 name/dir，再开文件。 */
+static int src_open(MapSrc *s, const char *dir, const char *name)
+{
+    memset(s, 0, sizeof(*s));
+    s->dup_of = -1;          /* 0 是合法的"被 srcs[0] 包含"，所以空值用 -1 */
+    snprintf(s->name, sizeof(s->name), "%s", name);
+    snprintf(s->dir, sizeof(s->dir), "%s", dir);
+    return src_open_files(s);
+}
+
+/* 卸载：关文件 + 释放缓存，但保留身份（name/dir/bbox/dup_of/loaded）。
+ * 与 src_close（整体释放，mapset_free 用）不同，这里省份槽位继续存在，
+ * 只是文件不再 mmap——下次 set_view 命中视口时 src_open_files 重新打开。 */
+static void src_unload(MapSrc *s)
+{
+    nmbin_close(&s->nodes);
+    nmbin_close(&s->edges);
+    if (s->has_restr) nmbin_close(&s->restrictions);
+    if (s->has_features) {
+        nmbin_close(&s->lines);
+        nmbin_close(&s->areas);
+        nmbin_close(&s->polyrefs);
+    }
+    if (s->has_tiles) {
+        nmbin_close(&s->tiles);
+        nmbin_close(&s->edgelist);
+    }
+    name_pool_close(&s->np);
+    free(s->area_bbox);
+    free(s->line_bbox);
+    memset(&s->nodes, 0, sizeof(s->nodes));
+    memset(&s->edges, 0, sizeof(s->edges));
+    memset(&s->restrictions, 0, sizeof(s->restrictions));
+    memset(&s->lines, 0, sizeof(s->lines));
+    memset(&s->areas, 0, sizeof(s->areas));
+    memset(&s->polyrefs, 0, sizeof(s->polyrefs));
+    memset(&s->tiles, 0, sizeof(s->tiles));
+    memset(&s->edgelist, 0, sizeof(s->edgelist));
+    memset(&s->np, 0, sizeof(s->np));
+    s->has_restr = 0;
+    s->has_features = 0;
+    s->has_tiles = 0;
+    s->area_bbox = NULL;
+    s->line_bbox = NULL;
+    /* name/dir/bbox/dup_of 保留 */
+}
+
+/* ------------------------------------------------------------------ */
+/* 图集                                                                  */
+/* ------------------------------------------------------------------ */
+
+/* ------------------------------------------------------------------ */
+/* 数据包含关系检测                                                      */
+/*                                                                      */
+/* 各省 pbf 是同一份 OSM 数据按多边形裁出来的，地形上被包围的行政区会被      */
+/* 邻省整块包含：实测北京 ⊂ 河北 100%、天津 ⊂ 河北 100%（osmid 两两求交，   */
+/* 且"只加载河北"与"只加载北京"在同位置渲染出的 BMP md5 完全相同）。        */
+/*                                                                      */
+/* 这对路由是灾难：每个路口在两省各有一个副本，搜索状态翻倍，且同一个瓦片     */
+/* 永远有 2 个省覆盖 → 每次展开都要重建缝合索引。所以加载时就把这件事认出来。*/
+/*                                                                      */
+/* 判据（三条都要满足，宁可漏判也别误判——误判会真的丢路）：                 */
+/*   1. bbox 完全落在对方 bbox 内；2. 节点数不多于对方；                   */
+/*   3. 抽样 1000 个节点，≥99% 能在对方的空间索引里找到同坐标节点。         */
+/* ------------------------------------------------------------------ */
+
+/* ------------------------------------------------------------------ */
+/* edgelist 条目读取（v1 / v2 通吃）                                    */
+/*                                                                      */
+/* v1（8B）只有 {node_idx, edge_idx}，取坐标要再去 nodes.bin 随机读；    */
+/* v2（28B）自带两端坐标 + 节点下标。这里统一出口，下面三条路径（重复省   */
+/* 检测 / 归属查询 / 瓦片遍历）都不用关心目录是哪一版。                  */
+/* ------------------------------------------------------------------ */
+
+static inline int xl_is_v2(const MapSrc *s)
+{
+    return s->edgelist.hdr.rec_size == NM_XL2_BYTES;
+}
+
+/* 条目 pos 的 from 端坐标键；下标越界返回 ~0（调用方据 ck 比较自然判掉） */
+static uint64_t xl_from_key(const MapSrc *s, uint64_t pos)
+{
+    const uint8_t *xl = s->edgelist.data + pos * s->edgelist.hdr.rec_size;
+    if (xl_is_v2(s))
+        return coord_key_e7(nm_get_i32(xl + XL2_FROM_LAT),
+                            nm_get_i32(xl + XL2_FROM_LON));
+    uint32_t from = nm_get_u32(xl + XL_NODE);
+    if ((uint64_t)from >= s->nodes.hdr.rec_count) return ~0ULL;
+    const uint8_t *nr = s->nodes.data + (uint64_t)from * NM_NODE_BYTES;
+    return coord_key_e7(nm_get_i32(nr + NF_LAT), nm_get_i32(nr + NF_LON));
+}
+
+/* 条目 pos 的 {from 节点下标, CSR 边下标}；越界返回 0 */
+static int xl_entry(const MapSrc *s, uint64_t pos, uint32_t *from, uint32_t *eidx)
+{
+    const uint8_t *xl = s->edgelist.data + pos * s->edgelist.hdr.rec_size;
+    if (xl_is_v2(s)) {
+        *from = nm_get_u32(xl + XL2_NODE);
+        *eidx = nm_get_u32(xl + XL2_EDGE);
+    } else {
+        *from = nm_get_u32(xl + XL_NODE);
+        *eidx = nm_get_u32(xl + XL_EDGE);
+    }
+    return ((uint64_t)*from < s->nodes.hdr.rec_count &&
+            (uint64_t)*eidx < s->edges.hdr.rec_count);
+}
+
+static int tile_has_coord(const MapSrc *s, int tx, int ty, uint64_t ck)
+{
+    if (!s->has_tiles) return 0;
+    const uint8_t *td = s->tiles.data;
+    uint32_t minx = nm_get_u32(td + TF_EDGE_OFF);
+    uint32_t miny = nm_get_u32(td + TF_EDGE_CNT);
+    uint32_t nx   = nm_get_u32(td + NM_TILE_REC_BYTES + TF_EDGE_OFF);
+    uint32_t ny   = nm_get_u32(td + NM_TILE_REC_BYTES + TF_EDGE_CNT);
+    if (tx < (int)minx || ty < (int)miny ||
+        tx >= (int)(minx + nx) || ty >= (int)(miny + ny))
+        return 0;
+    if ((uint64_t)nx * ny > s->tiles.hdr.rec_count - 2) return 0;
+    size_t t = ((size_t)(ty - miny) * nx) + (tx - minx);
+    const uint8_t *dir = td + (2 + t) * NM_TILE_REC_BYTES;
+    uint32_t off = nm_get_u32(dir + TF_EDGE_OFF);
+    uint32_t cnt = nm_get_u32(dir + TF_EDGE_CNT);
+    uint64_t ne = s->edgelist.hdr.rec_count;
+    for (uint32_t k = 0; k < cnt; k++) {
+        uint64_t pos = (uint64_t)off + k;
+        if (pos >= ne) break;
+        if (xl_from_key(s, pos) == ck) return 1;
+    }
+    return 0;
+}
+
+int mapset_detail_prov(const MapSet *ms, int32_t lat_e7, int32_t lon_e7,
+                       int fallback)
+{
+    double wx, wy;
+    nm_mercator((double)lat_e7 / 1e7, (double)lon_e7 / 1e7, &wx, &wy);
+    double Z = (double)(1u << NM_TILE_Z);
+    int tx = (int)(wx * Z), ty = (int)(wy * Z);
+    uint64_t ck = coord_key_e7(lat_e7, lon_e7);
+
+    for (int i = 0; i < ms->n; i++) {
+        const MapSrc *s = &ms->srcs[i];
+        if (!s->loaded) continue;              /* 该省已卸载（视口外），跳过 */
+        if (s->dup_of < 0) continue;            /* 只看被包含的小省 */
+        if (lat_e7 < s->bbox[0] || lon_e7 < s->bbox[1] ||
+            lat_e7 > s->bbox[2] || lon_e7 > s->bbox[3])
+            continue;
+        if (tile_has_coord(s, tx, ty, ck)) return i;
+    }
+    return fallback;
+}
+
+#define DUP_SAMPLE 1000
+
+static void detect_duplicates(MapSet *ms)
+{
+    for (int i = 0; i < ms->n; i++) ms->srcs[i].dup_of = -1;
+
+    for (int i = 0; i < ms->n; i++) {
+        MapSrc *a = &ms->srcs[i];
+        if (!a->has_tiles) continue;
+        uint64_t na = a->nodes.hdr.rec_count;
+        if (na == 0) continue;
+        for (int j = 0; j < ms->n; j++) {
+            if (i == j) continue;
+            MapSrc *b = &ms->srcs[j];
+            if (!b->has_tiles) continue;
+            uint64_t nb = b->nodes.hdr.rec_count;
+            if (nb < na) continue;
+            if (a->bbox[0] < b->bbox[0] || a->bbox[1] < b->bbox[1] ||
+                a->bbox[2] > b->bbox[2] || a->bbox[3] > b->bbox[3])
+                continue;                       /* bbox 不包含 */
+
+            /* ★ 采样必须从 edgelist 取，不能从 nodes 取：瓦片索引里登记的
+               是每条边的 from 节点，只作为 to 出现的节点（单行道终点等）
+               根本不在索引里，拿它们采样会把命中率拉到 60% 上下，误判为
+               "不包含"。路由真正关心的是有出边的路口，正好是 edgelist。 */
+            uint64_t nea = a->edgelist.hdr.rec_count;
+            if (nea == 0) continue;
+            uint64_t stride = nea / DUP_SAMPLE;
+            if (stride == 0) stride = 1;
+            uint64_t tested = 0, hit = 0;
+            for (uint64_t n = 0; n < nea && tested < DUP_SAMPLE; n += stride) {
+                uint64_t ck = xl_from_key(a, n);
+                if (ck == ~0ULL) continue;
+                int32_t la = coord_key_lat(ck), lo = coord_key_lon(ck);
+                double wx, wy;
+                nm_mercator((double)la / 1e7, (double)lo / 1e7, &wx, &wy);
+                double Z = (double)(1u << NM_TILE_Z);
+                int tx = (int)(wx * Z), ty = (int)(wy * Z);
+                tested++;
+                if (tile_has_coord(b, tx, ty, ck)) hit++;
+            }
+            if (tested >= 100 && hit * 100 >= tested * 99) {
+                a->dup_of = j;
+                printf("图集: %s 的数据被 %s 完全包含（抽样 %llu/%llu 命中），"
+                       "路由缝合时跳过其副本\n",
+                       a->name, b->name,
+                       (unsigned long long)hit, (unsigned long long)tested);
+                break;
+            }
+        }
+    }
+}
+
+static int mapset_add(MapSet *ms, const char *dir, const char *name)
+{
+    if (ms->n == ms->cap) {
+        int ncap = ms->cap ? ms->cap * 2 : 8;
+        MapSrc *ns = realloc(ms->srcs, (size_t)ncap * sizeof(MapSrc));
+        if (!ns) return -1;
+        ms->srcs = ns;
+        ms->cap = ncap;
+    }
+    MapSrc *s = &ms->srcs[ms->n];
+    if (src_open(s, dir, name) != 0) return -1;
+    s->loaded = 1;
+
+    if (ms->n == 0) {
+        memcpy(ms->bbox, s->bbox, sizeof(ms->bbox));
+    } else {
+        if (s->bbox[0] < ms->bbox[0]) ms->bbox[0] = s->bbox[0];
+        if (s->bbox[1] < ms->bbox[1]) ms->bbox[1] = s->bbox[1];
+        if (s->bbox[2] > ms->bbox[2]) ms->bbox[2] = s->bbox[2];
+        if (s->bbox[3] > ms->bbox[3]) ms->bbox[3] = s->bbox[3];
+    }
+    ms->n++;
+    printf("图集: + %-12s 节点 %-10llu 边 %-10llu\n",
+           s->name,
+           (unsigned long long)s->nodes.hdr.rec_count,
+           (unsigned long long)s->edges.hdr.rec_count);
+    return 0;
+}
+
+static int cmp_str(const void *a, const void *b)
+{
+    return strcmp(*(const char *const *)a, *(const char *const *)b);
+}
+
+int mapset_load(MapSet *ms, const char *graph_dir)
+{
+    memset(ms, 0, sizeof(*ms));
+
+    /* 单省目录：下面直接有 nodes.bin */
+    char p[4096];
+    struct stat st;
+    snprintf(p, sizeof(p), "%s/nodes.bin", graph_dir);
+    if (stat(p, &st) == 0) {
+        const char *nm = strrchr(graph_dir, '/');
+        nm = nm ? nm + 1 : graph_dir;
+        if (mapset_add(ms, graph_dir, nm) != 0) {
+            fprintf(stderr, "图集: %s 加载失败\n", graph_dir);
+            return -1;
+        }
+        return 0;
+    }
+
+    /* 父目录：扫描含 manifest.txt 的子目录。readdir 顺序不定，
+       先收集名字再排序，保证加载顺序（以及日志）可复现。 */
+    DIR *d = opendir(graph_dir);
+    if (!d) {
+        fprintf(stderr, "图集: 既不是省目录也没有 nodes.bin：%s\n", graph_dir);
+        return -1;
+    }
+    char **names = NULL;
+    int nn = 0, cap = 0;
+    struct dirent *de;
+    while ((de = readdir(d)) != NULL) {
+        if (de->d_name[0] == '.') continue;
+        /* 跳过 sync_maps 的过渡目录：.tmp.* 是转换中的半成品，.old.* 是已换下、
+           删除失败时留下的旧产物。两者都含 manifest.txt，不排除就会被当成
+           一个"省"加载进来 —— 同一份数据装两遍（内存翻倍 + 渲染重复）。 */
+        if (strstr(de->d_name, ".tmp.")) continue;
+        if (strstr(de->d_name, ".old.")) continue;
+        snprintf(p, sizeof(p), "%s/%s", graph_dir, de->d_name);
+        if (stat(p, &st) != 0 || !S_ISDIR(st.st_mode)) continue;
+        snprintf(p, sizeof(p), "%s/%s/manifest.txt", graph_dir, de->d_name);
+        if (stat(p, &st) != 0) continue;             /* 没有产物指纹的不算省 */
+        if (nn == cap) {
+            cap = cap ? cap * 2 : 16;
+            char **t = realloc(names, (size_t)cap * sizeof(char *));
+            if (!t) break;
+            names = t;
+        }
+        names[nn++] = strdup(de->d_name);
+    }
+    closedir(d);
+
+    if (nn == 0) {
+        fprintf(stderr, "图集: %s 下没有含 manifest.txt 的省目录\n", graph_dir);
+        return -1;
+    }
+    qsort(names, (size_t)nn, sizeof(char *), cmp_str);
+
+    int ok = 0;
+    for (int i = 0; i < nn; i++) {
+        snprintf(p, sizeof(p), "%s/%s", graph_dir, names[i]);
+        if (mapset_add(ms, p, names[i]) == 0) ok++;
+        free(names[i]);
+    }
+    free(names);
+
+    if (ok == 0) {
+        fprintf(stderr, "图集: %s 下一个省都没加载成功\n", graph_dir);
+        return -1;
+    }
+    printf("图集: 共 %d 个省\n", ms->n);
+    detect_duplicates(ms);
+    return 0;
+}
+
+/* ------------------------------------------------------------------ */
+/* 按需加载（进省才开、离省卸载）                                        */
+/*                                                                      */
+/* 省份下标固定（槽位 == 省 id），卸载只关文件、保留身份，因此路由/转向里  */
+/* 写进结果的 prov 下标始终有效。视口驱动的 mapset_set_view 每帧由渲染循环  */
+/* 调用：把与视口（含边距）相交的省份打开、其余卸载。迭代函数跳过          */
+/* !loaded，卸载的省份不会被画、也不会被查询命中。                        */
+/* ------------------------------------------------------------------ */
+
+static int bbox_overlap(const int32_t a[4], const int32_t b[4])
+{
+    return !(a[2] < b[0] || a[3] < b[1] || a[0] > b[2] || a[1] > b[3]);
+}
+
+void mapset_set_view(MapSet *ms, const int32_t vb[4])
+{
+    if (!ms || ms->n == 0) return;
+    /* 边距：视口四周各扩 50%，让即将滚入的相邻省提前打开，也覆盖吸附/导航预览 */
+    int32_t m  = (vb[2] - vb[0]) / 2;
+    int32_t mn = (vb[3] - vb[1]) / 2;
+    int32_t eb[4] = { vb[0] - m, vb[1] - mn, vb[2] + m, vb[3] + mn };
+
+    for (int i = 0; i < ms->n; i++) {
+        MapSrc *s = &ms->srcs[i];
+        int ov = bbox_overlap(s->bbox, eb);
+        if (ov && !s->loaded) {
+            s->loaded = (src_open_files(s) == 0);
+        } else if (!ov && s->loaded) {
+            src_unload(s);
+            s->loaded = 0;
+        }
+    }
+}
+
+void mapset_ensure_loaded(MapSet *ms, int prov)
+{
+    if (!ms || prov < 0 || prov >= ms->n) return;
+    MapSrc *s = &ms->srcs[prov];
+    if (!s->loaded)
+        s->loaded = (src_open_files(s) == 0);
+}
+
+void mapset_free(MapSet *ms)
+{
+    if (!ms) return;
+    for (int i = 0; i < ms->n; i++)
+        src_close(&ms->srcs[i]);
+    free(ms->srcs);
+    memset(ms, 0, sizeof(*ms));
+}
+
+void mapset_totals(const MapSet *ms, uint64_t *nodes, uint64_t *edges)
+{
+    uint64_t n = 0, e = 0;
+    for (int i = 0; i < ms->n; i++) {
+        if (!ms->srcs[i].loaded) continue;
+        n += ms->srcs[i].nodes.hdr.rec_count;
+        e += ms->srcs[i].edges.hdr.rec_count;
+    }
+    if (nodes) *nodes = n;
+    if (edges) *edges = e;
+}
+
+/* 按 tile 跨省查询。tiles.bin 的 payload 布局见 binfmt.h：
+ * rec0={minx,miny}，rec1={nx,ny}，其后每 tile 一条 {edge_off, edge_cnt}，
+ * edge_off 指向 edgelist.bin（{node_idx, edge_idx} 对，按 tile 排序）。 */
+int mapset_query_tile(const MapSet *ms, int tx, int ty, MapsetTileFn fn, void *ud)
+{
+    if (!ms || !fn) return 0;
+    int total = 0;
+    for (int i = 0; i < ms->n; i++) {
+        const MapSrc *s = &ms->srcs[i];
+        if (!s->loaded || !s->has_tiles) continue;
+
+        const uint8_t *td = s->tiles.data;
+        uint32_t minx = nm_get_u32(td + TF_EDGE_OFF);
+        uint32_t miny = nm_get_u32(td + TF_EDGE_CNT);
+        uint32_t nx   = nm_get_u32(td + NM_TILE_REC_BYTES + TF_EDGE_OFF);
+        uint32_t ny   = nm_get_u32(td + NM_TILE_REC_BYTES + TF_EDGE_CNT);
+        if (tx < (int)minx || ty < (int)miny ||
+            tx >= (int)(minx + nx) || ty >= (int)(miny + ny))
+            continue;                       /* 该省没这片 */
+
+        size_t t = ((size_t)(ty - miny) * nx) + (tx - minx);
+        uint64_t ntile_dir = s->tiles.hdr.rec_count - 2;
+        if ((uint64_t)nx * ny > ntile_dir) continue;
+        const uint8_t *dir = td + (2 + t) * NM_TILE_REC_BYTES;
+        uint32_t off = nm_get_u32(dir + TF_EDGE_OFF);
+        uint32_t cnt = nm_get_u32(dir + TF_EDGE_CNT);
+
+        uint64_t ne = s->edgelist.hdr.rec_count;
+        for (uint32_t k = 0; k < cnt; k++) {
+            uint64_t pos = (uint64_t)off + k;
+            if (pos >= ne) break;
+            uint32_t from, eidx;
+            if (!xl_entry(s, pos, &from, &eidx)) continue;
+            fn(s, from, eidx, ud);
+            total++;
+        }
+    }
+    return total;
+}
