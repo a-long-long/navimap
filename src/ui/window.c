@@ -974,6 +974,23 @@ int app_render_to_surface(App *a, SDL_Surface *surf, PaintStats *st)
     paint_frame(r, &rs, a, st);
 
     SDL_RenderPresent(r);
+    /* ★ 销毁 renderer 前必须作废字形纹理（与 app_ensure_canvas 同一约定）。
+     *
+     * 字形纹理挂在创建它的 renderer 上，随 renderer 一起销毁。而 glyph_get
+     * 只在 `tex_owner != r` 时才重建 —— 判据是**指针相等**，不是"renderer
+     * 真的换了"。本函数每帧新建/销毁一个软件渲染器，两次 SDL_CreateSoftware-
+     * Renderer 完全可能返回**同一个地址**（中间的 SDL_DestroyRenderer 把那块
+     * 内存还回分配器，下次立即复用；实测在 8 省图集上就是如此）。
+     * 一旦地址相同，tex_owner 判定为"没换"，缓存里的 g->tex 就成了悬垂指针，
+     * 下一帧 RenderCopy 会画出错的字（实测表现为文字像素整体错位）。
+     *
+     * 这个 bug 只在"两帧地址恰好相同"时显形，而地址是否相同取决于堆布局 ——
+     * 任何改变分配顺序的改动（多解码一个 PBF、多打开一个文件、多一个缓存）都可能
+     * 把它从"不出现"推到"出现"。ASan/valgrind 也查不到（不是 use-after-free，
+     * SDL 内部仍认为该纹理有效）。所以必须无条件作废，不能靠判据躲。
+     */
+    font_drop_textures(a->font);
+    font_drop_textures(a->font_big);
     SDL_DestroyRenderer(r);
     return 0;
 }
