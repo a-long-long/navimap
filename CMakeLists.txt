@@ -69,12 +69,14 @@ message(STATUS "protobuf-c hdr ${PROTOC_REAL_INCLUDE_DIR}")
 # 系统 /usr/lib/aarch64-linux-gnu 里有一份 2019 年的 1.0.0（只有 .so.1，无 .so），
 # 头文件是 1.3.1 而库是 1.0.0 的话能编过、一跑就废——所以 HINTS 把 ~/.local
 # 排在默认路径前面（顺序即优先级），既钉死本机版本，又不阻断标准安装位置。
+# ★ 多架构子目录用 CMAKE_LIBRARY_ARCHITECTURE（CMake 按工具链自动推导，
+#   本机 = aarch64-linux-gnu）而不是写死三元组——换 x86_64 机器写死的路径不存在。
 # NAMES 里带上 Windows 上常见的 libprotobuf-c 前缀形式。
 find_library(PROTOC_LIB NAMES protobuf-c libprotobuf-c
-    HINTS $ENV{HOME}/.local/usr/lib/aarch64-linux-gnu $ENV{HOME}/.local/usr/lib
+    HINTS $ENV{HOME}/.local/usr/lib/${CMAKE_LIBRARY_ARCHITECTURE} $ENV{HOME}/.local/usr/lib
           ${PROTOC_LIBRARY_DIRS} /usr/local/lib)
 if(NOT PROTOC_LIB)
-    message(FATAL_ERROR "找不到 libprotobuf-c.so（本机在 ~/.local/usr/lib/aarch64-linux-gnu）")
+    message(FATAL_ERROR "找不到 libprotobuf-c.so（本机在 ~/.local/usr/lib/<多架构三元组>，先 source env.sh）")
 endif()
 message(STATUS "protobuf-c lib ${PROTOC_LIB}")
 

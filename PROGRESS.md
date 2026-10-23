@@ -174,6 +174,14 @@ protobuf-c / SDL2_ttf 的查找**去掉 `NO_DEFAULT_PATH`**（原来只认 `~/.l
 字体链不变、渲染管线未动）⇒ 47/47 回归全绿即证明无回归。Windows 分支按契约编写，
 本机无 mingw 未能实机编译，已通过 plat_selftest 把接口契约钉死。
 
+**二次排查（同日，全仓五类重扫）**：C 代码确认干净后，残余硬编码全在构建脚本层——
+`env.sh` 注释里的绝对路径与写死的 `aarch64-linux-gnu` 三元组（改 `gcc -dumpmachine`
+推导）、CMake `find_library` 的同款三元组（改 `${CMAKE_LIBRARY_ARCHITECTURE}`）、
+`sync_maps.sh` 的 GNU 专有 `stat -c` / `nproc` / `md5sum`（加 `fsize`/`fmtime`/`md5of`
+双兼容封装）、`regress.sh` 的 `dd status=none`（改 `2>/dev/null`）。
+`sync_maps.sh --dry-run` 8 省全 SKIP 证明封装与旧管线输出逐位一致；
+47/47 回归复跑全绿。
+
 ---
 
 ## 七、近期工作（2026-10-22）

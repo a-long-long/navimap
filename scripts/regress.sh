@@ -137,7 +137,9 @@ done
 rm -f "$REVT/none/liaoning/rev.bin"
 rm -f "$REVT/bad/liaoning/rev.bin"
 cp "$GRAPH/liaoning/rev.bin" "$REVT/bad/liaoning/rev.bin"
-printf '\xff' | dd of="$REVT/bad/liaoning/rev.bin" bs=1 seek=100 conv=notrunc status=none
+# conv=notrunc 保留原文件其余字节；status=none 是 GNU dd 专有（BSD/macOS 的
+# dd 没有这个选项），改用 2>/dev/null 两侧兼容。
+printf '\xff' | dd of="$REVT/bad/liaoning/rev.bin" bs=1 seek=100 conv=notrunc 2>/dev/null
 
 LN_FROM=41.8057,123.4315
 LN_TO=38.9140,121.6147

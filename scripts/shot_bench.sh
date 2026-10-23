@@ -6,7 +6,7 @@
 # 这个脚本把"哪些视口、第几帧"钉死，改前改后跑同一条命令，输出同格式的表，
 # 顺带把 BMP 落盘给 bmpdiff.py 做像素验收。
 #
-# 用法: ./scripts/shot_bench.sh <输出目录>        例: ./scripts/shot_bench.sh /tmp/v1
+# 用法: ./scripts/shot_bench.sh <输出目录>        例: ./scripts/shot_bench.sh "${TMPDIR:-/tmp}/v1"
 # 输出: 每行 "<用例>  第2帧 <ms>  路 <ms>  面 <ms>  线 <ms>"，末尾打各用例 BMP 路径。
 
 set -uo pipefail

@@ -47,9 +47,24 @@ done
 # 二进制链接了 ~/.local 里的 protobuf-c / SDL2，不 source 就跑不起来
 NAVMAP_ENV_QUIET=1 . "$ROOT/env.sh"
 
+# ---- 跨平台小工具（GNU 与 BSD/macOS 双兼容）--------------------------------
+# stat：GNU 用 -c %s/%Y，BSD/macOS 用 -f %z/%m（macOS 的 stat 没有 -c）。
+# 先试 GNU，失败再试 BSD，两侧输出同为一个裸数字。
+fsize()  { stat -c %s "$1" 2>/dev/null || stat -f %z "$1"; }
+fmtime() { stat -c %Y "$1" 2>/dev/null || stat -f %m "$1"; }
+# 核数：nproc（GNU coreutils）→ getconf（POSIX）→ sysctl（macOS）→ 兜底 4
+NPROC=$(nproc 2>/dev/null || getconf _NPROCESSORS_ONLN 2>/dev/null \
+        || sysctl -n hw.ncpu 2>/dev/null || echo 4)
+# md5：GNU 是 md5sum（输出 "hash 文件名"），BSD/macOS 是 md5 -q（裸 hash）。
+# 统一从 stdin 读、只往 stdout 写裸 hash。
+md5of() {
+    if command -v md5sum >/dev/null 2>&1; then md5sum | cut -d' ' -f1
+    else md5 -q; fi
+}
+
 for b in graph_extract graph_check pbf_info places_build lmbuild_cli; do
     if [ ! -x "$BIN/$b" ]; then
-        printf '缺少 %s —— 先构建：\n  source env.sh && cmake --build build -j"$(nproc)"\n' "$BIN/$b"
+        printf '缺少 %s —— 先构建：\n  source env.sh && cmake --build build -j"$NPROC"\n' "$BIN/$b"
         exit 1
     fi
 done
@@ -122,8 +137,8 @@ while IFS= read -r f; do
         mb=$(mani_get src_bytes "$mani")
         mm=$(mani_get src_mtime "$mani")
         mv=$(mani_get binfmt_version "$mani")
-        sb=$(stat -c %s "$f")
-        sm=$(stat -c %Y "$f")
+        sb=$(fsize "$f")
+        sm=$(fmtime "$f")
         if   [ "$mb" != "$sb" ]; then reason="源文件大小变了（$mb → $sb 字节）"
         elif [ "$mm" != "$sm" ]; then reason="源文件被换过了（mtime 不同）"
         elif [ "$mv" != "$WANT_VER" ]; then reason="二进制格式升级 v$mv → v$WANT_VER"
@@ -271,8 +286,8 @@ else
         mrel="$(pmeta_idx "$pi" source)"
         mrel="${mrel#$ROOT/}"     # meta 里可能记绝对路径（本脚本传的就是绝对路径）
         if [ "$mrel" != "$frel" ] ||
-           [ "$(pmeta_idx "$pi" src_bytes)" != "$(stat -c %s "$f")" ] ||
-           [ "$(pmeta_idx "$pi" src_mtime)" != "$(stat -c %Y "$f")" ]; then
+           [ "$(pmeta_idx "$pi" src_bytes)" != "$(fsize "$f")" ] ||
+           [ "$(pmeta_idx "$pi" src_mtime)" != "$(fmtime "$f")" ]; then
             p_reason="源文件清单/指纹对不上（第一处出现在下标 $pi）"
             break
         fi
@@ -356,7 +371,7 @@ else
             done
             printf 'lmver %s\n' "$LM_WANT_VER"
             printf 'nlm %s\nlmfp %s\n' "$LM_NLM" "$lm_fp"
-        } | md5sum | cut -d' ' -f1
+        } | md5of
     )
     have_fp=$(sed -n 's/^fingerprint[[:space:]]\+//p' "$LM_META" 2>/dev/null | head -1)
 
