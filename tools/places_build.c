@@ -41,13 +41,12 @@
 #include <ctype.h>
 #include <math.h>
 #include <time.h>
-#include <dirent.h>
 #include <sqlite3.h>
-#include <sys/stat.h>
 
 #include "pbf/pbf_stream.h"
 #include "pbf/pbf_block.h"
 #include "search/search.h"
+#include "utils/plat.h"
 
 #define PL_NAME_MAX  96      /* 超出按字符边界截断：显示端 SearchHit.name 是 64 字节 */
 #define MAX_WAY_REFS 4000    /* 单个 way 超过这么多顶点就不可能是 POI，跳过 */
@@ -1082,9 +1081,7 @@ static void clear_per_file(Builder *b)
 
 static double now_ms(void)
 {
-    struct timespec ts;
-    clock_gettime(CLOCK_MONOTONIC, &ts);
-    return ts.tv_sec * 1000.0 + ts.tv_nsec / 1e6;
+    return (double)nm_now_ms();       /* 平台层：clock_gettime / QPC */
 }
 
 static void acc_stats(BuildStats *tot, const BuildStats *st)
@@ -1171,8 +1168,8 @@ static int write_meta(const char *meta_path, const char *db_path,
             fclose(fp);
         }
         {
-            struct stat sb;
-            if (stat(srcs[i], &sb) == 0) mtime = (long)sb.st_mtime;
+            int64_t mt = 0;
+            if (nm_stat_file(srcs[i], NULL, &mt) == 0) mtime = (long)mt;
         }
         fprintf(f, "source[%d]    = %s\n", i, srcs[i]);
         fprintf(f, "src_bytes[%d] = %ld\n", i, bytes);
@@ -1257,6 +1254,13 @@ static int ends_with(const char *s, const char *suf)
     return n >= m && strcmp(s + n - m, suf) == 0;
 }
 
+/* 文件名排序（替代旧版 scandir 的 alphasort）：目录枚举顺序由文件系统决定，
+   构建顺序必须可复现。 */
+static int cmp_str(const void *a, const void *b)
+{
+    return strcmp(*(const char *const *)a, *(const char *const *)b);
+}
+
 
 int main(int argc, char **argv)
 {
@@ -1296,19 +1300,33 @@ int main(int argc, char **argv)
         srcs[0] = (char *)one_pbf;
         nsrc = 1;
     } else {
-        struct dirent **nl = NULL;
-        int n = scandir(src_dir, &nl, NULL, alphasort);
-        if (n < 0) { fprintf(stderr, "读不了目录 %s\n", src_dir); return 2; }
-        srcs = calloc((size_t)(n > 0 ? n : 1), sizeof(char *));
-        for (int i = 0; i < n; i++) {
-            if (!ends_with(nl[i]->d_name, ".osm.pbf")) { free(nl[i]); continue; }
-            size_t len = strlen(src_dir) + strlen(nl[i]->d_name) + 2;
-            char *p = malloc(len);
-            snprintf(p, len, "%s/%s", src_dir, nl[i]->d_name);
-            srcs[nsrc++] = p;
-            free(nl[i]);
+        /* 目录枚举 + 排序：顺序必须可复现（旧版用 scandir+alphasort，
+           平台层只保证"枚举到"，排序自己来）。 */
+        NmDir *d = nm_dir_open(src_dir);
+        if (!d) { fprintf(stderr, "读不了目录 %s\n", src_dir); return 2; }
+        char **names = NULL;
+        int nn = 0, cap = 0;
+        const char *de;
+        while ((de = nm_dir_next(d)) != NULL) {
+            if (!ends_with(de, ".osm.pbf")) continue;
+            if (nn == cap) {
+                cap = cap ? cap * 2 : 16;
+                char **t = realloc(names, (size_t)cap * sizeof(char *));
+                if (!t) break;
+                names = t;
+            }
+            names[nn++] = nm_strdup(de);
         }
-        free(nl);
+        nm_dir_close(d);
+        qsort(names, (size_t)nn, sizeof(char *), cmp_str);
+        srcs = calloc((size_t)(nn > 0 ? nn : 1), sizeof(char *));
+        for (int i = 0; i < nn; i++) {
+            char p[4096];
+            if (nm_path_join(p, sizeof(p), src_dir, names[i]) != 0) continue;
+            srcs[nsrc++] = nm_strdup(p);
+            free(names[i]);
+        }
+        free(names);
         if (nsrc == 0) { fprintf(stderr, "%s 下没有 *.osm.pbf\n", src_dir); return 2; }
     }
 

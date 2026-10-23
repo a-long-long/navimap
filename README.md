@@ -49,16 +49,51 @@ cmake --build build -j8
 `env.sh` 会在 source 时自检三条依赖并打印版本（`sdl2` / `SDL2_ttf` / `libprotobuf-c`），
 没有输出说明环境没生效。
 
+## 跨平台
+
+目标平台：**Linux / macOS / Windows**（MSVC 与 MinGW）。所有"只在某平台成立"的调用
+统一收进平台抽象层 `src/utils/plat.{h,c}`，业务代码里不再出现 `#ifdef _WIN32`：
+
+| 平台差异 | 抽象层提供 |
+|---|---|
+| 路径分隔符 / 盘符 / 拼接 | `nm_sep` / `nm_path_join` / `nm_base_name` / `nm_is_abs` |
+| 临时目录（`/tmp` 在 Windows 不存在） | `nm_temp_dir`（TMPDIR/TEMP/TMP → `/tmp` → `.`） |
+| 字体路径（`/usr/share/fonts` vs `%WINDIR%\Fonts`） | `nm_font_candidates`（宋体优先链，逐平台） |
+| `mmap` / `madvise` | `nm_map_file` / `nm_unmap_file`（Windows: CreateFileMapping） |
+| `opendir` / `mkdir` / `unlink` / `rmdir` / `stat` | `nm_dir_*` / `nm_mkdir_p` / `nm_rmtree` / `nm_unlink` / `nm_stat_file` |
+| `/proc/self/exe` / `fork`+`execv` / `kill` / `usleep` | `nm_exe_path` / `nm_spawn_wait` / `nm_pid_alive` / `nm_sleep_ms` |
+| `clock_gettime` / `getrusage` | `nm_now_ms` / `nm_now_us` / `nm_peak_rss_mb` |
+
+各平台构建：
+
+```bash
+# Linux / macOS
+source env.sh && cmake -B build && cmake --build build -j8
+
+# Windows（MSVC + vcpkg 装好 sdl2 / SDL2_ttf / sqlite3 / zlib / protobuf-c）
+cmake -B build -A x64 && cmake --build build --config Release
+```
+
+Windows 注意：入口 `main()` 直接用（CMake 定义 `SDL_MAIN_HANDLED`，不链 SDL2main）；
+数学函数无需显式链 `libm`（仅类 Unix 平台链）；峰值内存走 `psapi`。
+字体优先级：`--font=` 命令行 > `NAVMAP_FONT` 环境变量 > 平台候选链。
+
+平台层契约由 `tools/plat_selftest.c` **正反双向**钉住（回归门禁第 46/47 项）：
+正向断言"该成功的必须成功"（含 spawn 自身并原样带回退出码），负向断言"该失败的
+必须失败"（不存在路径 / 空 PATH / 起不来的进程）。本机只有 POSIX 能真跑，Windows
+分支按同一契约编写——新增平台分支时先在 plat_selftest 里补契约，再动业务代码。
+
 ## 验收
 
 ```bash
 ./scripts/regress.sh            # 用现有 build/
-./scripts/regress.sh --build    # 重新构建 + 45 项回归
+./scripts/regress.sh --build    # 重新构建 + 47 项回归
 ```
 
-**45 项回归全绿、编译零警告**是硬门禁（`--build` 把任何新警告当失败）。回归覆盖：
+**47 项回归全绿、编译零警告**是硬门禁（`--build` 把任何新警告当失败）。回归覆盖：
 逐省 + 跨省渲染、跨省算路、导航模拟、转向限制正/负对照、反向索引校验、四叉堆自检、
-瓦片索引全图对拍、覆盖度、搜索、POI 分类自检、ALT 地标表（生效性 / 地标数 / 下界不越界）。
+瓦片索引全图对拍、覆盖度、搜索、POI 分类自检、ALT 地标表（生效性 / 地标数 / 下界不越界）、
+平台抽象层正/负向契约。
 
 ## 显示层按需解码（PBF 模式）
 
@@ -100,7 +135,8 @@ src/route/   双向 A*、转向限制、ALT 地标表、反向索引、堆、转
 src/render/  渲染管线、自写像素光栅、字形与地名标注
 src/search/  地名 / POI 搜索
 src/ui/      SDL2 窗口与交互
-tools/       18 个命令行工具（构建 / 自检 / 验收 / 诊断）
+src/utils/   平台抽象层（plat）、内存与文件映射约定
+tools/       20 个命令行工具（构建 / 自检 / 验收 / 诊断）
 scripts/     回归门禁、地图同步、像素对比
 proto/       OSM 官方 osmformat.proto（字段编号一致，删掉了导航用不到的 osmesis 字段）
 ```

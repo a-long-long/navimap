@@ -1,49 +1,34 @@
 #include "utils/mem.h"
+#include "utils/plat.h"
 
 #include <malloc.h>
-#include <sys/mman.h>
-#include <sys/stat.h>
-#include <fcntl.h>
-#include <unistd.h>
 #include <stdio.h>
 
-/* 必须在任何业务分配之前生效，所以用构造函数（优先级 101，早于大多数库）。 */
+/* 必须在任何业务分配之前生效，所以用构造函数（优先级 101，早于大多数库）。
+ *
+ * ★ 只在"参数确实存在"的平台编译：mallopt/M_MMAP_THRESHOLD 是 glibc 的
+ *   （musl / macOS / Windows 没有或语义不同），__attribute__((constructor))
+ *   是 GCC/Clang 的（MSVC 没有）。两个条件都不满足时整段消失——不能留个
+ *   空函数，-Wall -Wextra 会把未使用的 static 函数当警告（零警告门禁）。
+ *
+ * 映射本身走平台层（nm_map_file/nm_unmap_file）：POSIX 是 mmap，
+ * Windows 是 CreateFileMapping + MapViewOfFile。 */
+#if !defined(_WIN32) && defined(M_MMAP_THRESHOLD) && defined(__GNUC__)
 __attribute__((constructor(101)))
 static void nm_pin_allocator(void)
 {
     mallopt(M_MMAP_THRESHOLD, NM_MMAP_THRESHOLD_BYTES);
     mallopt(M_TRIM_THRESHOLD, -1);
 }
+#endif
 
 void *nm_mmap_file(const char *path, size_t *out_len)
 {
-    int fd = open(path, O_RDONLY);
-    if (fd < 0) return NULL;
-
-    struct stat st;
-    if (fstat(fd, &st) != 0) { close(fd); return NULL; }
-    if (st.st_size <= 0) { close(fd); return NULL; }
-
-    void *p = mmap(NULL, (size_t)st.st_size, PROT_READ, MAP_PRIVATE, fd, 0);
-    close(fd);
-    if (p == MAP_FAILED) return NULL;
-
-    *out_len = (size_t)st.st_size;
-    return p;
-}
-
-void nm_madvise_random(void *addr, size_t len)
-{
-    if (addr && len) (void)madvise(addr, len, MADV_RANDOM);
-}
-
-void nm_madvise_sequential(void *addr, size_t len)
-{
-    if (addr && len) (void)madvise(addr, len, MADV_SEQUENTIAL);
+    return nm_map_file(path, out_len);
 }
 
 int nm_munmap(void *addr, size_t len)
 {
-    if (!addr) return 0;
-    return munmap(addr, len);
+    nm_unmap_file(addr, len);
+    return 0;
 }

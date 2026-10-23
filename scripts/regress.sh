@@ -33,7 +33,8 @@ if [ "$DO_BUILD" = 1 ]; then
     source "$ROOT/env.sh"
     if ! cmake --build "$BUILD" -j 4; then echo "编译失败"; exit 1; fi
     # 本项目保持零警告：新警告一律当失败，不然警告会堆到没人看的程度
-    touch src/render/*.c src/map/*.c src/route/*.c src/ui/*.c tools/*.c
+    touch src/utils/*.c src/pbf/*.c src/map/*.c src/route/*.c src/render/*.c \
+          src/search/*.c src/ui/*.c tools/*.c
     if cmake --build "$BUILD" -j 4 2>&1 | grep -iE "warning"; then
         echo "警告检查   FAIL（上面有编译警告）"
         exit 1
@@ -153,6 +154,16 @@ if [ -n "$km_a" ] && [ "$km_a" = "$km_b" ]; then
 else
     fail=$((fail + 1)); printf '%-28s FAIL 有缓存 %s / 无缓存 %s\n' "rev_same_km" "${km_a:-空}" "${km_b:-空}"
 fi
+
+# ---- 平台抽象层（utils/plat.h）：跨平台契约的正反双向验收 ----
+# 平台层专收"只在某平台成立"的调用（路径分隔符、临时目录、字体链、目录枚举、
+# 进程派生、时钟、mmap）。它的失效模式全是编译期全绿、换平台才炸，所以契约
+# 必须在本机就断言住：
+#   ① 正向：该成功的必须成功（含 spawn 自己并原样带回退出码）；
+#   ② 负向：该失败的必须失败（不存在路径 / 空 PATH / 起不来的进程）。
+# 两侧坏掉任何一侧都会红——不是"永远绿"的门禁。
+run plat_selftest     "ASSERT-OK" "$BUILD/plat_selftest"
+run plat_selftest_neg "ASSERT-OK" "$BUILD/plat_selftest" --negative
 
 # ---- 优先队列：每次 pop 必须是当前最小值（PLAN.md §37）----
 # 堆坏了不会崩，只会让 A* 悄悄弹出非最小节点、路线变长。所以要有专门判据：

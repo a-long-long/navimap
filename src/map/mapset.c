@@ -3,13 +3,11 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <dirent.h>
-#include <sys/stat.h>
-#include <unistd.h>
 #include <math.h>
 
 #include "map/coordkey.h"
 #include "utils/geo.h"
+#include "utils/plat.h"
 
 /* ------------------------------------------------------------------ */
 /* 单省加载                                                              */
@@ -18,7 +16,7 @@
 static int manifest_bbox(const char *dir, int32_t out[4])
 {
     char p[4096];
-    snprintf(p, sizeof(p), "%s/manifest.txt", dir);
+    if (nm_path_join(p, sizeof(p), dir, "manifest.txt") != 0) return -1;
     FILE *f = fopen(p, "r");
     if (!f) return -1;
     char line[512];
@@ -404,11 +402,9 @@ int mapset_load(MapSet *ms, const char *graph_dir)
 
     /* 单省目录：下面直接有 nodes.bin */
     char p[4096];
-    struct stat st;
-    snprintf(p, sizeof(p), "%s/nodes.bin", graph_dir);
-    if (stat(p, &st) == 0) {
-        const char *nm = strrchr(graph_dir, '/');
-        nm = nm ? nm + 1 : graph_dir;
+    if (nm_path_join(p, sizeof(p), graph_dir, "nodes.bin") == 0 &&
+        nm_file_exists(p)) {
+        const char *nm = nm_base_name(graph_dir);
         if (mapset_add(ms, graph_dir, nm) != 0) {
             fprintf(stderr, "图集: %s 加载失败\n", graph_dir);
             return -1;
@@ -416,36 +412,37 @@ int mapset_load(MapSet *ms, const char *graph_dir)
         return 0;
     }
 
-    /* 父目录：扫描含 manifest.txt 的子目录。readdir 顺序不定，
+    /* 父目录：扫描含 manifest.txt 的子目录。目录枚举顺序由文件系统决定，
        先收集名字再排序，保证加载顺序（以及日志）可复现。 */
-    DIR *d = opendir(graph_dir);
+    char **names = NULL;
+    int nn = 0, cap = 0;
+    NmDir *d = nm_dir_open(graph_dir);
     if (!d) {
         fprintf(stderr, "图集: 既不是省目录也没有 nodes.bin：%s\n", graph_dir);
         return -1;
     }
-    char **names = NULL;
-    int nn = 0, cap = 0;
-    struct dirent *de;
-    while ((de = readdir(d)) != NULL) {
-        if (de->d_name[0] == '.') continue;
+    const char *de;
+    while ((de = nm_dir_next(d)) != NULL) {
+        if (de[0] == '.') continue;
         /* 跳过 sync_maps 的过渡目录：.tmp.* 是转换中的半成品，.old.* 是已换下、
            删除失败时留下的旧产物。两者都含 manifest.txt，不排除就会被当成
            一个"省"加载进来 —— 同一份数据装两遍（内存翻倍 + 渲染重复）。 */
-        if (strstr(de->d_name, ".tmp.")) continue;
-        if (strstr(de->d_name, ".old.")) continue;
-        snprintf(p, sizeof(p), "%s/%s", graph_dir, de->d_name);
-        if (stat(p, &st) != 0 || !S_ISDIR(st.st_mode)) continue;
-        snprintf(p, sizeof(p), "%s/%s/manifest.txt", graph_dir, de->d_name);
-        if (stat(p, &st) != 0) continue;             /* 没有产物指纹的不算省 */
+        if (strstr(de, ".tmp.")) continue;
+        if (strstr(de, ".old.")) continue;
+        if (nm_path_join(p, sizeof(p), graph_dir, de) != 0) continue;
+        if (!nm_is_dir(p)) continue;
+        char mf[4096];
+        if (nm_path_join(mf, sizeof(mf), p, "manifest.txt") != 0) continue;
+        if (!nm_file_exists(mf)) continue;    /* 没有产物指纹的不算省 */
         if (nn == cap) {
             cap = cap ? cap * 2 : 16;
             char **t = realloc(names, (size_t)cap * sizeof(char *));
             if (!t) break;
             names = t;
         }
-        names[nn++] = strdup(de->d_name);
+        names[nn++] = nm_strdup(de);
     }
-    closedir(d);
+    nm_dir_close(d);
 
     if (nn == 0) {
         fprintf(stderr, "图集: %s 下没有含 manifest.txt 的省目录\n", graph_dir);
@@ -455,8 +452,8 @@ int mapset_load(MapSet *ms, const char *graph_dir)
 
     int ok = 0;
     for (int i = 0; i < nn; i++) {
-        snprintf(p, sizeof(p), "%s/%s", graph_dir, names[i]);
-        if (mapset_add(ms, p, names[i]) == 0) ok++;
+        if (nm_path_join(p, sizeof(p), graph_dir, names[i]) == 0 &&
+            mapset_add(ms, p, names[i]) == 0) ok++;
         free(names[i]);
     }
     free(names);
@@ -555,8 +552,7 @@ void mapset_ensure_loaded(MapSet *ms, int prov)
 int mapset_enable_pbf_display(MapSet *ms, const char *pbf_dir, int lru_cap)
 {
     if (!ms || !pbf_dir) return -1;
-    struct stat st;
-    if (stat(pbf_dir, &st) != 0 || !S_ISDIR(st.st_mode)) return -1;
+    if (!nm_is_dir(pbf_dir)) return -1;
     snprintf(ms->pbf_dir, sizeof(ms->pbf_dir), "%s", pbf_dir);
     ms->dmap_lru_cap = lru_cap > 0 ? lru_cap : 3;
     ms->dmap_clock = 0;
@@ -587,9 +583,11 @@ int mapset_ensure_display(MapSet *ms, int prov)
     if (!s->loaded) return -1;            /* 路由 nodes 没打开，没有下标空间 */
 
     char pbf[4096];
-    snprintf(pbf, sizeof(pbf), "%s/%s.osm.pbf", ms->pbf_dir, s->name);
-    struct stat st;
-    if (stat(pbf, &st) != 0) return -1;
+    char nm[512];
+    int k = snprintf(nm, sizeof(nm), "%s.osm.pbf", s->name);
+    if (k <= 0 || (size_t)k >= sizeof(nm) ||
+        nm_path_join(pbf, sizeof(pbf), ms->pbf_dir, nm) != 0) return -1;
+    if (!nm_file_exists(pbf)) return -1;
 
     PbfMap m;
     if (pbfmap_decode(pbf, &s->nodes, &m) != 0) return -1;

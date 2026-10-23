@@ -1,11 +1,9 @@
 #include "map/binfmt.h"
+#include "utils/mem.h"
+
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <sys/mman.h>
-#include <sys/stat.h>
-#include <fcntl.h>
-#include <unistd.h>
 
 struct NMBinWriter {
     FILE    *fp;
@@ -179,31 +177,27 @@ void nmbin_abort(NMBinWriter *w)
 int nmbin_open(const char *path, NMBinFile *out)
 {
     memset(out, 0, sizeof(*out));
-    int fd = open(path, O_RDONLY);
-    if (fd < 0) return -1;
-    struct stat st;
-    if (fstat(fd, &st) != 0 || st.st_size <= 0) { close(fd); return -1; }
-    void *p = mmap(NULL, (size_t)st.st_size, PROT_READ, MAP_PRIVATE, fd, 0);
-    close(fd);
-    if (p == MAP_FAILED) return -1;
+    size_t flen = 0;
+    void *p = nm_mmap_file(path, &flen);      /* 平台层：mmap / CreateFileMapping */
+    if (!p) return -1;
 
     bytes_to_hdr((const uint8_t *)p, &out->hdr);
-    if (memcmp(out->hdr.magic, NMBIN_MAGIC, 8) != 0) { munmap(p, st.st_size); return -1; }
+    if (memcmp(out->hdr.magic, NMBIN_MAGIC, 8) != 0) { nm_munmap(p, flen); return -1; }
     const uint8_t *fp = (const uint8_t *)p + NMBIN_HDR_BYTES;
     for (uint32_t i = 0; i < out->hdr.n_fields && i < NMBIN_MAX_FIELDS; i++)
         bytes_to_field(fp + i * NMBIN_FIELD_BYTES, &out->fields[i]);
 
     out->data = (uint8_t *)p + NMBIN_HDR_BYTES + NMBIN_FIELD_BYTES * NMBIN_MAX_FIELDS;
-    out->data_len = (size_t)st.st_size - (NMBIN_HDR_BYTES + NMBIN_FIELD_BYTES * NMBIN_MAX_FIELDS);
-    out->mapped_len = (size_t)st.st_size;
+    out->data_len = flen - (NMBIN_HDR_BYTES + NMBIN_FIELD_BYTES * NMBIN_MAX_FIELDS);
+    out->mapped_len = flen;
     out->mapped = 1;
     return 0;
 }
 
 void nmbin_close(NMBinFile *f)
 {
-    if (f && f->mapped && f->data) munmap(f->data - (NMBIN_HDR_BYTES + NMBIN_FIELD_BYTES * NMBIN_MAX_FIELDS),
-                                          f->mapped_len);
+    if (f && f->mapped && f->data) nm_munmap(f->data - (NMBIN_HDR_BYTES + NMBIN_FIELD_BYTES * NMBIN_MAX_FIELDS),
+                                             f->mapped_len);
     if (f) { f->data = NULL; f->mapped = 0; }
 }
 

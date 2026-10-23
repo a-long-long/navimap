@@ -25,12 +25,11 @@
 #include "map/binfmt.h"
 #include "map/tileidx.h"
 #include "utils/geo.h"
+#include "utils/plat.h"
 
 static uint64_t now_ms(void)
 {
-    struct timespec ts;
-    clock_gettime(CLOCK_MONOTONIC, &ts);
-    return (uint64_t)ts.tv_sec * 1000 + (uint64_t)(ts.tv_nsec / 1000000);
+    return nm_now_ms();                /* 平台层：clock_gettime / QPC */
 }
 
 static uint64_t g_tested, g_diff;

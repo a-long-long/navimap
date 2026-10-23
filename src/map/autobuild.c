@@ -1,18 +1,11 @@
 #include "map/autobuild.h"
+#include "utils/plat.h"
 
 #include <ctype.h>
-#include <dirent.h>
 #include <errno.h>
-#include <fcntl.h>
-#include <signal.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <sys/stat.h>
-#include <sys/types.h>
-#include <sys/wait.h>
-#include <time.h>
-#include <unistd.h>
 
 /* 产物状态。前四种都需要重建。 */
 enum { PV_OK = 0, PV_MISSING, PV_INCOMPLETE, PV_CORRUPT, PV_STALE };
@@ -26,65 +19,7 @@ enum { PV_OK = 0, PV_MISSING, PV_INCOMPLETE, PV_CORRUPT, PV_STALE };
 
 static double now_ms(void)
 {
-    struct timespec ts;
-    clock_gettime(CLOCK_MONOTONIC, &ts);
-    return (double)ts.tv_sec * 1000.0 + (double)ts.tv_nsec / 1e6;
-}
-
-static int is_dir(const char *p)
-{
-    struct stat st;
-    return (stat(p, &st) == 0 && S_ISDIR(st.st_mode));
-}
-
-/* 递归创建目录（system("mkdir -p") 是不必要的外部依赖） */
-static int mkdir_p(const char *path)
-{
-    char buf[4096];
-    size_t n = strlen(path);
-    if (n == 0 || n >= sizeof(buf)) return -1;
-    memcpy(buf, path, n + 1);
-    for (size_t i = 1; i <= n; i++) {
-        if (buf[i] == '/' || buf[i] == '\0') {
-            char save = buf[i];
-            buf[i] = '\0';
-            if (!is_dir(buf) && mkdir(buf, 0755) != 0 && errno != EEXIST) return -1;
-            buf[i] = save;
-        }
-    }
-    return 0;
-}
-
-/* 递归删除。用自己的 unlink/rmdir，不走外部 rm（本机 rm 是只搬回收站的
-   安全壳，删了等于没删，会让"清掉坏产物后重建"这件事落空）。 */
-static int rmtree(const char *path)
-{
-    struct stat st;
-    if (lstat(path, &st) != 0) return 0;              /* 已经没了，算成功 */
-    if (!S_ISDIR(st.st_mode)) return unlink(path) == 0 ? 0 : -1;
-
-    DIR *d = opendir(path);
-    if (!d) return -1;
-    char buf[4096];
-    struct dirent *de;
-    int rc = 0;
-    while ((de = readdir(d)) != NULL) {
-        if (strcmp(de->d_name, ".") == 0 || strcmp(de->d_name, "..") == 0) continue;
-        snprintf(buf, sizeof(buf), "%s/%s", path, de->d_name);
-        if (rmtree(buf) != 0) rc = -1;
-    }
-    closedir(d);
-    if (rmdir(path) != 0) rc = -1;
-    return rc;
-}
-
-/* 路径拼接。走函数而不是就地 snprintf：GCC 能静态算出局部数组的长度，
-   会报一串 -Wformat-truncation；参数形式它算不出来，顺带还逼着调用方
-   检查溢出。路径超长一律当失败，不做静默截断（截断的路径会写到别的省上）。 */
-static int path_join(char *out, size_t cap, const char *a, const char *b)
-{
-    int n = snprintf(out, cap, "%s/%s", a, b);
-    return (n < 0 || (size_t)n >= cap) ? -1 : 0;
+    return (double)nm_now_ms();       /* 平台层：clock_gettime / QPC */
 }
 
 /* 省名白名单：会被拼进 --out= 路径，必须挡住 '/' 与 ./.. */
@@ -121,36 +56,31 @@ static int prov_name(const char *file, char *out, size_t cap)
 /* 探测：转换器、源目录                                                 */
 /* ------------------------------------------------------------------ */
 
-/* graph_extract 在哪：与本程序同目录 → 上级 build/ → PATH */
+/* graph_extract 在哪：与本程序同目录 → 同目录的 build/ → PATH。
+ * （第三档是 build/RelWithDebInfo/navimap 这种多发生器成本身的场景，
+ *  顺带也覆盖仓库根下的 <根>/build/。） */
 static int find_tool(char *out, size_t cap)
 {
-    char buf[4096];
-    ssize_t n = readlink("/proc/self/exe", buf, sizeof(buf) - 1);
-    if (n > 0) {
-        buf[n] = '\0';
-        char *slash = strrchr(buf, '/');
-        if (slash) {
-            snprintf(out, cap, "%.*s/graph_extract", (int)(slash - buf), buf);
-            if (access(out, X_OK) == 0) return 0;
-            /* 本程序可能不在 build/ 根下（如 build/RelWithDebInfo/navimap） */
-            char *s2 = strrchr(buf, '/');
-            char up[4096];
-            snprintf(up, sizeof(up), "%.*s/build/graph_extract", (int)(s2 - buf), buf);
-            if (access(up, X_OK) == 0) { snprintf(out, cap, "%s", up); return 0; }
+    char exe[4096];
+    if (nm_exe_path(exe, sizeof(exe)) == 0) {
+        char dir[4096];
+        size_t n = strlen(exe);
+        if (n < sizeof(dir)) {
+            memcpy(dir, exe, n + 1);
+            char *slash = (char *)nm_last_sep(dir);
+            if (slash) {
+                *slash = '\0';
+                if (nm_which(dir, "graph_extract", out, cap) == 0) return 0;
+                char sub[4096];
+                if (nm_path_join(sub, sizeof(sub), dir, "build") == 0 &&
+                    nm_which(sub, "graph_extract", out, cap) == 0) return 0;
+                char up[4096];
+                if (nm_path_join(up, sizeof(up), dir, "..") == 0 &&
+                    nm_which(up, "graph_extract", out, cap) == 0) return 0;
+            }
         }
     }
-    const char *path = getenv("PATH");
-    if (path) {
-        char copy[8192];
-        snprintf(copy, sizeof(copy), "%s", path);
-        char *save = NULL;
-        for (char *seg = strtok_r(copy, ":", &save); seg;
-             seg = strtok_r(NULL, ":", &save)) {
-            snprintf(out, cap, "%s/graph_extract", seg);
-            if (access(out, X_OK) == 0) return 0;
-        }
-    }
-    return -1;
+    return nm_find_in_path("graph_extract", out, cap);
 }
 
 /* sources/ 在哪：从 graph_dir 逐级往上找，最多 6 级 */
@@ -159,30 +89,29 @@ static int find_src_dir(char *out, size_t cap, const char *graph_dir)
     char cur[4096];
     snprintf(cur, sizeof(cur), "%s", graph_dir);
     size_t n = strlen(cur);
-    while (n > 1 && cur[n - 1] == '/') cur[--n] = '\0';
+    while (n > 1 && (cur[n - 1] == '/' || cur[n - 1] == '\\')) cur[--n] = '\0';
 
     for (int i = 0; i < 6; i++) {
-        if (path_join(out, cap, cur, "sources") == 0 && is_dir(out)) return 0;
-        char *slash = strrchr(cur, '/');
+        if (nm_path_join(out, cap, cur, "sources") == 0 && nm_is_dir(out)) return 0;
+        char *slash = (char *)nm_last_sep(cur);
         if (!slash || slash == cur) break;
         *slash = '\0';
     }
     snprintf(out, cap, "sources");
-    return is_dir(out) ? 0 : -1;
+    return nm_is_dir(out) ? 0 : -1;
 }
 
 /* 该省对应的源 pbf（两种后缀都认）。找到返回 0 并填 pbf 路径。 */
 static int find_pbf(const char *src_dir, const char *name, char *out, size_t cap)
 {
-    struct stat st;
     char base[512];
     int n = snprintf(base, sizeof(base), "%s.osm.pbf", name);
     if (n >= 0 && (size_t)n < sizeof(base) &&
-        path_join(out, cap, src_dir, base) == 0 && stat(out, &st) == 0) return 0;
+        nm_path_join(out, cap, src_dir, base) == 0 && nm_file_exists(out)) return 0;
 
     n = snprintf(base, sizeof(base), "%s.pbf", name);
     if (n >= 0 && (size_t)n < sizeof(base) &&
-        path_join(out, cap, src_dir, base) == 0 && stat(out, &st) == 0) return 0;
+        nm_path_join(out, cap, src_dir, base) == 0 && nm_file_exists(out)) return 0;
     return -1;
 }
 
@@ -193,7 +122,7 @@ static int find_pbf(const char *src_dir, const char *name, char *out, size_t cap
 static int mani_get(const char *dir, const char *key, char *out, size_t cap)
 {
     char p[4096];
-    if (path_join(p, sizeof(p), dir, "manifest.txt") != 0) return -1;
+    if (nm_path_join(p, sizeof(p), dir, "manifest.txt") != 0) return -1;
     FILE *f = fopen(p, "r");
     if (!f) return -1;
     char line[512];
@@ -225,7 +154,7 @@ static int mani_get(const char *dir, const char *key, char *out, size_t cap)
 static int bin_ok(const char *dir, const char *file, char *why, size_t cap)
 {
     char p[4096], err[128];
-    if (path_join(p, sizeof(p), dir, file) != 0) {
+    if (nm_path_join(p, sizeof(p), dir, file) != 0) {
         snprintf(why, cap, "%s 路径过长", file);
         return -1;
     }
@@ -246,25 +175,25 @@ static int bin_ok(const char *dir, const char *file, char *why, size_t cap)
 static int prov_check(const char *dir, const char *pbf, char *why, size_t cap)
 {
     char p[4096];
-    struct stat st;
 
     /* 1) 产物目录在不在 */
-    if (!is_dir(dir)) {
+    if (!nm_is_dir(dir)) {
         snprintf(why, cap, "%s", PV_MISSING_TXT);
         return PV_MISSING;
     }
     /* 2) 必需文件齐不齐（与 sync_maps 同一份清单） */
-    if (path_join(p, sizeof(p), dir, "manifest.txt") != 0 || stat(p, &st) != 0) {
+    if (nm_path_join(p, sizeof(p), dir, "manifest.txt") != 0 ||
+        !nm_file_exists(p)) {
         snprintf(why, cap, "%s（缺 manifest.txt，上次转换没走完）", PV_INCOMPLETE_TXT);
         return PV_INCOMPLETE;
     }
     static const char *need[] = { "nodes.bin", "edges.bin", "osmid.bin" };
     for (size_t i = 0; i < sizeof(need) / sizeof(need[0]); i++) {
-        if (path_join(p, sizeof(p), dir, need[i]) != 0) {
+        if (nm_path_join(p, sizeof(p), dir, need[i]) != 0) {
             snprintf(why, cap, "%s（路径过长）", PV_INCOMPLETE_TXT);
             return PV_INCOMPLETE;
         }
-        if (stat(p, &st) != 0) {
+        if (!nm_file_exists(p)) {
             snprintf(why, cap, "%s（缺 %s）", PV_INCOMPLETE_TXT, need[i]);
             return PV_INCOMPLETE;
         }
@@ -285,7 +214,7 @@ static int prov_check(const char *dir, const char *pbf, char *why, size_t cap)
     /* 5) 源指纹：源 pbf 换了就该重转 */
     uint64_t sb = 0;
     int64_t  sm = 0;
-    if (stat(pbf, &st) == 0) { sb = (uint64_t)st.st_size; sm = (int64_t)st.st_mtime; }
+    if (nm_stat_file(pbf, &sb, &sm) != 0) { sb = 0; sm = 0; }
     if (mani_get(dir, "src_bytes", v, sizeof(v)) == 0) {
         uint64_t mb = strtoull(v, NULL, 10);
         if (sb && mb && mb != sb) {
@@ -313,7 +242,7 @@ static void lock_path(char *out, size_t cap, const char *parent, const char *nam
 {
     char nm[512];
     int n = snprintf(nm, sizeof(nm), "%s.building", name);
-    if (n < 0 || (size_t)n >= sizeof(nm) || path_join(out, cap, parent, nm) != 0)
+    if (n < 0 || (size_t)n >= sizeof(nm) || nm_path_join(out, cap, parent, nm) != 0)
         out[0] = '\0';
 }
 
@@ -324,8 +253,7 @@ static int lock_pid_alive(const char *lp)
     int pid = 0;
     if (fscanf(f, "%d", &pid) != 1) pid = 0;
     fclose(f);
-    if (pid <= 0) return 0;
-    return (kill((pid_t)pid, 0) == 0 || errno == EPERM) ? 1 : 0;
+    return nm_pid_alive(pid);
 }
 
 /* 0 = 拿到锁；-1 = 拿不到（超时）。锁里写自己的 pid，便于识别过期锁。 */
@@ -333,24 +261,19 @@ static int lock_acquire(const char *parent, const char *name)
 {
     char lp[4096];
     lock_path(lp, sizeof(lp), parent, name);
-    mkdir_p(parent);
+    nm_mkdir_p(parent);
 
     for (int try = 0; try < 360; try++) {          /* 最多等约 3 分钟 */
-        int fd = open(lp, O_CREAT | O_EXCL | O_WRONLY, 0644);
-        if (fd >= 0) {
-            char b[32];
-            int n = snprintf(b, sizeof(b), "%d\n", (int)getpid());
-            if (write(fd, b, (size_t)n) < 0) { /* 写不进也不影响锁本身 */ }
-            close(fd);
-            return 0;
-        }
+        char b[32];
+        snprintf(b, sizeof(b), "%d\n", nm_get_pid());
+        if (nm_create_exclusive(lp, b) == 0) return 0;
         if (!lock_pid_alive(lp)) {                 /* 上一个人崩了，锁是孤儿 */
-            unlink(lp);
+            nm_unlink(lp);
             continue;
         }
         if (try == 0)
             fprintf(stderr, "[自动重建] %s 有另一个进程正在转换，等待中…\n", name);
-        usleep(500 * 1000);
+        nm_sleep_ms(500);
     }
     return -1;
 }
@@ -359,7 +282,7 @@ static void lock_release(const char *parent, const char *name)
 {
     char lp[4096];
     lock_path(lp, sizeof(lp), parent, name);
-    unlink(lp);
+    nm_unlink(lp);
 }
 
 /* ------------------------------------------------------------------ */
@@ -368,27 +291,22 @@ static void lock_release(const char *parent, const char *name)
 
 static int run_extract(const char *tool, const char *pbf, const char *dir)
 {
-    fflush(NULL);                       /* fork 会把缓冲区复制一份，先冲干净 */
-    pid_t pid = fork();
-    if (pid < 0) return -1;
-    if (pid == 0) {
-        char outarg[4224];      /* 路径 buffer(4096) + "--out=" 还有富余 */
-        snprintf(outarg, sizeof(outarg), "--out=%s", dir);
-        char *const av[] = { (char *)tool, outarg, (char *)pbf, NULL };
-        execv(tool, av);
-        _exit(127);                     /* 只有 execv 失败才会到这 */
-    }
-    int status = 0;
-    while (waitpid(pid, &status, 0) < 0 && errno == EINTR) { }
-    if (!WIFEXITED(status)) return -1;
-    return WEXITSTATUS(status) == 0 ? 0 : -1;
+    /* fork 会把 stdio 缓冲区复制一份，先冲干净（平台层内部也做一次） */
+    fflush(NULL);
+    char outarg[4224];      /* 路径 buffer(4096) + "--out=" 还有富余 */
+    if (snprintf(outarg, sizeof(outarg), "--out=%s", dir) >= (int)sizeof(outarg))
+        return -1;
+    char *const av[] = { (char *)tool, outarg, (char *)pbf, NULL };
+    int code = 0;
+    if (nm_spawn_wait(tool, av, &code) != 0) return -1;
+    return code == 0 ? 0 : -1;
 }
 
 /* 让位目录：prov_dir 同级 + ".old.<pid>"。带 .old. 是刻意的——
    mapset_load 会跳过 .old.* / .tmp.*，不会被当成一个省加载进来。 */
 static int aside_path(char *out, size_t cap, const char *prov_dir)
 {
-    int n = snprintf(out, cap, "%s.old.%d", prov_dir, (int)getpid());
+    int n = snprintf(out, cap, "%s.old.%d", prov_dir, nm_get_pid());
     return (n < 0 || (size_t)n >= cap) ? -1 : 0;
 }
 
@@ -405,14 +323,14 @@ static int rebuild_one(const char *graph_parent, const char *prov_dir,
        配上新的 nodes.bin），出来的图是自相矛盾的。删不掉就改名让位 ——
        名字带 .old. 是因为 mapset_load 会跳过 .old.* / .tmp.*，不会被当成
        一个省加载进来（同一份数据装两遍）。 */
-    if (is_dir(prov_dir)) {
+    if (nm_is_dir(prov_dir)) {
         char aside[4224];
         if (aside_path(aside, sizeof(aside), prov_dir) != 0) {
             fprintf(stderr, "[自动重建] %s 路径过长，放弃重建\n", name);
             lock_release(graph_parent, name);
             return -1;
         }
-        if (rmtree(prov_dir) != 0 && rename(prov_dir, aside) != 0) {
+        if (nm_rmtree(prov_dir) != 0 && nm_rename(prov_dir, aside) != 0) {
             fprintf(stderr, "[自动重建] %s 旧产物清不掉（%s），放弃重建\n",
                     name, strerror(errno));
             lock_release(graph_parent, name);
@@ -451,8 +369,8 @@ static int rebuild_one(const char *graph_parent, const char *prov_dir,
 
     /* 让位的旧目录这时可以清了 */
     char aside[4224];
-    if (aside_path(aside, sizeof(aside), prov_dir) == 0 && is_dir(aside))
-        rmtree(aside);
+    if (aside_path(aside, sizeof(aside), prov_dir) == 0 && nm_is_dir(aside))
+        nm_rmtree(aside);
 
     lock_release(graph_parent, name);
     return 0;
@@ -470,15 +388,15 @@ static int is_single_prov(const char *graph_dir, const char *src_dir,
                           char *name_out, size_t cap)
 {
     char p[4096];
-    struct stat st;
-    if (path_join(p, sizeof(p), graph_dir, "manifest.txt") == 0 && stat(p, &st) == 0)
+    if (nm_path_join(p, sizeof(p), graph_dir, "manifest.txt") == 0 &&
+        nm_file_exists(p))
         goto single;
-    if (path_join(p, sizeof(p), graph_dir, "nodes.bin") == 0 && stat(p, &st) == 0)
+    if (nm_path_join(p, sizeof(p), graph_dir, "nodes.bin") == 0 &&
+        nm_file_exists(p))
         goto single;
 
     {
-        const char *base = strrchr(graph_dir, '/');
-        base = base ? base + 1 : graph_dir;
+        const char *base = nm_base_name(graph_dir);
         char pbf[4096];
         if (find_pbf(src_dir, base, pbf, sizeof(pbf)) == 0 && name_ok(base)) {
             snprintf(name_out, cap, "%s", base);
@@ -488,8 +406,7 @@ static int is_single_prov(const char *graph_dir, const char *src_dir,
     }
 single:
     {
-        const char *base = strrchr(graph_dir, '/');
-        base = base ? base + 1 : graph_dir;
+        const char *base = nm_base_name(graph_dir);
         snprintf(name_out, cap, "%s", base);
         return 1;
     }
@@ -507,22 +424,22 @@ static void nl_add(NameList *l, const char *nm)
         if (!t) return;
         l->v = t; l->cap = ncap;
     }
-    l->v[l->n++] = strdup(nm);
+    l->v[l->n++] = nm_strdup(nm);
 }
 
 /* 图集模式：sources/ 下所有 pbf 对应的省名 */
 static void list_provs(const char *src_dir, NameList *l)
 {
-    DIR *d = opendir(src_dir);
+    NmDir *d = nm_dir_open(src_dir);
     if (!d) return;
-    struct dirent *de;
+    const char *de;
     char nm[256];
-    while ((de = readdir(d)) != NULL) {
-        if (de->d_name[0] == '.') continue;
-        if (prov_name(de->d_name, nm, sizeof(nm)) != 0) continue;
+    while ((de = nm_dir_next(d)) != NULL) {
+        if (de[0] == '.') continue;
+        if (prov_name(de, nm, sizeof(nm)) != 0) continue;
         nl_add(l, nm);
     }
-    closedir(d);
+    nm_dir_close(d);
 }
 
 /* 反向补一遍：products/graph 下已经存在的省目录。
@@ -531,20 +448,19 @@ static void list_provs(const char *src_dir, NameList *l)
  * .tmp.* / .old.* 是过渡目录，必须跳过（与 mapset_load 同一份过滤名单）。 */
 static void list_existing_provs(const char *graph_dir, NameList *l)
 {
-    DIR *d = opendir(graph_dir);
+    NmDir *d = nm_dir_open(graph_dir);
     if (!d) return;
-    struct dirent *de;
+    const char *de;
     char p[4096];
-    struct stat st;
-    while ((de = readdir(d)) != NULL) {
-        if (de->d_name[0] == '.') continue;
-        if (strstr(de->d_name, ".tmp.") || strstr(de->d_name, ".old.")) continue;
-        if (!name_ok(de->d_name)) continue;
-        if (path_join(p, sizeof(p), graph_dir, de->d_name) != 0) continue;
-        if (stat(p, &st) != 0 || !S_ISDIR(st.st_mode)) continue;
-        nl_add(l, de->d_name);
+    while ((de = nm_dir_next(d)) != NULL) {
+        if (de[0] == '.') continue;
+        if (strstr(de, ".tmp.") || strstr(de, ".old.")) continue;
+        if (!name_ok(de)) continue;
+        if (nm_path_join(p, sizeof(p), graph_dir, de) != 0) continue;
+        if (!nm_is_dir(p)) continue;
+        nl_add(l, de);
     }
-    closedir(d);
+    nm_dir_close(d);
 }
 
 static int cmp_str(const void *a, const void *b)
@@ -582,7 +498,7 @@ int autobuild_repair(const char *graph_dir, const AutoBuildOpt *opt,
     char parent[4096];
     if (single) {
         snprintf(parent, sizeof(parent), "%s", graph_dir);
-        char *slash = strrchr(parent, '/');
+        char *slash = (char *)nm_last_sep(parent);
         if (slash && slash != parent) *slash = '\0';
         else snprintf(parent, sizeof(parent), ".");
     } else {
@@ -612,7 +528,7 @@ int autobuild_repair(const char *graph_dir, const AutoBuildOpt *opt,
             if (gl >= sizeof(prov_dir)) continue;
             memcpy(prov_dir, graph_dir, gl + 1);
         }
-        else if (path_join(prov_dir, sizeof(prov_dir), graph_dir, name) != 0)
+        else if (nm_path_join(prov_dir, sizeof(prov_dir), graph_dir, name) != 0)
             continue;                        /* 路径过长，跳过这个省 */
 
         if (find_pbf(src_dir, name, pbf, sizeof(pbf)) != 0) {

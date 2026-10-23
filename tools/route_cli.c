@@ -19,13 +19,13 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <sys/resource.h>
 
 #include "map/mapset.h"
 #include "map/autobuild.h"
 #include "route/route.h"
 #include "route/maneuver.h"
 #include "utils/geo.h"
+#include "utils/plat.h"
 
 /* ★ 别再手写 strncmp(a, "--x=", N)：N 该写字面量长度还是长度-1，这个项目
    已经踩过三次（少 1 永不相等、多 1 把 '\0' 比进去），而且取值的偏移
@@ -187,9 +187,7 @@ int main(int argc, char **argv)
     printf("搜索          展开 %llu 节点，耗时 %llu ms\n",
            (unsigned long long)rr.expanded, (unsigned long long)rr.elapsed_ms);
     {
-        struct rusage ru;
-        getrusage(RUSAGE_SELF, &ru);
-        printf("峰值内存      %.0f MB\n", ru.ru_maxrss / 1024.0);
+        printf("峰值内存      %.0f MB\n", nm_peak_rss_mb());
     }
 
     /* 经过的省（压缩连续重复） */

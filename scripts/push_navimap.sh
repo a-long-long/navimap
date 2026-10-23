@@ -2,7 +2,7 @@
 # navimap 推送收尾：建远端仓库 + 推送
 #
 # 用法 A（推荐，有 token）：
-#   /home/along/navimap/scripts/push_navimap.sh <github_token>
+#   scripts/push_navimap.sh <github_token>
 #
 # 用法 B（无 token）：先在浏览器建一个空的公开仓库
 #   https://github.com/new   → 仓库名 navimap，owner a-long-long，Public
@@ -11,10 +11,12 @@
 # 说明：
 # - 推送本身走 SSH（~/.ssh/id_ed25519，GitHub 账号 a-long-long），已实证可用。
 # - 建仓必须走 API（需要 token）或网页：GitHub 已关闭 "push 自动建仓"。
+# - REPO_DIR 按脚本自身位置推导（曾经写死 /home/along/navimap，换机即废）。
 set -u
-REPO_DIR=/home/along/navimap
+REPO_DIR=$(cd "$(dirname "$0")/.." && pwd)
 REMOTE=git@github.com:a-long-long/navimap.git
 API=https://api.github.com
+TMP_JSON=${TMPDIR:-/tmp}/_nr.json
 
 cd "$REPO_DIR" || exit 1
 
@@ -25,15 +27,15 @@ git log --oneline
 if [ $# -ge 1 ] && [ -n "${1:-}" ]; then
     TOKEN="$1"
     echo "== 用 token 建仓 =="
-    code=$(curl -sS -o /tmp/_nr.json -w '%{http_code}' -X POST \
+    code=$(curl -sS -o "$TMP_JSON" -w '%{http_code}' -X POST \
       -H "Authorization: token $TOKEN" -H "Accept: application/vnd.github+json" \
       "$API/user/repos" \
       -d '{"name":"navimap","description":"navimap: 纯 C 实现的离线地图渲染与路由（SDL2）","private":false,"auto_init":false,"has_issues":true,"has_wiki":false,"has_projects":false}')
     echo "建仓 HTTP=$code"
-    python3 - <<'PY' 2>/dev/null
-import json
+    NR_TMP_JSON="$TMP_JSON" python3 - <<'PY' 2>/dev/null
+import json, os
 try:
-    d=json.load(open('/tmp/_nr.json'))
+    d=json.load(open(os.environ['NR_TMP_JSON']))
     print("  ->", d.get('full_name') or d.get('message'))
 except Exception:
     pass

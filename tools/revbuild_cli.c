@@ -21,12 +21,11 @@
 
 #include "map/mapset.h"
 #include "route/revidx.h"
+#include "utils/plat.h"
 
 static uint64_t now_ms(void)
 {
-    struct timespec ts;
-    clock_gettime(CLOCK_MONOTONIC, &ts);
-    return (uint64_t)ts.tv_sec * 1000 + (uint64_t)(ts.tv_nsec / 1000000);
+    return nm_now_ms();                /* 平台层：clock_gettime / QPC */
 }
 
 int main(int argc, char **argv)

@@ -10,6 +10,7 @@
 #include "map/binfmt.h"
 #include "map/map_view.h"
 #include "utils/geo.h"
+#include "utils/plat.h"
 
 /* ---- 模拟导航 ----
  * 倍速档：为什么要分档而不是随便填——软件渲染一帧几百毫秒，倍速太大时
@@ -767,14 +768,15 @@ static void paint_frame(SDL_Renderer *r, Raster *rs, App *a, PaintStats *st)
     road_labels_reset();
     paint_roadpix_begin();
 
-    /* 分阶段计时：帧时间的瓶颈只能这样定位（本机 perf 装不全）。 */
-    struct timespec ts0, ts1;
-#define TICK(fld) (clock_gettime(CLOCK_MONOTONIC, &ts1), \
-                   st->fld += (ts1.tv_sec - ts0.tv_sec) * 1e3 + \
-                              (ts1.tv_nsec - ts0.tv_nsec) / 1e6, \
+    /* 分阶段计时：帧时间的瓶颈只能这样定位（本机 perf 装不全）。
+     * 走平台层的单调时钟（clock_gettime / QueryPerformanceCounter），
+     * 不在业务代码里直接调 POSIX 时钟。 */
+    uint64_t ts0, ts1;
+#define TICK(fld) (ts1 = nm_now_ms(), \
+                   st->fld += (double)(ts1 - ts0), \
                    ts0 = ts1)
 
-    clock_gettime(CLOCK_MONOTONIC, &ts0);
+    ts0 = nm_now_ms();
     paint_background(r, a->view.w, a->view.h);
     TICK(ms_bg);
 

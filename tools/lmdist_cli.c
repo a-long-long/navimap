@@ -17,19 +17,17 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <sys/resource.h>
 #include <time.h>
 
 #include "map/mapset.h"
 #include "map/autobuild.h"
 #include "route/route.h"
 #include "utils/geo.h"
+#include "utils/plat.h"
 
 static uint64_t mono_ms(void)
 {
-    struct timespec ts;
-    clock_gettime(CLOCK_MONOTONIC, &ts);
-    return (uint64_t)ts.tv_sec * 1000u + (uint64_t)(ts.tv_nsec / 1000000);
+    return nm_now_ms();                /* 平台层：clock_gettime / QPC */
 }
 
 static const char *arg_val(const char *a, const char *prefix)
@@ -116,12 +114,11 @@ int main(int argc, char **argv)
 
     LmDist d;
     uint64_t npop = 0, npush = 0;
-    struct rusage ru0, ru1;
-    getrusage(RUSAGE_SELF, &ru0);
+    double ru0 = nm_peak_rss_mb();     /* 平台层：getrusage / GetProcessMemoryInfo */
     uint64_t t0 = mono_ms();
     int rc = lm_dijkstra(r, a, &d, &npop, &npush);
     uint64_t t1 = mono_ms();
-    getrusage(RUSAGE_SELF, &ru1);
+    double ru1 = nm_peak_rss_mb();
     if (rc != 0) {
         printf("LM-DIST-FAIL Dijkstra 返回 %d\n", rc);
         router_destroy(r); mapset_free(&ms); return 1;
@@ -143,8 +140,7 @@ int main(int argc, char **argv)
         printf("统计          出堆 %llu 入堆 %llu 耗时 %llu ms 节点总数 %llu\n",
                (unsigned long long)npop, (unsigned long long)npush,
                (unsigned long long)(t1 - t0), (unsigned long long)d.total);
-        printf("峰值内存      %.0f MB → %.0f MB\n",
-               ru0.ru_maxrss / 1024.0, ru1.ru_maxrss / 1024.0);
+        printf("峰值内存      %.0f MB → %.0f MB\n", ru0, ru1);
     }
 
     lm_dist_free(&d);

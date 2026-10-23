@@ -18,27 +18,12 @@
 #include <string.h>
 #include <time.h>
 #include <inttypes.h>
-#include <sys/stat.h>
 
 #include "map/graph_build.h"
 #include "route/revidx.h"
 #include "map/binfmt.h"
 #include "pbf/pbf_stream.h"
-
-static int mkdir_p(const char *path)
-{
-    char tmp[4096];
-    snprintf(tmp, sizeof(tmp), "%s", path);
-    size_t n = strlen(tmp);
-    if (n && tmp[n - 1] == '/') tmp[n - 1] = '\0';
-    for (char *p = tmp + 1; *p; p++) {
-        if (*p != '/') continue;
-        *p = '\0';
-        mkdir(tmp, 0755);
-        *p = '/';
-    }
-    return mkdir(tmp, 0755) == 0 || 1;
-}
+#include "utils/plat.h"
 
 int main(int argc, char **argv)
 {
@@ -60,16 +45,12 @@ int main(int argc, char **argv)
         fprintf(stderr, "用法: %s --out=<目录> <file.osm.pbf>\n", argv[0]);
         return 2;
     }
-    mkdir_p(out_dir);
+    nm_mkdir_p(out_dir);
 
     /* 源文件指纹：同步脚本靠 size+mtime 判断产物是否过期 */
-    struct stat sst;
     uint64_t src_bytes = 0;
     int64_t  src_mtime = 0;
-    if (stat(src, &sst) == 0) {
-        src_bytes = (uint64_t)sst.st_size;
-        src_mtime = (int64_t)sst.st_mtime;
-    }
+    nm_stat_file(src, &src_bytes, &src_mtime);
 
     GraphBuildStats st;
     memset(&st, 0, sizeof(st));

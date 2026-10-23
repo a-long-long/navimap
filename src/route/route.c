@@ -14,6 +14,7 @@
 #include "route/revidx.h"
 #include "route/lmtable.h"
 #include "utils/geo.h"
+#include "utils/plat.h"
 
 /* ---------------------------------------------------------------------------
  * 跨省 A* 路由（状态主键 = 坐标，见 route.h 顶部说明）
@@ -83,9 +84,7 @@ static uint64_t mix64(uint64_t x)
 
 static uint64_t now_ms(void)
 {
-    struct timespec ts;
-    clock_gettime(CLOCK_MONOTONIC, &ts);
-    return (uint64_t)ts.tv_sec * 1000 + (uint64_t)(ts.tv_nsec / 1000000);
+    return nm_now_ms();                /* 平台层：clock_gettime / QPC */
 }
 
 /* ---------------------------- 状态表 ---------------------------- */

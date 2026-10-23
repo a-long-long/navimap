@@ -25,6 +25,7 @@
 #include <string.h>
 #include <stdint.h>
 #include "route/pqueue.h"
+#include "utils/plat.h"
 
 /* ---------------- 独立参考实现：教科书式二叉堆 ---------------- */
 /* 刻意写得跟被测实现不一样（递归式上浮/下沉、不同的 swap 写法），
@@ -211,12 +212,6 @@ static uint64_t fnv1a(const void *p, size_t n)
     return hh;
 }
 
-static double ms_between(const struct timespec *a, const struct timespec *b)
-{
-    return (double)(b->tv_sec - a->tv_sec) * 1e3 +
-           (double)(b->tv_nsec - a->tv_nsec) / 1e6;
-}
-
 /* 参考用的旧实现：**逐层交换**版下沉。留着不是为了 A/B 跑两个二进制
  * （跨进程噪声有 ±3 ms，会把收益整个吃掉），而是在**同一个进程里**跑：
  * 两者用同一份初始堆、同一串伪随机数，逐层抵消机器漂移。
@@ -271,8 +266,8 @@ static int bench(size_t size, unsigned long iters, int rounds)
             (void)use;
             PQueue c = q_clone(&base);
             unsigned long long sd = seed;
-            struct timespec t0, t1;
-            clock_gettime(CLOCK_MONOTONIC, &t0);
+            /* 微秒单调时钟（平台层）：基准要亚毫秒精度，且不能绑死 POSIX */
+            uint64_t t0 = nm_now_us();
             for (unsigned long it = 0; it < iters; it++) {
                 double f;
                 uint64_t k = which ? pq_pop_swap(&c, &f) : pq_pop(&c, &f);
@@ -280,8 +275,7 @@ static int bench(size_t size, unsigned long iters, int rounds)
                 sd = sd * 6364136223846793005ULL + 1442695040888963407ULL;
                 pq_push(&c, (double)(sd >> 40) * 1e-9, (uint64_t)(it + size));
             }
-            clock_gettime(CLOCK_MONOTONIC, &t1);
-            double ms = ms_between(&t0, &t1);
+            double ms = (double)(nm_now_us() - t0) / 1000.0;
             if (which) { if (ms < bs) bs = ms; hv_swap = fnv1a(c.a, c.n * sizeof(PQEnt)); }
             else       { if (ms < bh) bh = ms; hv_hole = fnv1a(c.a, c.n * sizeof(PQEnt)); }
             pq_free(&c);

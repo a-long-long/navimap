@@ -14,13 +14,11 @@
  * ------------------------------------------------------------------------- */
 #define NM_MMAP_THRESHOLD_BYTES (128 * 1024)
 
-/* 只读文件映射；返回映射地址，长度写入 *out_len。失败返回 NULL。 */
+/* 只读文件映射；返回映射地址，长度写入 *out_len。失败返回 NULL。
+ * 实现走平台层（utils/plat.c）：POSIX mmap / Windows CreateFileMapping。 */
 void *nm_mmap_file(const char *path, size_t *out_len);
 
-/* 建议访问模式（本机实测四种 madvise 差异 <1.5%，属噪声，这里只是留个口子） */
-void nm_madvise_random(void *addr, size_t len);
-void nm_madvise_sequential(void *addr, size_t len);
-
+/* 解除映射（Windows 上还要关掉映射句柄，所以地址和长度都要原样传回）。 */
 int nm_munmap(void *addr, size_t len);
 
 #endif

@@ -20,10 +20,11 @@
  *   4. manifest 里的 binfmt_version 与当前二进制格式版本不符
  *   5. manifest 里的 src_bytes / src_mtime 与源 pbf 实际值不符（源被换过了）
  *
- * 安全性：只 fork+exec 项目自带的 graph_extract（同目录 → PATH 依次探测），
- * 走 execv 不经 shell，参数固定，省名先过白名单（不允许 '/' 和 '.'/'..'），
- * 所以不存在命令注入或路径逃逸。清理旧产物用自己的 unlink/rmdir 递归删除，
- * 不依赖外部 rm 命令。
+ * 安全性：只起项目自带的 graph_extract 子进程（同目录 → build/ → PATH 依次探测），
+ * 参数固定、不经 shell，省名先过白名单（不允许 '/' 和 '.'/'..'），
+ * 所以不存在命令注入或路径逃逸。进程派生/等待走平台层 nm_spawn_wait
+ * （POSIX fork+execv，Windows CreateProcess）。清理旧产物用平台层的
+ * nm_unlink / nm_rmtree 递归删除，不依赖外部 rm 命令。
  * ------------------------------------------------------------------------- */
 
 typedef struct {

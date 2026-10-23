@@ -13,6 +13,7 @@
 
 #include "pbf/pbf_stream.h"
 #include "pbf/pbf_block.h"
+#include "utils/plat.h"
 
 #define MAXK 64
 
@@ -27,7 +28,7 @@ static void bump(Ent *a, int *n, const char *name)
 {
     for (int i = 0; i < *n; i++)
         if (strcmp(a[i].k, name) == 0) { a[i].n++; return; }
-    if (*n < MAXK) { a[*n].k = strdup(name); a[*n].n = 1; (*n)++; }
+    if (*n < MAXK) { a[*n].k = nm_strdup(name); a[*n].n = 1; (*n)++; }
 }
 
 static int cmp_ent(const void *a, const void *b)

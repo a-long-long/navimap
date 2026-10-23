@@ -28,6 +28,7 @@
 #include "render/navdraw.h"
 #include "map/binfmt.h"
 #include "map/coverage.h"
+#include "utils/plat.h"
 
 /* ★ 别再手写 strncmp(a, "--x=", N)：N 该写字面量长度还是长度-1 已经踩过三次。
    统一走这里：不匹配返回 NULL，否则返回 '=' 之后的串。 */
@@ -151,7 +152,15 @@ int main(int argc, char **argv)
     const char *graph = "products/graph/beijing";
     const char *pbf_display = NULL;   /* PBF 显示层模式 */
     int pbf_lru = 3;
-    const char *out = "/tmp/navimap_shot.bmp";
+    /* 默认输出：临时目录 + 固定名（曾经写死 /tmp/...，Windows 上没有 /tmp）。
+     * 本机 TMPDIR 未设置时 nm_temp_dir() 就是 "/tmp"，默认值与旧版一致。 */
+    char outbuf[4096];
+    const char *out = outbuf;
+    if (nm_path_join(outbuf, sizeof(outbuf), nm_temp_dir(),
+                     "navimap_shot.bmp") != 0) {
+        fprintf(stderr, "临时目录路径过长：%s\n", nm_temp_dir());
+        return 1;
+    }
     double lat = 0, lon = 0;
     int have_center = 0;
     double zoom = 12;

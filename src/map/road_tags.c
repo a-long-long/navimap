@@ -1,6 +1,6 @@
 #include "map/road_tags.h"
+#include "utils/plat.h"
 #include <string.h>
-#include <strings.h>
 #include <stdio.h>
 #include <stdlib.h>
 
@@ -95,7 +95,7 @@ static const HwEnt *find_hw(const char *v)
 
 static int eq_ci(const char *a, const char *b)
 {
-    return strcasecmp(a, b) == 0;
+    return nm_strcasecmp(a, b) == 0;   /* 平台层：strcasecmp / _stricmp */
 }
 
 static int access_denied(const char *v)

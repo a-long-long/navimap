@@ -5,7 +5,7 @@
 > [`.workbuddy/memory/MEMORY.md`](.workbuddy/memory/MEMORY.md)；每日工作日志见
 > `.workbuddy/memory/YYYY-MM-DD.md`。
 
-**最后更新：2026-10-22**
+**最后更新：2026-10-23**
 
 ---
 
@@ -13,12 +13,13 @@
 
 | 维度 | 状态 |
 |---|---|
-| **验收门禁** | ✅ **45/45 通过 + 编译零警告**（2026-10-22 实测） |
-| **代码规模** | 71 个源文件 / **18 087 行**（src 53 文件 12 653 行 + tools 18 文件 5 434 行） |
+| **验收门禁** | ✅ **47/47 通过 + 编译零警告**（2026-10-23 实测） |
+| **代码规模** | 76 个源文件 / **19 818 行**（src 56 文件 13 925 行 + tools 20 文件 5 893 行） |
 | **数据规模** | 8 省 / **5228 万节点** / **4072 万边** / 去重后 4560 万唯一坐标 |
 | **渲染** | ✅ 面/路/线 + 中文标注 + 跨省去重 + 按需加载 |
 | **路由** | ✅ 双向加权 A\* + ALT 地标下界 + 三类转向限制 + 跨省缝合 |
 | **搜索/导航** | ✅ 地名/POI 检索、偏航重算、ETA、转向指令 |
+| **跨平台** | ✅ Linux / macOS / Windows：平台差异统一收进 `src/utils/plat.{h,c}`，业务代码零 `#ifdef`（详见第六节） |
 | **未做** | 语音播报、车道指示、多方案对比、GPX、收藏、POI 图标、3D/地形、设置持久化 |
 
 > 渲染与算路的**实测数字**见下节，全部来自 2026-10-22 的回归与基准测试。
@@ -76,7 +77,7 @@
 
 ---
 
-## 四、工具链（18 个）
+## 四、工具链（20 个）
 
 **验收/自检类**（把 GUI 无法无头验证的逻辑做成可断言的 CLI）：
 
@@ -85,6 +86,7 @@
 - `tile_selftest` 瓦片索引**全图 5200 万节点逐点**对拍 ｜ `tile_xcheck` 跨省坐标一致性
 - `graph_check` / `graph_extract` 图结构校验 ｜ `revbuild_cli` 反向索引落盘校验
 - `coverage_cli` 覆盖度 ｜ `search_cli` 搜索 ｜ `places_build --selftest` POI 分类自检
+- `plat_selftest` **平台抽象层契约**正/负双向验收（2026-10-23 新增）
 
 **构建类**：`places_build` 地名库 ｜ `lmbuild_cli` 地标表 ｜ `pbf_info` ｜ `tag_stats` ｜ `restr_probe`
 
@@ -138,7 +140,43 @@
 
 ---
 
-## 六、近期工作（2026-10-22）
+## 六、跨平台与硬编码清理（2026-10-23）
+
+**动机**：代码里散落一批"只在本机成立"的写法——编译期全绿，换平台才炸，且报错位置
+离写的地方很远。一次性收进平台抽象层，并配正反双向门禁。
+
+**新增 `src/utils/plat.{h,c}`（平台抽象层，唯一允许出现平台差异的地方）**
+
+| 收编的对象 | 原来散落在 | 现在 |
+|---|---|---|
+| `/usr/share/fonts/...` 字体链 | `render/font.c` 写死 5 条 | `nm_font_candidates`：Linux 原链不动 + Windows `%WINDIR%\Fonts`（simsun/msyh/simhei/simfang/simkai）+ macOS `Songti/STHeiti/PingFang/Arial Unicode` |
+| `/tmp/navimap_shot.bmp` | `tools/map_shot.c` | `nm_temp_dir()`（TMPDIR/TEMP/TMP → /tmp → .），本机取值与旧版逐字节一致 |
+| `mmap`/`munmap`/`madvise`、`mallopt` | `utils/mem.c`、`map/binfmt.c`、`route/revidx.c` 各自内联 | `nm_map_file`/`nm_unmap_file`（Windows: CreateFileMapping + MapViewOfFile，映射句柄按基址登记）；`mallopt` 构造函数加 `M_MMAP_THRESHOLD` 宏守卫，不满足条件整段消失（不留空函数，零警告门禁） |
+| `opendir`/`readdir`/`mkdir`/`unlink`/`rmdir`/`lstat`/`stat` | `map/mapset.c`、`map/autobuild.c`、`tools/places_build.c`、`tools/graph_extract.c` | `nm_dir_*` / `nm_mkdir_p` / `nm_rmtree` / `nm_unlink` / `nm_stat_file` |
+| `/proc/self/exe`、PATH 按 `:` 拆、`fork`+`execv`、`kill`、`usleep`、`getpid` | `map/autobuild.c` | `nm_exe_path`（Linux `/proc` / macOS `_NSGetExecutablePath` / Windows `GetModuleFileName`）、`nm_find_in_path`/`nm_which`（Windows 补 `.exe`、按 `;` 拆）、`nm_spawn_wait`、`nm_pid_alive`、`nm_sleep_ms`、`nm_get_pid` |
+| `open(O_CREAT\|O_EXCL)` 转换锁 | `map/autobuild.c` | `nm_create_exclusive`（Windows: `CREATE_NEW`） |
+| `clock_gettime` × 11 处、`getrusage` × 3 处 | 全库 | `nm_now_ms`/`nm_now_us`/`nm_peak_rss_mb` |
+| `strcasecmp`、`strdup`、`rename` 覆盖语义 | 3 个文件 | `nm_strcasecmp`、`nm_strdup`、`nm_rename`（Windows 显式 `MOVEFILE_REPLACE_EXISTING`） |
+
+**CMake 跨平台化**：`m` 库仅类 Unix 链接；Windows 链 `psapi` 并定义
+`SDL_MAIN_HANDLED`（不链 SDL2main）+ `_CRT_SECURE_NO_WARNINGS`；
+protobuf-c / SDL2_ttf 的查找**去掉 `NO_DEFAULT_PATH`**（原来只认 `~/.local`，
+换一台干净机器直接 FATAL）改为 HINTS 优先、默认路径兜底，库名加 `libprotobuf-c` 形式。
+
+**门禁（第 46/47 项，`tools/plat_selftest.c`）**：正向断言"该成功的必须成功"
+（路径拼接含溢出拒绝、目录枚举一个不少、覆盖式 rename、文件映射读回、
+**spawn 自身并原样带回退出码 42/7**、PATH 查找、pid 存活、Linux 首选字体不变）；
+负向断言"该失败的必须失败"（不存在路径、空 PATH、起不来的进程）。
+**判据有齿已实证**：把 `nm_file_exists` 临时改成恒真，正向 5 处 / 负向 2 处报红，
+还原后恢复——不是"永远绿"的门禁。
+
+**影响面**：POSIX 侧行为逐字节不变（`nm_path_join` 与旧 `"%s/%s"` 同输出、
+字体链不变、渲染管线未动）⇒ 47/47 回归全绿即证明无回归。Windows 分支按契约编写，
+本机无 mingw 未能实机编译，已通过 plat_selftest 把接口契约钉死。
+
+---
+
+## 七、近期工作（2026-10-22）
 
 | 工作 | 结果 |
 |---|---|
@@ -149,7 +187,7 @@
 
 ---
 
-## 七、接下来的候选（按性价比排序）
+## 八、接下来的候选（按性价比排序）
 
 1. **PBF 模式的后台解码**——现在是同步的，河北首次进省卡 4.4 s，需预热线程 + 进度提示。
 2. **补 POI 图标与更多显示要素**（建筑 / 等高线 / 土地利用着色）——从 PBF 侧补，
@@ -162,11 +200,11 @@
 
 ---
 
-## 八、怎么继续
+## 九、怎么继续
 
 ```bash
 source env.sh                  # 修正 PKG_CONFIG_PATH / LD_LIBRARY_PATH
-./scripts/regress.sh --build   # 构建 + 45 项回归 + 零警告门禁（必须全绿）
+./scripts/regress.sh --build   # 构建 + 47 项回归 + 零警告门禁（必须全绿）
 ./scripts/sync_maps.sh         # 重建 products/ 产物
 ```
 

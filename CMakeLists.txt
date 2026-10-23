@@ -54,11 +54,12 @@ nm_require_pc(PROTOC     libprotobuf-c)
 
 # libprotobuf-c.pc 里写的是 prefix=/usr，但头文件只装到了 ~/.local/usr/include，
 # 所以 pkg-config 给的 Cflags 是错的（指向不存在的 /usr/include/protobuf-c）。
-# 这里自己找一次真实头文件位置，找不到就直接失败，别留到编译期才炸。
+# 这里自己找一次真实头文件位置：**HINTS 优先、默认路径兜底**（曾经写成
+# NO_DEFAULT_PATH 只认 ~/.local，换一台干净机器直接 FATAL——跨平台第一课：
+# 机器相关的路径只能当提示，不能当唯一出路）。找不到就直接失败，别留到编译期才炸。
 find_path(PROTOC_REAL_INCLUDE_DIR
     NAMES protobuf-c/protobuf-c.h
-    HINTS $ENV{HOME}/.local/usr/include /usr/local/include /usr/include
-    NO_DEFAULT_PATH)
+    HINTS $ENV{HOME}/.local/usr/include ${PROTOC_INCLUDE_DIRS} /usr/local/include)
 if(NOT PROTOC_REAL_INCLUDE_DIR)
     message(FATAL_ERROR "找不到 protobuf-c/protobuf-c.h（pkg-config 的 Cflags 指向的目录不存在）")
 endif()
@@ -66,26 +67,28 @@ message(STATUS "protobuf-c hdr ${PROTOC_REAL_INCLUDE_DIR}")
 
 # 同理，链接也必须指到 ~/.local 那份 1.3.1。
 # 系统 /usr/lib/aarch64-linux-gnu 里有一份 2019 年的 1.0.0（只有 .so.1，无 .so），
-# 头文件是 1.3.1 而库是 1.0.0 的话能编过、一跑就废——所以这里用完整路径钉死。
-find_library(PROTOC_LIB NAMES protobuf-c
-    HINTS $ENV{HOME}/.local/usr/lib/aarch64-linux-gnu
-    NO_DEFAULT_PATH)
+# 头文件是 1.3.1 而库是 1.0.0 的话能编过、一跑就废——所以 HINTS 把 ~/.local
+# 排在默认路径前面（顺序即优先级），既钉死本机版本，又不阻断标准安装位置。
+# NAMES 里带上 Windows 上常见的 libprotobuf-c 前缀形式。
+find_library(PROTOC_LIB NAMES protobuf-c libprotobuf-c
+    HINTS $ENV{HOME}/.local/usr/lib/aarch64-linux-gnu $ENV{HOME}/.local/usr/lib
+          ${PROTOC_LIBRARY_DIRS} /usr/local/lib)
 if(NOT PROTOC_LIB)
-    message(FATAL_ERROR "找不到 libprotobuf-c.so（应在 ~/.local/usr/lib/aarch64-linux-gnu）")
+    message(FATAL_ERROR "找不到 libprotobuf-c.so（本机在 ~/.local/usr/lib/aarch64-linux-gnu）")
 endif()
 message(STATUS "protobuf-c lib ${PROTOC_LIB}")
 
 find_library(SDL2TTF_LIB NAMES SDL2_ttf
-    HINTS ${SDL2TTF_LIBRARY_DIRS} $ENV{HOME}/.local/lib /usr/local/lib
-    NO_DEFAULT_PATH)
+    HINTS ${SDL2TTF_LIBRARY_DIRS} $ENV{HOME}/.local/lib /usr/local/lib)
 if(NOT SDL2TTF_LIB)
     message(FATAL_ERROR "找不到 libSDL2_ttf.so")
 endif()
 message(STATUS "SDL2_ttf lib ${SDL2TTF_LIB}")
 
-find_program(PROTOC_C protoc-c)
+find_program(PROTOC_C protoc-c
+    HINTS $ENV{HOME}/.local/usr/bin)
 if(NOT PROTOC_C)
-    message(FATAL_ERROR "protoc-c 未找到（在 ~/.local/usr/bin）。请先 source ${CMAKE_SOURCE_DIR}/env.sh")
+    message(FATAL_ERROR "protoc-c 未找到（本机在 ~/.local/usr/bin）。请先 source ${CMAKE_SOURCE_DIR}/env.sh")
 endif()
 
 message(STATUS "sdl2          ${SDL2_VERSION}")
@@ -115,6 +118,7 @@ add_custom_command(
 # 核心库
 # ---------------------------------------------------------------------------
 set(CORE_SRCS
+    src/utils/plat.c
     src/utils/mem.c
     src/utils/geo.c
     src/utils/strpool.c
@@ -158,15 +162,37 @@ target_include_directories(navimap_core PUBLIC
 target_link_directories(navimap_core PUBLIC
     ${SDL2_LIBRARY_DIRS}
     ${SDL2TTF_LIBRARY_DIRS}
-    ${SQLITE3_LIBRARY_DIRS})
+    ${SQLITE3_LIBRARY_DIRS}
+    ${PROTOC_LIBRARY_DIRS})
 
 target_link_libraries(navimap_core PUBLIC
     ${SDL2_LIBRARIES}
     ${SDL2TTF_LIB}
     ${ZLIB_LIBRARIES}
     ${SQLITE3_LIBRARIES}
-    ${PROTOC_LIB}
-    m)
+    ${PROTOC_LIB})
+
+# 平台相关链接：
+#   - libm 只有类 Unix 平台有（Windows/MSVC 的数学函数在 CRT 里，无需显式链）；
+#   - Windows 的 GetProcessMemoryInfo 在 psapi.dll 里（plat.c 的峰值内存）。
+if(UNIX)
+    target_link_libraries(navimap_core PUBLIC m)
+endif()
+if(WIN32)
+    target_link_libraries(navimap_core PUBLIC psapi)
+endif()
+
+# Windows（MSVC）需要这两个宏：_CRT_SECURE_NO_WARNINGS 关掉 POSIX 名字的
+# "不安全"警告（fopen/snprintf 我们是故意用的），_USE_MATH_DEFINES 放 M_PI。
+# SDL_MAIN_HANDLED：SDL.h 默认会把 main 改写成 SDL_main，要求链 SDL2main；
+# 本程序的入口就是自己的 main()，不需要那层包装。
+if(MSVC)
+    target_compile_definitions(navimap_core PUBLIC
+        _CRT_SECURE_NO_WARNINGS _USE_MATH_DEFINES)
+endif()
+if(WIN32)
+    target_compile_definitions(navimap_core PUBLIC SDL_MAIN_HANDLED)
+endif()
 
 # ---------------------------------------------------------------------------
 # 命令行工具（GUI 无法无头验证，逻辑一律做成可断言的 CLI）
@@ -248,3 +274,9 @@ target_link_libraries(places_build PRIVATE navimap_core)
 # 无地图区域检测（"这里有没有地图"+"去哪下载"），GUI 提示条的无头验收
 add_executable(coverage_cli tools/coverage_cli.c)
 target_link_libraries(coverage_cli PRIVATE navimap_core)
+
+# 平台抽象层（utils/plat.h）的全接口自验收。正反双向：
+# 默认模式逐项断言接口契约，--negative 证明"应该失败的必须失败"。
+# 跨平台改动的门禁：新增平台分支先在这里补契约，再动业务代码。
+add_executable(plat_selftest tools/plat_selftest.c)
+target_link_libraries(plat_selftest PRIVATE navimap_core)

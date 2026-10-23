@@ -1,13 +1,10 @@
 #include "route/revidx.h"
+#include "utils/mem.h"
+#include "utils/plat.h"
 
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <time.h>
-#include <fcntl.h>
-#include <unistd.h>
-#include <sys/mman.h>
-#include <sys/stat.h>
 
 /* rev.bin 头（64 字节，之后紧跟 start[n+1] 与 list[list_count]，全是 u32 小端） */
 #define REV_MAGIC   "NMREV01"
@@ -30,9 +27,7 @@ typedef struct {
 
 static uint64_t rev_now_ms(void)
 {
-    struct timespec ts;
-    clock_gettime(CLOCK_MONOTONIC, &ts);
-    return (uint64_t)ts.tv_sec * 1000 + (uint64_t)(ts.tv_nsec / 1000000);
+    return nm_now_ms();               /* 平台层：clock_gettime / QPC */
 }
 
 /* FNV-1a 64：正文（start + list）的校验和。
@@ -192,10 +187,10 @@ int rev_write(const char *dir, const NMBinFile *nodes, const NMBinFile *edges)
        关闭失败同样算写坏——数据可能还留在 stdio 缓冲里没落盘。 */
     if (fclose(f) != 0) ok = 0;
 
-    if (!ok) { unlink(tmp); rev_free(&rv); return -1; }
+    if (!ok) { nm_unlink(tmp); rev_free(&rv); return -1; }
     /* 原子替换：中途失败不会留下半截 rev.bin（半截会被 rev_load 的规模校验挡住，
        但能不留垃圾就别留） */
-    if (rename(tmp, path) != 0) { unlink(tmp); rev_free(&rv); return -1; }
+    if (nm_rename(tmp, path) != 0) { nm_unlink(tmp); rev_free(&rv); return -1; }
     rev_free(&rv);
     return 0;
 }
@@ -219,19 +214,14 @@ int rev_load(const char *dir, const NMBinFile *nodes, const NMBinFile *edges,
     char path[4096];
     if (rev_path(dir, path, sizeof(path)) != 0) return -1;
 
-    int fd = open(path, O_RDONLY);
-    if (fd < 0) return -1;
-    struct stat st;
-    if (fstat(fd, &st) != 0) { close(fd); return -1; }
+    size_t flen = 0;
+    uint8_t *base = nm_mmap_file(path, &flen);   /* 平台层：mmap / 文件映射 */
+    if (!base) return -1;
 
     uint64_t n  = nodes->hdr.rec_count;
     uint64_t ne = edges->hdr.rec_count;
     size_t need_min = REV_HDR + ((size_t)n + 1) * 4u;
-    if ((size_t)st.st_size < need_min) { close(fd); return -1; }
-
-    uint8_t *base = mmap(NULL, (size_t)st.st_size, PROT_READ, MAP_PRIVATE, fd, 0);
-    close(fd);
-    if (base == MAP_FAILED) return -1;
+    if (flen < need_min) { nm_munmap(base, flen); return -1; }
 
     RevHdr h;
     memcpy(&h, base, sizeof(h));
@@ -239,24 +229,24 @@ int rev_load(const char *dir, const NMBinFile *nodes, const NMBinFile *edges,
         h.version != REV_VERSION ||
         h.hdr_bytes != REV_HDR ||
         h.node_count != n || h.edge_count != ne ||
-        h.file_size != (uint64_t)st.st_size) {
-        munmap(base, (size_t)st.st_size);
+        h.file_size != (uint64_t)flen) {
+        nm_munmap(base, flen);
         return -1;
     }
     size_t body = ((size_t)n + 1) * 4u + (size_t)h.list_count * 4u;
-    if (REV_HDR + body != (size_t)st.st_size) {
-        munmap(base, (size_t)st.st_size);
+    if (REV_HDR + body != flen) {
+        nm_munmap(base, flen);
         return -1;
     }
     uint32_t *start = (uint32_t *)(void *)(base + REV_HDR);
     /* 自洽：尾哨兵必须等于 list_count，否则这份文件是坏的 */
     if ((uint64_t)start[n] != h.list_count) {
-        munmap(base, (size_t)st.st_size);
+        nm_munmap(base, flen);
         return -1;
     }
     /* 正文校验和：默认不跑（太贵，见 rev_fnv1a 的注释），只在严格模式下跑 */
     if (rev_strict() && rev_fnv1a(base + REV_HDR, body) != h.body_sum) {
-        munmap(base, (size_t)st.st_size);
+        nm_munmap(base, flen);
         return -1;
     }
 
@@ -266,7 +256,7 @@ int rev_load(const char *dir, const NMBinFile *nodes, const NMBinFile *edges,
     rv->list_count = h.list_count;
     rv->list = start + (n + 1);
     rv->map_base = base;
-    rv->map_len  = (size_t)st.st_size;
+    rv->map_len  = flen;
     return 0;
 }
 
@@ -274,7 +264,7 @@ void rev_free(RevIdx *rv)
 {
     if (!rv) return;
     if (rv->mapped) {
-        if (rv->map_base) munmap(rv->map_base, rv->map_len);
+        if (rv->map_base) nm_munmap(rv->map_base, rv->map_len);
     } else {
         free(rv->start);
         free(rv->list);

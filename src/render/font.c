@@ -4,7 +4,8 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <strings.h>
+
+#include "utils/plat.h"
 
 /* UTF-8 解码：返回码点，*len 为字节数，非法序列返回 0xFFFD */
 static uint32_t utf8_next(const char *s, int *len)
@@ -74,29 +75,33 @@ static unsigned glyph_hash(uint32_t cp)
  *   1) 地图标注要的是"衬线宋体 + GB18030 全覆盖"，生僻地名才有字；
  *   2) GB2312 版覆盖小，只在 GB18030 版缺失时兜底；
  *   3) 小标宋/仿宋是宋体变体，再往后才是黑体（最后兜底，保证一定有字）。
+ *
+ * ★ 候选链本身按平台给（utils/plat.c 的 nm_font_candidates）：
+ *   Linux   /usr/share/fonts/...（本机实测有字的那几款）；
+ *   Windows %WINDIR%/Fonts 下的 simsun/msyh/simhei/simfang/simkai；
+ *   macOS   /System/Library/Fonts 与 /Library/Fonts 下的宋体/黑体/苹方。
+ *   以前这里写死五条 /usr/share/fonts 绝对路径，换平台直接一个字体都没有
+ *   （文字标注静默全灭）。命令行 --font 与环境变量 NAVMAP_FONT 优先级更高，
+ *   见 ui/window.c 的 app_init。
  */
-static const char *kFontCandidates[] = {
-    "/usr/share/fonts/truetype/yozo/CESI_SS_GB18030.TTF",  /* CESI宋体  GB18030 */
-    "/usr/share/fonts/fonts-cesi/CESI_SS_GB2312.TTF",      /* CESI宋体  GB2312  */
-    "/usr/share/fonts/fonts-gb/GB_XBS_GB18030.ttf",        /* 国标小标宋        */
-    "/usr/share/fonts/truetype/yozo/FZFSK.TTF",            /* 方正仿宋          */
-    "/usr/share/fonts/fonts-gb/GB_HT_GB18030.ttf",         /* 国标黑体（兜底）  */
-};
-#define N_FONT_CANDIDATES (sizeof(kFontCandidates) / sizeof(kFontCandidates[0]))
 
 const char *font_default_path(void)
 {
-    for (size_t i = 0; i < N_FONT_CANDIDATES; i++) {
-        FILE *fp = fopen(kFontCandidates[i], "rb");
-        if (fp) { fclose(fp); return kFontCandidates[i]; }
+    size_t n = 0;
+    const char *const *cands = nm_font_candidates(&n);
+    for (size_t i = 0; i < n; i++) {
+        FILE *fp = fopen(cands[i], "rb");
+        if (fp) { fclose(fp); return cands[i]; }
     }
     return NULL;
 }
 
 Font *font_open_default(int ptsize)
 {
-    for (size_t i = 0; i < N_FONT_CANDIDATES; i++) {
-        Font *f = font_open(kFontCandidates[i], ptsize);
+    size_t n = 0;
+    const char *const *cands = nm_font_candidates(&n);
+    for (size_t i = 0; i < n; i++) {
+        Font *f = font_open(cands[i], ptsize);
         if (f) return f;
     }
     return NULL;
@@ -124,7 +129,7 @@ Font *font_open_ex(const char *path, int ptsize, int face_index)
     int is_collection = 0;
     if (len >= 4) {
         const char *ext = path + len - 4;
-        if (strcasecmp(ext, ".ttc") == 0 || strcasecmp(ext, ".otc") == 0)
+        if (nm_strcasecmp(ext, ".ttc") == 0 || nm_strcasecmp(ext, ".otc") == 0)
             is_collection = 1;
     }
     f->ttf = is_collection ? TTF_OpenFontIndex(path, ptsize, face_index < 0 ? 0 : face_index)

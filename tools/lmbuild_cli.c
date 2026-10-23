@@ -27,13 +27,13 @@
 #include <stdlib.h>
 #include <string.h>
 #include <math.h>
-#include <sys/resource.h>
 #include <time.h>
 
 #include "map/mapset.h"
 #include "map/autobuild.h"
 #include "route/route.h"
 #include "route/lmtable.h"
+#include "utils/plat.h"
 
 #define M_PER_E7  0.0111195        /* 1e-7 度纬度 = 多少米 */
 #define MAX_LM    64
@@ -41,9 +41,7 @@
 
 static uint64_t mono_ms(void)
 {
-    struct timespec ts;
-    clock_gettime(CLOCK_MONOTONIC, &ts);
-    return (uint64_t)ts.tv_sec * 1000u + (uint64_t)(ts.tv_nsec / 1000000);
+    return nm_now_ms();                /* 平台层：clock_gettime / QPC */
 }
 
 static const char *arg_val(const char *a, const char *prefix)
@@ -415,9 +413,7 @@ int main(int argc, char **argv)
     }
 
     if (want_stats) {
-        struct rusage ru;
-        getrusage(RUSAGE_SELF, &ru);
-        printf("峰值内存      %.0f MB\n", ru.ru_maxrss / 1024.0);
+        printf("峰值内存      %.0f MB\n", nm_peak_rss_mb());
     }
 
     lm_table_free(&t);
