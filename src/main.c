@@ -8,8 +8,16 @@
  * 用法：./navimap [--graph=products/graph/beijing] [--w=1280] [--h=800]
  *                 [--font=<路径.ttf|none>] [--font-size=14]
  *                 [--no-autobuild] [--sources=<目录>]
+ *                 [--pbf-display=<sources目录>[:LRU上限]]
  * 字体不指定时用默认（宋体优先的候选链）；--font=none 关闭文字标注。
  * 启动时会自检：源 pbf 在而产物没了/坏了会自动重建（--no-autobuild 可关）。
+ *
+ * --pbf-display：显示层（面/线要素）改为**从原始 PBF 运行时解码**，
+ *   不再从 nmbin 打开 lines/areas/polyrefs。解码结果与落盘文件逐字节相同
+ *   （8 省实测），渲染结果一致；好处是这几个文件可以整个不落盘。
+ *   参数值是含 <省名>.osm.pbf 的目录，":N" 追加同时驻留几个省（默认 3）。
+ *   ⚠️ 解码是同步的（每省几百 ms ~ 数秒），首次进省会有停顿。
+ *
  * 交互：左键拖动平移，滚轮缩放，右下角 +/- 按钮缩放，0-4 切 LOD，
  *       [ ] 调字号（8~32pt），左键点两下选起终点算路线，
  *       g 开始/停止模拟导航，t 视口跟随开关，n 注入一次偏航（自动重算），
@@ -22,6 +30,8 @@ int main(int argc, char **argv)
     const char *font = NULL;    /* NULL = 默认字体 */
     int font_size = 0;          /* <=0 = 用默认字号 */
     const char *q = NULL;       /* 启动时搜一次并跳到第一条结果 */
+    const char *pbf_display = NULL;  /* PBF 显示层模式：目录[:LRU上限] */
+    int pbf_lru = 3;
 
     /* 启动自愈：源 pbf 在、产物没了/坏了就当场重建（判据同 sync_maps.sh）。
        默认开；--no-autobuild 关；--sources= 指定源目录（自动探测不到时用）。 */
@@ -40,11 +50,35 @@ int main(int argc, char **argv)
         else if (strncmp(argv[i], "--q=", 4) == 0) q = argv[i] + 4;
         else if (strcmp(argv[i], "--no-autobuild") == 0) ab.enable = 0;
         else if (strncmp(argv[i], "--sources=", 10) == 0) ab.src_dir = argv[i] + 10;
+        else if (strncmp(argv[i], "--pbf-display=", 14) == 0) {
+            pbf_display = argv[i] + 14;
+            /* 形如 "sources:4" ⇒ 目录 sources，LRU 上限 4 */
+            const char *colon = strrchr(pbf_display, ':');
+            if (colon && colon[1] >= '0' && colon[1] <= '9') {
+                pbf_lru = atoi(colon + 1);
+                /* 原地截断（argv 可写），避免 strndup 的可移植性/泄漏问题 */
+                size_t dlen = (size_t)(colon - pbf_display);
+                static char dirbuf[4096];
+                if (dlen < sizeof(dirbuf)) {
+                    memcpy(dirbuf, pbf_display, dlen);
+                    dirbuf[dlen] = '\0';
+                    pbf_display = dirbuf;
+                }
+            }
+        }
         else { fprintf(stderr, "未知参数 %s\n", argv[i]); return 2; }
     }
 
     App a;
     if (app_init(&a, graph, w, h, font, font_size, &ab) != 0) return 1;
+    if (pbf_display) {
+        if (mapset_enable_pbf_display(&a.ms, pbf_display, pbf_lru) != 0) {
+            fprintf(stderr, "提示: PBF 显示层不可用（目录 %s），改用 nmbin 产物\n",
+                    pbf_display);
+        } else {
+            printf("显示层: 从 PBF 运行时解码（%s，LRU %d 省）\n", pbf_display, pbf_lru);
+        }
+    }
     if (q) {
         int n = app_search_query(&a, q);
         printf("搜索「%s」%d 条（%llu ms）\n", q, n,

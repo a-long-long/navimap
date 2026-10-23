@@ -123,6 +123,7 @@ set(CORE_SRCS
     src/map/road_tags.c
     src/map/binfmt.c
     src/map/graph_build.c
+    src/map/pbfmap.c
     src/map/mapset.c
     src/map/autobuild.c
     src/map/coverage.c
@@ -172,6 +173,10 @@ target_link_libraries(navimap_core PUBLIC
 # ---------------------------------------------------------------------------
 add_executable(pbf_info tools/pbf_info.c)
 target_link_libraries(pbf_info PRIVATE navimap_core)
+
+# PBF 按需解码显示层的等价性校验（"只留 PBF"方案的门禁）
+add_executable(pbfmap_check tools/pbfmap_check.c)
+target_link_libraries(pbfmap_check PRIVATE navimap_core)
 
 # via=way 转向限制形态探针（调研用，决定展开方案前先看数据长什么样）
 add_executable(restr_probe tools/restr_probe.c)

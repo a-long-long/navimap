@@ -60,6 +60,21 @@ cmake --build build -j8
 逐省 + 跨省渲染、跨省算路、导航模拟、转向限制正/负对照、反向索引校验、四叉堆自检、
 瓦片索引全图对拍、覆盖度、搜索、POI 分类自检、ALT 地标表（生效性 / 地标数 / 下界不越界）。
 
+## 显示层按需解码（PBF 模式）
+
+`--pbf-display=<sources目录>[:LRU上限]` 让显示层（面/线要素）**从原始 PBF 运行时解码**，
+不再从 nmbin 打开 `lines/areas/polyrefs` —— 这三个文件因此可以整个不落盘。
+
+```bash
+./build/navimap --graph=products/graph --pbf-display=sources:3
+```
+
+解码结果与落盘文件**8 省逐字节相同**（`build/pbfmap_check` 可验证），渲染端零改动。
+代价是首次进省要同步解码（天津 0.6 s / 北京 1.6 s / 河北 4.4 s），适合后台预热。
+
+⚠️ 省磁盘的收益有限：nmbin 的 4.2 G 里 **94% 是路由图**（A\* 需要全图），那部分省不掉。
+详见 [`PROGRESS.md`](PROGRESS.md) 第五节。
+
 ## 数据
 
 ```bash
@@ -74,6 +89,7 @@ cmake --build build -j8
 
 `products/` 由 `sync_maps.sh` **确定性重建**（路网按 manifest 指纹、地名库按 `.db.meta` 指纹）。
 `.nmbin` 格式自带版本号（`NMBIN_VERSION`），改格式必须顶版本。
+用 `--pbf-display=sources` 可让显示层改为运行时从 PBF 解码，`lines/areas/polyrefs` 就不必落盘。
 
 ## 目录
 

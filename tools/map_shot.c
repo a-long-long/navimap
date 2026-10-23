@@ -149,6 +149,8 @@ static double *read_geojson_line(const char *path, size_t *out_n)
 int main(int argc, char **argv)
 {
     const char *graph = "products/graph/beijing";
+    const char *pbf_display = NULL;   /* PBF 显示层模式 */
+    int pbf_lru = 3;
     const char *out = "/tmp/navimap_shot.bmp";
     double lat = 0, lon = 0;
     int have_center = 0;
@@ -199,6 +201,20 @@ int main(int argc, char **argv)
         else if (strncmp(argv[i], "--route=", 8) == 0) route = argv[i] + 8;
         else if (strcmp(argv[i], "--no-autobuild") == 0) { ab.enable = 0; }
         else if (strncmp(argv[i], "--sources=", 10) == 0) ab.src_dir = argv[i] + 10;
+        else if (strncmp(argv[i], "--pbf-display=", 14) == 0) {
+            pbf_display = argv[i] + 14;
+            const char *colon = strrchr(pbf_display, ':');
+            if (colon && colon[1] >= '0' && colon[1] <= '9') {
+                pbf_lru = atoi(colon + 1);
+                size_t dlen = (size_t)(colon - pbf_display);
+                static char dirbuf[4096];
+                if (dlen < sizeof(dirbuf)) {
+                    memcpy(dirbuf, pbf_display, dlen);
+                    dirbuf[dlen] = '\0';
+                    pbf_display = dirbuf;
+                }
+            }
+        }
         else { fprintf(stderr, "未知参数 %s\n", argv[i]); return 2; }
     }
 
@@ -209,6 +225,13 @@ int main(int argc, char **argv)
 
     App a;
     if (app_init(&a, graph, w, h, font, font_size, &ab) != 0) { SDL_Quit(); return 1; }
+    if (pbf_display) {
+        if (mapset_enable_pbf_display(&a.ms, pbf_display, pbf_lru) != 0) {
+            fprintf(stderr, "提示: PBF 显示层不可用（%s），改用 nmbin 产物\n", pbf_display);
+        } else {
+            printf("显示层: PBF 运行时解码（%s, LRU %d）\n", pbf_display, pbf_lru);
+        }
+    }
     if (have_center == 3) { a.view.lat = lat; a.view.lon = lon; }
     a.view.zoom = zoom;
     a.view.w = w; a.view.h = h;

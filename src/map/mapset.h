@@ -2,6 +2,7 @@
 #define NAVIMAP_MAPSET_H
 
 #include "map/binfmt.h"
+#include "map/pbfmap.h"
 #include "render/labels.h"
 
 /* 多省图集：一次加载 products/graph 下的所有省，渲染时按 bbox 裁剪。
@@ -25,6 +26,14 @@ typedef struct {
     int       has_restr;
     NMBinFile lines, areas, polyrefs;   /* 线/面要素（旧目录可没有） */
     int       has_features;             /* 三者齐备才为 1 */
+    /* ★ 显示层的"来源"：0 = 从 nmbin 打开（默认）；1 = 从 PBF 运行时解码。
+     * 两种模式下 lines/areas/polyrefs 的内容**逐字节相同**（8 省实测），
+     * 所以渲染端不区分，只看 has_features。 */
+    int       dmap_from_pbf;
+    int       pbf_display_mode;  /* 1 = 本省走 PBF 显示层（不打开 nmbin 的
+                                   * lines/areas/polyrefs） */
+    PbfMap    dmap;                     /* 从 PBF 解码出的显示层（内存缓冲） */
+    uint64_t  dmap_used;                /* LRU 时间戳（越大越新） */
     NMBinFile tiles, edgelist;          /* 空间索引（可选） */
     int       has_tiles;
     int       loaded;       /* 本省份 mmap 是否已打开；mapset_set_view 按需置 1 / 清 0。
@@ -47,6 +56,12 @@ typedef struct {
     MapSrc *srcs;
     int     n, cap;
     int32_t bbox[4];       /* 全体省份的并集（e7） */
+    /* ---- PBF 显示层按需解码 + LRU ----
+     * pbf_dir：各省原始 PBF 所在目录（形如 sources/，内含 <省名>.osm.pbf）。
+     * 为空则禁用 PBF 模式（退回从 nmbin 打开显示层）。 */
+    char    pbf_dir[4096];
+    int     dmap_lru_cap;  /* 同时驻留几个省的解码结果（默认 3） */
+    uint64_t dmap_clock;   /* LRU 时钟（单调递增） */
 } MapSet;
 
 /* graph_dir 可以是单个省目录（含 nodes.bin），也可以是父目录
@@ -57,11 +72,25 @@ void mapset_free(MapSet *ms);
 
 /* 视口驱动的按需加载：只保留与 vb（e7 的 [lat0,lon0,lat1,lon1]）相交（含边距）的
  * 省份打开，其余卸载。省份下标恒定（槽位 = 省 id），迭代函数跳过 !loaded，因此
- * 路由/转向里写进结果的 prov 下标始终有效，不会因重排而悬垂。 */
+ * 路由/转向里写进结果的 prov 下标始终有效，不会因重排而悬垂。
+ *
+ * 若 ms->pbf_dir 非空，则**显示层**（lines/areas/polyrefs）改为从 PBF
+ * 运行时解码：视口进省才解码，滚出则按 LRU 淘汰（驻留上限 ms->dmap_lru_cap）。
+ * 解码结果与 nmbin 落盘文件**逐字节相同**（8 省实测）⇒ 渲染结果一致。
+ * ⚠️ 解码是**同步**的（一省几百毫秒到数秒），调用方应在后台线程里做，
+ * 或先解码再切视图。 */
 void mapset_set_view(MapSet *ms, const int32_t vb[4]);
 
 /* 按省下标确保该省已加载（maneuver/snap 访问特定省前调用，避免卸载后悬垂访问）。 */
 void mapset_ensure_loaded(MapSet *ms, int prov);
+
+/* 设置 PBF 显示层模式：pbf_dir 形如 "sources"（内含 <省名>.osm.pbf）。
+ * 返回 0 = 成功；-1 = 目录不可用（调用方应继续用 nmbin 模式）。 */
+int  mapset_enable_pbf_display(MapSet *ms, const char *pbf_dir, int lru_cap);
+
+/* 确保某省的显示层已从 PBF 解码（供后台线程调用）。
+ * 返回 0 = 已就绪；-1 = 失败（该省没有 PBF 或解码出错）。 */
+int  mapset_ensure_display(MapSet *ms, int prov);
 
 /* 供状态栏/日志用的汇总：总节点数、总边数 */
 void mapset_totals(const MapSet *ms, uint64_t *nodes, uint64_t *edges);

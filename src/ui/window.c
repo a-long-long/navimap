@@ -753,6 +753,8 @@ static void app_update_coverage(App *a)
     }
 }
 
+
+
 static void paint_frame(SDL_Renderer *r, Raster *rs, App *a, PaintStats *st)
 {
     /* 统计在这里清零一次，且只在这里清。

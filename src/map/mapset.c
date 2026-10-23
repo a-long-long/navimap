@@ -5,6 +5,7 @@
 #include <string.h>
 #include <dirent.h>
 #include <sys/stat.h>
+#include <unistd.h>
 #include <math.h>
 
 #include "map/coordkey.h"
@@ -94,20 +95,26 @@ static int src_open_files(MapSrc *s)
         s->has_restr = 0;
     }
 
-    /* 线/面要素可选：三者齐备才算有 */
-    s->has_features = 1;
-    snprintf(p, sizeof(p), "%s/lines.bin", s->dir);
-    if (nmbin_open(p, &s->lines) != 0) s->has_features = 0;
-    if (s->has_features) {
-        snprintf(p, sizeof(p), "%s/areas.bin", s->dir);
-        if (nmbin_open(p, &s->areas) != 0) s->has_features = 0;
+    /* 线/面要素可选：三者齐备才算有。
+     * ★ PBF 模式下**不从 nmbin 打开**这三个文件（它们可能根本没落盘），
+     * 改由 mapset_ensure_display 从 PBF 运行时解码。 */
+    if (s->pbf_display_mode) {
+        s->has_features = 0;      /* 等解码后再置 1 */
+    } else {
+        s->has_features = 1;
+        snprintf(p, sizeof(p), "%s/lines.bin", s->dir);
+        if (nmbin_open(p, &s->lines) != 0) s->has_features = 0;
+        if (s->has_features) {
+            snprintf(p, sizeof(p), "%s/areas.bin", s->dir);
+            if (nmbin_open(p, &s->areas) != 0) s->has_features = 0;
+        }
+        if (s->has_features) {
+            snprintf(p, sizeof(p), "%s/polyrefs.bin", s->dir);
+            if (nmbin_open(p, &s->polyrefs) != 0) s->has_features = 0;
+        }
+        if (!s->has_features)
+            fprintf(stderr, "图集: %s 无 lines/areas/polyrefs，只显示路网\n", s->name);
     }
-    if (s->has_features) {
-        snprintf(p, sizeof(p), "%s/polyrefs.bin", s->dir);
-        if (nmbin_open(p, &s->polyrefs) != 0) s->has_features = 0;
-    }
-    if (!s->has_features)
-        fprintf(stderr, "图集: %s 无 lines/areas/polyrefs，只显示路网\n", s->name);
 
     /* 空间索引可选：两者齐备才算有 */
     s->has_tiles = 1;
@@ -163,6 +170,12 @@ static void src_unload(MapSrc *s)
     nmbin_close(&s->nodes);
     nmbin_close(&s->edges);
     if (s->has_restr) nmbin_close(&s->restrictions);
+    /* ★ PBF 解码出来的显示层是 malloc 缓冲，nmbin_close 只管 mmap，
+     * 所以要单独 pbfmap_free（否则泄漏）。 */
+    if (s->dmap_from_pbf) {
+        pbfmap_free(&s->dmap);
+        s->dmap_from_pbf = 0;
+    }
     if (s->has_features) {
         nmbin_close(&s->lines);
         nmbin_close(&s->areas);
@@ -488,6 +501,42 @@ void mapset_set_view(MapSet *ms, const int32_t vb[4])
             src_unload(s);
             s->loaded = 0;
         }
+        /* PBF 显示层：视口进省 ⇒ 需要它的显示层（若还没解就解）。
+         * 解码较慢（一省几百 ms ~ 数秒），调用方最好在后台线程里先
+         * mapset_ensure_display 好，这里只是兜底。 */
+        if (ov && ms->pbf_dir[0]) {
+            if (!s->dmap_from_pbf) {
+                mapset_ensure_display(ms, i);
+            }
+            s->dmap_used = ++ms->dmap_clock;
+        }
+    }
+
+    /* LRU 淘汰：驻留超上限时，把**不在视口内**且最久未用的省显示层丢掉。 */
+    if (ms->pbf_dir[0] && ms->dmap_lru_cap > 0) {
+        for (;;) {
+            int live = 0;
+            for (int i = 0; i < ms->n; i++)
+                if (ms->srcs[i].dmap_from_pbf) live++;
+            if (live <= ms->dmap_lru_cap) break;
+            /* 找 LRU 且不在视口内的 */
+            int victim = -1;
+            uint64_t oldest = UINT64_MAX;
+            for (int i = 0; i < ms->n; i++) {
+                MapSrc *s = &ms->srcs[i];
+                if (!s->dmap_from_pbf) continue;
+                if (bbox_overlap(s->bbox, eb)) continue;   /* 视口内，不淘汰 */
+                if (s->dmap_used < oldest) { oldest = s->dmap_used; victim = i; }
+            }
+            if (victim < 0) break;    /* 全在视口内 ⇒ 不淘汰 */
+            MapSrc *s = &ms->srcs[victim];
+            pbfmap_free(&s->dmap);
+            memset(&s->lines, 0, sizeof(s->lines));
+            memset(&s->areas, 0, sizeof(s->areas));
+            memset(&s->polyrefs, 0, sizeof(s->polyrefs));
+            s->has_features = 0;
+            s->dmap_from_pbf = 0;
+        }
     }
 }
 
@@ -497,6 +546,64 @@ void mapset_ensure_loaded(MapSet *ms, int prov)
     MapSrc *s = &ms->srcs[prov];
     if (!s->loaded)
         s->loaded = (src_open_files(s) == 0);
+}
+
+/* ------------------------------------------------------------------ */
+/* PBF 显示层：从 PBF 运行时解码 + LRU                                   */
+/* ------------------------------------------------------------------ */
+
+int mapset_enable_pbf_display(MapSet *ms, const char *pbf_dir, int lru_cap)
+{
+    if (!ms || !pbf_dir) return -1;
+    struct stat st;
+    if (stat(pbf_dir, &st) != 0 || !S_ISDIR(st.st_mode)) return -1;
+    snprintf(ms->pbf_dir, sizeof(ms->pbf_dir), "%s", pbf_dir);
+    ms->dmap_lru_cap = lru_cap > 0 ? lru_cap : 3;
+    ms->dmap_clock = 0;
+    /* 标记所有省走 PBF 显示层（src_open_files 据此不打开 nmbin 的
+     * lines/areas/polyrefs）。已打开的省要重开一次才生效。 */
+    for (int i = 0; i < ms->n; i++) {
+        MapSrc *s = &ms->srcs[i];
+        s->pbf_display_mode = 1;
+        if (s->loaded) {
+            /* 释放 nmbin 的显示层（若有），改由 PBF 提供 */
+            if (!s->dmap_from_pbf && s->has_features) {
+                nmbin_close(&s->lines);
+                nmbin_close(&s->areas);
+                nmbin_close(&s->polyrefs);
+            }
+            s->has_features = 0;
+        }
+    }
+    return 0;
+}
+
+int mapset_ensure_display(MapSet *ms, int prov)
+{
+    if (!ms || prov < 0 || prov >= ms->n) return -1;
+    if (!ms->pbf_dir[0]) return -1;
+    MapSrc *s = &ms->srcs[prov];
+    if (s->dmap_from_pbf) return 0;      /* 已就绪 */
+    if (!s->loaded) return -1;            /* 路由 nodes 没打开，没有下标空间 */
+
+    char pbf[4096];
+    snprintf(pbf, sizeof(pbf), "%s/%s.osm.pbf", ms->pbf_dir, s->name);
+    struct stat st;
+    if (stat(pbf, &st) != 0) return -1;
+
+    PbfMap m;
+    if (pbfmap_decode(pbf, &s->nodes, &m) != 0) return -1;
+
+    /* 接管缓冲：把 dmap 的三个 NMBinFile 挂到 src 上，渲染端零改动。
+     * （内容与 nmbin 落盘文件逐字节相同，8 省实测。） */
+    s->lines    = m.lines;
+    s->areas    = m.areas;
+    s->polyrefs = m.polyrefs;
+    s->dmap     = m;
+    s->dmap_from_pbf = 1;
+    s->has_features = 1;
+    s->dmap_used = ++ms->dmap_clock;
+    return 0;
 }
 
 void mapset_free(MapSet *ms)
