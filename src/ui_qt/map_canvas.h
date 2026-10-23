@@ -10,7 +10,8 @@
  *
  * 与像素格式的关系：surface 用 SDL_CreateRGBSurface(0,…,32,0,0,0,0)
  * 创建（与 map_shot 相同的默认 RGBA8888 字节序），QImage 侧对应
- * Format_RGBA8888（两者都定义"内存字节序 R,G,B,A"，与机器端无关）。
+ * Format_RGB32（内存字节序 B,G,R,A，忽略第 4 字节；RGBA8888 全透黑屏、
+ * RGBX8888 红蓝互换均已踩过）。
  */
 #include <QWidget>
 #include <QImage>
@@ -51,6 +52,11 @@ private:
     void ensureSurface(int w, int h);
     void drawScaleBar(QPainter &p);
     void drawCompass(QPainter &p);
+    void drawGraticule(QPainter &p);   /* 坐标网格（lat/lon 经纬网）叠加层 */
+
+public:
+    /* 坐标网开关：Qt 端叠加层，C 渲染核心不参与 */
+    void setShowGrid(bool v);
 
     App        *m_a;
     MainWindow *m_mw;
@@ -69,6 +75,9 @@ private:
 
     /* 指北针命中区（paintEvent 里更新，mousePress 里用） */
     QRect m_compassRect;
+
+    /* 坐标网叠加层开关（右栏「坐标网」按钮控制） */
+    bool m_showGrid = false;
 };
 
 #endif

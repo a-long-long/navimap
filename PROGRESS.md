@@ -232,6 +232,11 @@ SDL 自绘 chrome 在 Wayland 下呈现异常（右侧按钮不可见/无边框�
   `-DCMAKE_PREFIX_PATH` 指过去即可，不属于仓库内容。
 - 已知限制：`--shot` 走 `win.grab()`（Qt 截全窗口）；moc 依赖 cmake 的 AUTOMOC 路径，
   Qt 5.11 的 `QMenu::addAction` 模板重载不可用（显式 QAction）。
+- 右栏补齐（2026-10-23 下午）：**坐标网按钮**（▦，`MapCanvas::drawGraticule` 用
+  `mv_visible_bbox` 取可见范围、nice 1/2/5 步进、`mv_project` 画经纬线+边缘标注，
+  纯 Qt 叠加层，C 核心零改动；旋转随投影天然正确）+ **菜单按钮**（☰，弹出与菜单栏
+  同一份 QMenu；Qt 5.11 的 `popup` 只有 2 参重载，用 `sizeHint` 定位到按钮左侧）。
+  `--grid` 可开局打开坐标网。
 
 ---
 

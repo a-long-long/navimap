@@ -37,6 +37,7 @@ int main(int argc, char **argv)
     const char *pbf_display = NULL;
     int pbf_lru = 3;
     const char *shot = NULL;          /* --shot=path：出一张图就退出 */
+    int grid = 0;                     /* --grid：开局打开坐标网叠加层 */
 
     AutoBuildOpt ab;
     memset(&ab, 0, sizeof(ab));
@@ -53,6 +54,7 @@ int main(int argc, char **argv)
         else if (strcmp(argv[i], "--no-autobuild") == 0) ab.enable = 0;
         else if (strncmp(argv[i], "--sources=", 10) == 0) ab.src_dir = argv[i] + 10;
         else if (strncmp(argv[i], "--shot=", 7) == 0) shot = argv[i] + 7;
+        else if (strcmp(argv[i], "--grid") == 0) grid = 1;
         else if (strncmp(argv[i], "--pbf-display=", 14) == 0) {
             pbf_display = argv[i] + 14;
             const char *colon = strrchr(pbf_display, ':');
@@ -119,6 +121,7 @@ int main(int argc, char **argv)
 
     if (shot) {
         /* 无人值守：渲染一帧抓全窗口（含 chrome 控件）存 PNG */
+        if (grid) win.setShowGrid(true);
         win.resize(w, h);
         win.show();
         QApplication::processEvents();   /* 让布局/首帧完成 */

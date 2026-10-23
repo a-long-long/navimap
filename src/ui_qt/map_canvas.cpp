@@ -5,6 +5,7 @@
 #include <QWheelEvent>
 #include <QKeyEvent>
 #include <QDateTime>
+#include <cmath>
 
 #include "main_window.h"
 
@@ -120,6 +121,58 @@ void MapCanvas::paintEvent(QPaintEvent *)
     }
     drawScaleBar(p);
     drawCompass(p);
+    if (m_showGrid) drawGraticule(p);
+}
+
+void MapCanvas::setShowGrid(bool v)
+{
+    m_showGrid = v;
+    m_a->need_redraw = 1;
+}
+
+/* ---- 坐标网格（lat/lon 经纬网）：Qt 端叠加层，C 渲染核心一行不改 ----
+ * 用 mv_visible_bbox 取当前可见范围的经纬度边界，再按 nice 1/2/5 步进
+ * 取经线/纬线，逐条 mv_project 到像素画直线 + 边缘标注。
+ * 旋转角 rot 是投影的一部分，所以网格随地图一起转，天然正确。 */
+void MapCanvas::drawGraticule(QPainter &p)
+{
+    double bbox[4];
+    mv_visible_bbox(&m_a->view, bbox);   /* [la0(底), lo0(左), la1(顶), lo1(右)] */
+    double la0 = bbox[0], lo0 = bbox[1], la1 = bbox[2], lo1 = bbox[3];
+    double span = qMax(lo1 - lo0, la1 - la0);
+    if (span <= 0) return;
+
+    /* nice 1/2/5 步进：让屏幕上大约出现 6 条线 */
+    double p10 = pow(10.0, floor(log10(span / 6.0)));
+    double n = (span / 6.0) / p10;
+    double step = ((n < 1.5) ? 1.0 : (n < 3.0) ? 2.0 : (n < 7.0) ? 5.0 : 10.0) * p10;
+
+    QFont f = p.font();
+    f.setPointSize(8);
+    p.setFont(f);
+    p.setPen(QColor(40, 60, 95, 160));
+
+    char buf[32];
+    /* 经线（恒定 lon）：竖向，标签标在顶端 */
+    double lon = ceil(lo0 / step - 1e-9) * step;
+    for (; lon <= lo1 + 1e-9; lon += step) {
+        int xb, yb, xt, yt;
+        mv_project(&m_a->view, la0, lon, &xb, &yb);
+        mv_project(&m_a->view, la1, lon, &xt, &yt);
+        p.drawLine(xb, yb, xt, yt);
+        snprintf(buf, sizeof(buf), "%.4f°%c", fabs(lon), lon >= 0 ? 'E' : 'W');
+        p.drawText(xt + 2, yt + 10, QString::fromUtf8(buf));
+    }
+    /* 纬线（恒定 lat）：横向，标签标在左端 */
+    double lat = ceil(la0 / step - 1e-9) * step;
+    for (; lat <= la1 + 1e-9; lat += step) {
+        int xb, yb, xt, yt;
+        mv_project(&m_a->view, lat, lo0, &xb, &yb);
+        mv_project(&m_a->view, lat, lo1, &xt, &yt);
+        p.drawLine(xb, yb, xt, yt);
+        snprintf(buf, sizeof(buf), "%.4f°%c", fabs(lat), lat >= 0 ? 'N' : 'S');
+        p.drawText(xb + 2, yb - 3, QString::fromUtf8(buf));
+    }
 }
 
 /* ---- 比例尺：与 chrome.c 的 draw_scale 同一套换算，Qt 侧重画 ---- */

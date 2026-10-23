@@ -69,22 +69,23 @@ static QAction *addAct(QMenu *m, const QString &text, QKeySequence sc,
 
 void MainWindow::buildMenus()
 {
-    QMenu *mgo = menuBar()->addMenu(QStringLiteral("菜单(&M)"));
-    addAct(mgo, QStringLiteral("搜索地点"),
+    m_menuMain = new QMenu(QStringLiteral("菜单(&M)"), this);
+    addAct(m_menuMain, QStringLiteral("搜索地点"),
            QKeySequence(Qt::CTRL + Qt::Key_F), this, [this]() {
                m_search->setFocus(); m_search->selectAll();
            });
-    addAct(mgo, QStringLiteral("清除路线"), QKeySequence(Qt::Key_C), this,
+    addAct(m_menuMain, QStringLiteral("清除路线"), QKeySequence(Qt::Key_C), this,
            [this]() { app_nav_clear(m_a); m_a->need_redraw = 1; });
-    addAct(mgo, QStringLiteral("缩放到路线"), QKeySequence(Qt::Key_F), this,
+    addAct(m_menuMain, QStringLiteral("缩放到路线"), QKeySequence(Qt::Key_F), this,
            [this]() { app_nav_fit(m_a); m_a->need_redraw = 1; });
-    addAct(mgo, QStringLiteral("跟随车头"), QKeySequence(Qt::Key_T), this,
+    addAct(m_menuMain, QStringLiteral("跟随车头"), QKeySequence(Qt::Key_T), this,
            [this]() { app_nav_sim_follow(m_a); });
-    addAct(mgo, QStringLiteral("昼 / 夜 切换"), QKeySequence(Qt::Key_D), this,
+    addAct(m_menuMain, QStringLiteral("昼 / 夜 切换"), QKeySequence(Qt::Key_D), this,
            [this]() { m_a->day_night = !m_a->day_night; m_a->need_redraw = 1; });
-    mgo->addSeparator();
-    addAct(mgo, QStringLiteral("退出"), QKeySequence(Qt::CTRL + Qt::Key_Q), this,
+    m_menuMain->addSeparator();
+    addAct(m_menuMain, QStringLiteral("退出"), QKeySequence(Qt::CTRL + Qt::Key_Q), this,
            [this]() { m_a->quit = 1; close(); });
+    menuBar()->addMenu(m_menuMain);
 
     QMenu *msim = menuBar()->addMenu(QStringLiteral("模拟导航(&S)"));
     addAct(msim, QStringLiteral("开始 / 停止"), QKeySequence(Qt::Key_G), this,
@@ -249,11 +250,32 @@ void MainWindow::buildRightCol()
         m_a->day_night = !m_a->day_night; m_a->need_redraw = 1;
     });
 
+    /* 坐标网（经纬网）叠加层开关 */
+    QToolButton *grid = bigbtn(QStringLiteral("▦"), QStringLiteral("坐标网（经纬网）"));
+    grid->setCheckable(true);
+    connect(grid, &QToolButton::toggled, this, [this](bool on) {
+        m_canvas->setShowGrid(on);
+    });
+
+    /* 菜单按钮：弹出与菜单栏同一份 QMenu（SDLV 版 TopBar 的 ☰ 按钮行为）。
+       Qt 5.11 的 popup 只有 (pos, at) 两参，用 sizeHint 把菜单定位到按钮左侧，
+       避免从右栏最底钮向下弹出超出屏幕。 */
+    QToolButton *menu = bigbtn(QStringLiteral("☰"), QStringLiteral("菜单"));
+    connect(menu, &QToolButton::clicked, this, [this, menu]() {
+        if (!m_menuMain) return;
+        QPoint p = menu->mapToGlobal(menu->rect().topLeft());
+        p.rx() -= m_menuMain->sizeHint().width();
+        m_menuMain->popup(p);
+    });
+
     col->addWidget(zin);
     col->addWidget(zout);
     col->addSeparator();
     col->addWidget(loc);
     col->addWidget(day);
+    col->addSeparator();
+    col->addWidget(grid);
+    col->addWidget(menu);
 }
 
 void MainWindow::locate()
@@ -261,6 +283,11 @@ void MainWindow::locate()
     if (m_a->sim_on) { m_a->view.lat = m_a->sim.car_lat; m_a->view.lon = m_a->sim.car_lon; }
     else if (m_a->pick_a.have) { m_a->view.lat = m_a->pick_a.lat; m_a->view.lon = m_a->pick_a.lon; }
     m_a->need_redraw = 1;
+}
+
+void MainWindow::setShowGrid(bool v)
+{
+    if (m_canvas) m_canvas->setShowGrid(v);
 }
 
 /* ---------------- 左侧步骤面板 ---------------- */
