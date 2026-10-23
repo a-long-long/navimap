@@ -7,6 +7,7 @@
 
 #include "render/paint.h"
 #include "render/navdraw.h"
+#include "render/chrome.h"
 #include "map/binfmt.h"
 #include "map/map_view.h"
 #include "utils/geo.h"
@@ -895,6 +896,9 @@ static void paint_frame(SDL_Renderer *r, Raster *rs, App *a, PaintStats *st)
     mv_project(&a->view, a->view.lat, a->view.lon, &cx, &cy);
     paint_marker(r, cx, cy, 4, 30, 90, 220);
 
+    /* 夜间蒙版：只压暗地图，不压下面要画的面板/文字/chrome */
+    if (a->day_night) paint_night_tint(r, a->view.w, a->view.h);
+
     if (a->show_panel && a->font)
         paint_nav_panel(r, a->have_rr ? &a->rr : NULL,
                         a->man.n ? &a->man : NULL, a->font,
@@ -955,13 +959,15 @@ static void paint_frame(SDL_Renderer *r, Raster *rs, App *a, PaintStats *st)
                          a->font_size + 8, app_big_size(a->font_size) + 8, &sb);
     }
 
-    paint_zoom_buttons(r, &a->view, a->font);
-
     /* 无地图区域提示画在最上层：它解释的是"你为什么看不到东西"，
        被面板或按钮压住就失去意义了。 */
     app_update_coverage(a);
     if (a->cov_state == COV_NONE || a->cov_state == COV_BBOX_ONLY)
         paint_nomap_banner(r, &a->view, a->font, a->font_size + 8, a->cov_state);
+
+    /* nav-desktop 风格 chrome（自绘标题栏 / 顶栏 / 右栏 / 导航栏 /
+       步骤面板 / 主菜单 / 无图卡片 / 比例尺 / 指北针 / 昼夜）叠在最上层 */
+    paint_chrome(r, a);
 }
 
 int app_render_to_surface(App *a, SDL_Surface *surf, PaintStats *st)
@@ -1071,7 +1077,8 @@ void app_run(App *a)
     a->win = SDL_CreateWindow("NavMap",
                               SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED,
                               a->view.w, a->view.h,
-                              SDL_WINDOW_SHOWN | SDL_WINDOW_RESIZABLE);
+                              SDL_WINDOW_SHOWN | SDL_WINDOW_RESIZABLE |
+                              SDL_WINDOW_BORDERLESS);
     if (!a->win) { fprintf(stderr, "建窗口失败: %s\n", SDL_GetError()); SDL_Quit(); return; }
     a->win_ren = SDL_CreateRenderer(a->win, -1, SDL_RENDERER_SOFTWARE);
     if (!a->win_ren) { fprintf(stderr, "建窗口渲染器失败: %s\n", SDL_GetError()); SDL_Quit(); return; }
@@ -1105,7 +1112,15 @@ void app_run(App *a)
                     else if (k == SDLK_UP)              app_search_move(a, -1);
                     break;
                 }
-                if (e.key.keysym.sym == SDLK_ESCAPE || e.key.keysym.sym == SDLK_q) a->quit = 1;
+                if (e.key.keysym.sym == SDLK_ESCAPE) {
+                    if (a->menu_open) { a->menu_open = 0; a->need_redraw = 1; }
+                    else if (a->su.active) app_search_close(a);
+                    else a->quit = 1;
+                }
+                else if (e.key.keysym.sym == SDLK_q) a->quit = 1;
+                else if (e.key.keysym.sym == SDLK_d) {
+                    a->day_night = !a->day_night; a->need_redraw = 1;
+                }
                 else if (e.key.keysym.sym == SDLK_EQUALS || e.key.keysym.sym == SDLK_KP_PLUS)
                     mv_zoom_at(&a->view, 0.5, a->view.w / 2, a->view.h / 2), a->need_redraw = 1;
                 else if (e.key.keysym.sym == SDLK_MINUS || e.key.keysym.sym == SDLK_KP_MINUS)
@@ -1138,13 +1153,29 @@ void app_run(App *a)
                 break;
             case SDL_MOUSEBUTTONDOWN:
                 if (e.button.button == SDL_BUTTON_LEFT) {
-                    /* 按在缩放按钮上就不进入拖动，免得点一下按钮地图跟着动 */
-                    if (zoom_button_hit(&a->view, e.button.x, e.button.y)) {
+                    int mx = e.button.x, my = e.button.y;
+                    int id = chrome_hit(a, mx, my);
+                    /* 自绘标题栏：落在窗口按钮以外就拖拽整个窗口 */
+                    if (my < CHROME_TITLE_H && id != CH_WIN_MIN &&
+                        id != CH_WIN_MAX && id != CH_WIN_CLOSE) {
+                        a->win_drag = 1;
+                        int wx, wy;
+                        SDL_GetWindowPosition(a->win, &wx, &wy);
+                        a->win_drag_x = mx - wx;
+                        a->win_drag_y = my - wy;
+                        a->dragging = 0;
+                    } else if ((SDL_GetModState() & KMOD_CTRL) && id == CH_NONE) {
+                        /* Ctrl+拖动 = 旋转地图（指北针可一键回正北） */
+                        a->rotating = 1;
+                        a->dragging = 0;
+                        a->last_x = mx; a->last_y = my;
+                    } else if (id != CH_NONE) {
+                        /* 命中 chrome 元素：交给 UP 当点击处理，不拖动地图 */
                         a->dragging = 0;
                     } else {
                         a->dragging = 1;
-                        a->last_x = a->down_x = e.button.x;
-                        a->last_y = a->down_y = e.button.y;
+                        a->last_x = a->down_x = mx;
+                        a->last_y = a->down_y = my;
                     }
                 } else if (e.button.button == SDL_BUTTON_RIGHT) {
                     app_nav_clear(a);          /* 右键：清掉起终点和路线 */
@@ -1152,35 +1183,45 @@ void app_run(App *a)
                 break;
             case SDL_MOUSEBUTTONUP:
                 if (e.button.button == SDL_BUTTON_LEFT) {
-                    a->dragging = 0;
-                    /* 缩放按钮：命中就缩放，不当成选点。
-                       锚点用画面中心——以按钮为锚会把图朝右下角拽。 */
-                    int zb = zoom_button_hit(&a->view, e.button.x, e.button.y);
-                    if (zb) {
-                        mv_zoom_at(&a->view, zb > 0 ? 0.5 : -0.5,
-                                   a->view.w / 2, a->view.h / 2);
-                        mv_clamp_zoom(&a->view, 3.0, 19.0);
-                        a->need_redraw = 1;
+                    int mx = e.button.x, my = e.button.y;
+                    int was_drag = a->win_drag || a->rotating;
+                    a->win_drag = 0; a->rotating = 0; a->dragging = 0;
+                    int id = chrome_hit(a, mx, my);
+                    if (id != CH_NONE) {
+                        chrome_act(a, id, mx, my);
                         break;
                     }
+                    /* 菜单打开时点菜单外任意处：先关菜单，不当成选点 */
+                    if (a->menu_open) { a->menu_open = 0; a->need_redraw = 1; break; }
                     /* 拖动和点击用同一个左键：位移在 4 像素以内才算"点",
                        否则每次拖完地图都会顺手设一个点。 */
-                    if (abs(e.button.x - a->down_x) + abs(e.button.y - a->down_y) <= 4) {
+                    if (!was_drag &&
+                        abs(mx - a->down_x) + abs(my - a->down_y) <= 4) {
                         double lat, lon;
-                        mv_unproject(&a->view, e.button.x, e.button.y, &lat, &lon);
+                        mv_unproject(&a->view, mx, my, &lat, &lon);
                         app_nav_click(a, lat, lon);
                     }
                 }
                 break;
-            case SDL_MOUSEMOTION:
-                if (a->dragging) {
-                    mv_pan_pixels(&a->view, e.motion.x - a->last_x, e.motion.y - a->last_y);
+            case SDL_MOUSEMOTION: {
+                int mx = e.motion.x, my = e.motion.y;
+                if (a->win_drag) {
+                    SDL_SetWindowPosition(a->win, mx - a->win_drag_x,
+                                          my - a->win_drag_y);
+                } else if (a->rotating) {
+                    a->view.rot += (mx - a->last_x) * 0.4;
+                    while (a->view.rot > 180.0)  a->view.rot -= 360.0;
+                    while (a->view.rot < -180.0) a->view.rot += 360.0;
+                    a->need_redraw = 1;
+                } else if (a->dragging) {
+                    mv_pan_pixels(&a->view, mx - a->last_x, my - a->last_y);
                     a->need_redraw = 1;
                 }
                 /* 光标位置始终记着：滚轮缩放拿它当锚点，否则鼠标没动过时
                    会锚在 (0,0)，画面一下就飞走。★ 必须在算完位移之后再更新。 */
-                a->last_x = e.motion.x; a->last_y = e.motion.y;
+                a->last_x = mx; a->last_y = my;
                 break;
+            }
             case SDL_MOUSEWHEEL:
                 /* 2.26+ 的 wheel 事件自带鼠标位置；老版本退回 last_x/last_y */
                 mv_zoom_at(&a->view, e.wheel.y > 0 ? 0.35 : -0.35,

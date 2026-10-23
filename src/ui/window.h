@@ -123,6 +123,16 @@ typedef struct {
      * 搜索插进来复用同一个连接会把游标踩乱（sqlite3 连接不是并发安全的）。 */
     SearchDb     *sdb;
     SearchUI      su;
+
+    /* ---- nav-desktop 风格界面状态（chrome.c 绘制 + 命中测试）----
+     * 这些是纯 UI 状态，与导航/渲染算法无关；改它们不影响算路结果。 */
+    int           day_night;      /* 0 昼 / 1 夜（夜间半透明蒙版） */
+    int           mode;           /* 顶栏模式页签：0 浏览 / 1 导航 */
+    int           menu_open;      /* 主菜单浮层是否展开 */
+    int           chrome_menu_item;/* 菜单命中项下标（chrome_hit 写入） */
+    int           win_drag;       /* 自绘标题栏拖拽中 */
+    int           win_drag_x, win_drag_y;  /* 拖拽时鼠标相对窗口的偏移 */
+    int           rotating;       /* Ctrl+拖动 旋转地图中 */
 } App;
 
 /* font_path：NULL = 用默认字体（宋体优先的候选链）；"none" 或 "" = 不加载字体

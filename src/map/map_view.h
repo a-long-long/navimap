@@ -2,6 +2,7 @@
 #define NAVIMAP_MAP_VIEW_H
 
 #include <stdint.h>
+#include <math.h>
 #include "utils/geo.h"      /* nm_mercator_y_fast：mv_proj 内联要用 */
 
 /* 视口：中心经纬度 + 缩放级别 + 屏幕尺寸。
@@ -14,6 +15,7 @@ typedef struct {
     double lat, lon;     /* 视口中心 */
     double zoom;         /* 类似瓦片 z：scale = 256 * 2^zoom 像素/世界 */
     int    w, h;         /* 屏幕尺寸（像素） */
+    double rot;         /* 地图旋转角（度，顺时针为正；0 = 正北朝上） */
 
     /* 投影缓存（惰性填充，见 map_view.c 的 mv_prepare）。
      * 视口中心的墨卡托坐标与缩放在一帧内是常量，但原先每次 mv_project
@@ -22,7 +24,7 @@ typedef struct {
      * 这里连"缓存键"一起存，逐字段比对做惰性失效，所以调用方直接改
      * lat/lon/zoom/w/h 也不会画错（不用记着去通知缓存）。 */
     int    c_valid;
-    double c_lat, c_lon, c_zoom;
+    double c_lat, c_lon, c_zoom, c_rot;
     int    c_w, c_h;
     double cx, cy, scale;
 } MapView;
@@ -49,6 +51,7 @@ int  mv_project(const MapView *v, double lat, double lon, int *x, int *y);
 typedef struct {
     double cx, cy, scale;   /* 视口中心的墨卡托坐标 + 每世界单位的像素数 */
     double hw, hh;          /* 画布中心偏移：w/2.0、h/2.0 */
+    double rot;             /* 旋转角（度，顺时针为正） */
 } MvProj;
 
 void mv_proj_begin(const MapView *v, MvProj *p);
@@ -57,8 +60,18 @@ static inline void mv_proj(const MvProj *p, double lat, double lon, int *x, int 
 {
     double wx = (lon + 180.0) / 360.0;
     double wy = nm_mercator_y_fast(lat);
-    *x = (int)lround((wx - p->cx) * p->scale + p->hw);
-    *y = (int)lround((wy - p->cy) * p->scale + p->hh);
+    double sx = (wx - p->cx) * p->scale;
+    double sy = (wy - p->cy) * p->scale;
+    /* rot==0 时这一支恒不进，热路径与改造前逐位等价 */
+    if (p->rot != 0.0) {
+        double a = -p->rot * (M_PI / 180.0);
+        double ca = cos(a), sa = sin(a);
+        double rx = sx * ca - sy * sa;
+        double ry = sx * sa + sy * ca;
+        sx = rx; sy = ry;
+    }
+    *x = (int)lround(sx + p->hw);
+    *y = (int)lround(sy + p->hh);
 }
 
 /* e7 整数版：热路径手里的经纬度本来就是 int32 e7（落盘格式），省得每个调用点

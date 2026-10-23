@@ -24,11 +24,13 @@ static void mv_prepare(const MapView *v)
     MapView *m = (MapView *)v;        /* 只写缓存字段，逻辑上仍是 const */
     if (m->c_valid &&
         m->c_lat == v->lat && m->c_lon == v->lon && m->c_zoom == v->zoom &&
+        m->c_rot == v->rot &&
         m->c_w == v->w && m->c_h == v->h)
         return;
     nm_mercator(v->lat, v->lon, &m->cx, &m->cy);
     m->scale = 256.0 * pow(2.0, v->zoom);
     m->c_lat = v->lat; m->c_lon = v->lon; m->c_zoom = v->zoom;
+    m->c_rot = v->rot;
     m->c_w = v->w; m->c_h = v->h;
     m->c_valid = 1;
 }
@@ -42,8 +44,17 @@ int mv_project(const MapView *v, double lat, double lon, int *x, int *y)
        y 只跟纬度相关且足够光滑 → 走查表插值版，见 geo.c 的误差账。 */
     double wx = (lon + 180.0) / 360.0;
     double wy = nm_mercator_y_fast(lat);
-    double px = (wx - m->cx) * m->scale + v->w / 2.0;
-    double py = (wy - m->cy) * m->scale + v->h / 2.0;
+    double sx = (wx - m->cx) * m->scale;
+    double sy = (wy - m->cy) * m->scale;
+    if (m->rot != 0.0) {
+        double a = -m->rot * (M_PI / 180.0);
+        double ca = cos(a), sa = sin(a);
+        double rx = sx * ca - sy * sa;
+        double ry = sx * sa + sy * ca;
+        sx = rx; sy = ry;
+    }
+    double px = sx + v->w / 2.0;
+    double py = sy + v->h / 2.0;
     *x = (int)lround(px);
     *y = (int)lround(py);
     return (*x < 0 || *y < 0 || *x >= v->w || *y >= v->h) ? 1 : 0;
@@ -55,14 +66,24 @@ void mv_proj_begin(const MapView *v, MvProj *p)
     MapView *m = (MapView *)v;
     p->cx = m->cx; p->cy = m->cy; p->scale = m->scale;
     p->hw = v->w / 2.0; p->hh = v->h / 2.0;
+    p->rot = v->rot;
 }
 
 void mv_unproject(const MapView *v, int x, int y, double *lat, double *lon)
 {
     mv_prepare(v);
     MapView *m = (MapView *)v;
-    double wx = m->cx + (x - v->w / 2.0) / m->scale;
-    double wy = m->cy + (y - v->h / 2.0) / m->scale;
+    double sx = x - v->w / 2.0;
+    double sy = y - v->h / 2.0;
+    if (m->rot != 0.0) {
+        double a = m->rot * (M_PI / 180.0);
+        double ca = cos(a), sa = sin(a);
+        double rx = sx * ca - sy * sa;
+        double ry = sx * sa + sy * ca;
+        sx = rx; sy = ry;
+    }
+    double wx = m->cx + sx / m->scale;
+    double wy = m->cy + sy / m->scale;
     nm_mercator_inv(wx, wy, lat, lon);
 }
 

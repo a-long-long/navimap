@@ -144,6 +144,7 @@ set(CORE_SRCS
     src/render/paint.c
     src/render/raster.c
     src/render/navdraw.c
+    src/render/chrome.c
     src/render/font.c
     src/render/labels.c
     src/ui/window.c
