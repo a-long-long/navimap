@@ -83,6 +83,34 @@ Windows 注意：入口 `main()` 直接用（CMake 定义 `SDL_MAIN_HANDLED`，�
 必须失败"（不存在路径 / 空 PATH / 起不来的进程）。本机只有 POSIX 能真跑，Windows
 分支按同一契约编写——新增平台分支时先在 plat_selftest 里补契约，再动业务代码。
 
+## Qt 前端（可选）
+
+SDL 版窗口是无边框自绘（chrome / 搜索框 / 面板都是画在 framebuffer 上的假控件），
+平台差异大、输入法与无障碍支持弱。`navmap_qt` 用 **Qt 做真控件**（QMainWindow 菜单栏 /
+QLineEdit 搜索 / QDockWidget 步骤面板 / QToolBar 右栏按钮），地图仍走现有 C 光栅化器：
+`app_render_to_surface()` 画进 `SDL_Surface` → 包成 `QImage(Format_RGB32)` → `paintEvent` blit。
+**渲染 / 算路 / 搜索核心一行不改**；`App.qt_ui=1` 让 `paint_frame` 跳过 SDL 自绘 chrome。
+
+```bash
+cmake -B build -DCMAKE_PREFIX_PATH=<Qt5 前缀>   # 找得到 Qt5Widgets 即可
+cmake --build build --target navmap_qt -j8
+./build/navmap_qt --graph=products/graph/beijing        # 参数与 navimap 一致
+QT_QPA_PLATFORM=offscreen ./build/navmap_qt --shot=x.png # 无人值守出图
+```
+
+要点（踩过的坑）：
+
+- **像素格式**：小端机 `SDL_CreateRGBSurface(…,32,0,0,0,0)` 默认 ARGB8888
+  （内存序 B,G,R,A），对应 `QImage::Format_RGB32`。用 `Format_RGBA8888` 整帧全透黑屏、
+  `Format_RGBX8888` 红蓝互换。
+- **SDL 信号伞**：`SDL_Init` 默认给 SIGINT/SIGTERM 装 parachute 处理器，把退出请求
+  塞进 SDL 事件队列——Qt 应用不 `SDL_PollEvent`，信号被整个吞掉（进程杀不掉只能
+  SIGKILL）。Qt 入口必须**先于** `app_init` 执行
+  `SDL_SetHint(SDL_HINT_NO_SIGNAL_HANDLERS,"1")` + `SDL_Init(…| SDL_INIT_NOPARACHUTE)`。
+- **平移不用 `mv_pan_pixels`**（它不知道旋转）：改用两次 `mv_unproject` 取地理差加到
+  视口中心，旋转由投影自动处理。
+- Qt 5.11 的 `QMenu::addAction(text, functor)` 模板重载匹配不上，统一显式 `QAction`。
+
 ## 验收
 
 ```bash

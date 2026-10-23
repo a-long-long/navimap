@@ -899,14 +899,15 @@ static void paint_frame(SDL_Renderer *r, Raster *rs, App *a, PaintStats *st)
     /* 夜间蒙版：只压暗地图，不压下面要画的面板/文字/chrome */
     if (a->day_night) paint_night_tint(r, a->view.w, a->view.h);
 
-    if (a->show_panel && a->font)
+    /* Qt 前端接管后这些自绘 UI 全部由真控件承担，不再画 */
+    if (a->show_panel && a->font && !a->qt_ui)
         paint_nav_panel(r, a->have_rr ? &a->rr : NULL,
                         a->man.n ? &a->man : NULL, a->font,
                         a->font_size + 8, 12, 12, 6,
                         a->nav_msg[0] ? a->nav_msg : NULL);
 
     /* 底部指令条：模拟导航时才出现（静止看路线时用左上角面板就够了） */
-    if (a->sim_on && a->font) {
+    if (a->sim_on && a->font && !a->qt_ui) {
         static char b_turn[64], b_dist[64], b_road[96], b_rem[64], b_eta[64];
         NavBanner b;
         memset(&b, 0, sizeof(b));
@@ -938,13 +939,14 @@ static void paint_frame(SDL_Renderer *r, Raster *rs, App *a, PaintStats *st)
                          a->font_size + 8, app_big_size(a->font_size) + 8, &b);
     }
 
-    /* 搜索框 + 结果钉子（在最上层：结果要在路网之上才看得见） */
+    /* 搜索结果图钉（路网之上才看得见）。SDL 自绘搜索框只在无 Qt 前端时画。 */
     if (a->su.active && a->font) {
         int show = a->su.n_hits < 8 ? a->su.n_hits : 8;
         for (int i = 0; i < show; i++)
             paint_search_pin(r, &a->view, a->su.hits[i].lat, a->su.hits[i].lon,
                              i == a->su.sel, a->font,
                              i == a->su.sel ? a->su.hits[i].name : NULL);
+        if (!a->qt_ui) {
         SearchBoxView sb;
         memset(&sb, 0, sizeof(sb));
         sb.active = 1;
@@ -957,6 +959,7 @@ static void paint_frame(SDL_Renderer *r, Raster *rs, App *a, PaintStats *st)
         sb.elapsed_ms = (int)a->su.elapsed_ms;
         paint_search_box(r, &a->view, a->font, a->font_big,
                          a->font_size + 8, app_big_size(a->font_size) + 8, &sb);
+        }
     }
 
     /* 无地图区域提示画在最上层：它解释的是"你为什么看不到东西"，
@@ -966,8 +969,10 @@ static void paint_frame(SDL_Renderer *r, Raster *rs, App *a, PaintStats *st)
         paint_nomap_banner(r, &a->view, a->font, a->font_size + 8, a->cov_state);
 
     /* nav-desktop 风格 chrome（自绘标题栏 / 顶栏 / 右栏 / 导航栏 /
-       步骤面板 / 主菜单 / 无图卡片 / 比例尺 / 指北针 / 昼夜）叠在最上层 */
-    paint_chrome(r, a);
+       步骤面板 / 主菜单 / 无图卡片 / 比例尺 / 指北针 / 昼夜）叠在最上层；
+       Qt 前端时由真控件承担，跳过。 */
+    if (!a->qt_ui)
+        paint_chrome(r, a);
 }
 
 int app_render_to_surface(App *a, SDL_Surface *surf, PaintStats *st)

@@ -210,7 +210,32 @@ protobuf-c / SDL2_ttf 的查找**去掉 `NO_DEFAULT_PATH`**（原来只认 `~/.l
 
 ---
 
-## 八、近期工作（2026-10-22）
+## 八、Qt 前端 navmap_qt（2026-10-23）
+
+SDL 自绘 chrome 在 Wayland 下呈现异常（右侧按钮不可见/无边框拖拽失效），决定界面层
+迁移 Qt：**Qt 只管窗口/部件/交互，地图渲染核心一行不动**。
+
+- `src/ui_qt/`：`qt_main.cpp`（参数解析/生命周期，与 main.c 对齐）+
+  `main_window.cpp`（菜单栏/搜索框/页签/右栏/步骤面板/状态栏，真控件）+
+  `map_canvas.cpp`（地图画布：`app_render_to_surface` 画进 SDL_Surface →
+  `QImage::Format_RGB32` → paintEvent blit；拖拽/滚轮/旋转/点选全部经 C 核心 API）。
+- `App.qt_ui=1`：`paint_frame` 跳过 SDL 自绘 chrome/搜索框/面板/指令条（Qt 控件承担），
+  地图、结果图钉、夜间蒙版保留。C 核心只加这一个字段 + 4 处守卫。
+- CMake 自动探测 Qt5Widgets，找到才编 `navmap_qt`，没装 Qt 的环境不受影响。
+- 验证：零警告编译；offscreen `--shot` 截图核对——菜单栏/搜索框+浏览导航页签/
+  右栏四钮/比例尺全齐，地图颜色正确（RGB32；RGBA8888 全透黑屏、RGBX8888 红蓝互换，
+  均已踩过）；SIGTERM 退出验证通过——SDL 默认 parachute 会把信号塞进事件队列，
+  Qt 应用不消费导致进程杀不掉，入口先 `SDL_SetHint(NO_SIGNAL_HANDLERS)` +
+  `SDL_INIT_NOPARACHUTE` 自行初始化 SDL 后 `app_init` 见 SDL 已初始化就不再碰它。
+- 免 root 开发树：本机 qtbase5-dev 与运行库版本错位装不上，用 `apt-get download` +
+  `dpkg -x` 解到 `~/.local/qt5-dev/usr`（头文件 + 软链到系统运行库 + qmake/moc），
+  `-DCMAKE_PREFIX_PATH` 指过去即可，不属于仓库内容。
+- 已知限制：`--shot` 走 `win.grab()`（Qt 截全窗口）；moc 依赖 cmake 的 AUTOMOC 路径，
+  Qt 5.11 的 `QMenu::addAction` 模板重载不可用（显式 QAction）。
+
+---
+
+## 九、近期工作（2026-10-22）
 
 | 工作 | 结果 |
 |---|---|
@@ -221,7 +246,7 @@ protobuf-c / SDL2_ttf 的查找**去掉 `NO_DEFAULT_PATH`**（原来只认 `~/.l
 
 ---
 
-## 九、接下来的候选（按性价比排序）
+## 十、接下来的候选（按性价比排序）
 
 1. **PBF 模式的后台解码**——现在是同步的，河北首次进省卡 4.4 s，需预热线程 + 进度提示。
 2. **补 POI 图标与更多显示要素**（建筑 / 等高线 / 土地利用着色）——从 PBF 侧补，
@@ -234,7 +259,7 @@ protobuf-c / SDL2_ttf 的查找**去掉 `NO_DEFAULT_PATH`**（原来只认 `~/.l
 
 ---
 
-## 十、怎么继续
+## 十一、怎么继续
 
 ```bash
 source env.sh                  # 修正 PKG_CONFIG_PATH / LD_LIBRARY_PATH

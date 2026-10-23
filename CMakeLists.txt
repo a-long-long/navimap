@@ -1,9 +1,12 @@
 cmake_minimum_required(VERSION 3.13)
-project(navimap C)
+project(navimap C CXX)
 
 set(CMAKE_C_STANDARD 11)
 set(CMAKE_C_STANDARD_REQUIRED ON)
 set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -Wall -Wextra -O2 -g")
+set(CMAKE_CXX_STANDARD 11)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
+set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Wall -Wextra -O2 -g")
 
 if(NOT CMAKE_BUILD_TYPE)
     set(CMAKE_BUILD_TYPE RelWithDebInfo)
@@ -223,6 +226,23 @@ target_link_libraries(tag_stats PRIVATE navimap_core)
 # 主程序（GUI，Wayland 下由人确认）
 add_executable(navimap src/main.c)
 target_link_libraries(navimap PRIVATE navimap_core)
+
+# Qt 前端（可选）：找到 Qt5 Widgets 就多编一个 navmap_qt——
+#   窗口/菜单/搜索框/右栏按钮/步骤面板全部换成真控件，C 渲染核心不动。
+#   配置时给 -DCMAKE_PREFIX_PATH=<Qt前缀>（本机 ~/.local/qt5-dev/usr，
+#   见 README「跨平台」一节的 Qt 前端说明）。找不到 Qt 只跳过本目标，
+#   不影响其余全部产物。
+find_package(Qt5 COMPONENTS Widgets QUIET)
+if(Qt5Widgets_FOUND)
+    add_executable(navmap_qt
+        src/ui_qt/qt_main.cpp
+        src/ui_qt/map_canvas.cpp
+        src/ui_qt/main_window.cpp)
+    target_link_libraries(navmap_qt PRIVATE navimap_core Qt5::Widgets)
+    message(STATUS "Qt5 前端: 启用 (Qt ${Qt5Widgets_VERSION})")
+else()
+    message(STATUS "Qt5 前端: 未找到 Qt5Widgets，跳过 navmap_qt")
+endif()
 
 # 离屏渲染：无人值守验证渲染结果（本机没有 xvfb-run，只能这么验）
 add_executable(map_shot tools/map_shot.c)

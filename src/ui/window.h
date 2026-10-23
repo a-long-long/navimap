@@ -133,6 +133,9 @@ typedef struct {
     int           win_drag;       /* 自绘标题栏拖拽中 */
     int           win_drag_x, win_drag_y;  /* 拖拽时鼠标相对窗口的偏移 */
     int           rotating;       /* Ctrl+拖动 旋转地图中 */
+    /* Qt 前端开关：置 1 时 paint_frame 跳过 SDL 自绘 chrome/搜索框/面板/
+     * 指令条（这些由 Qt 真控件承担），但地图渲染、结果图钉、夜间蒙版保留。 */
+    int           qt_ui;
 } App;
 
 /* font_path：NULL = 用默认字体（宋体优先的候选链）；"none" 或 "" = 不加载字体
