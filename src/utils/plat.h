@@ -16,8 +16,10 @@
  *   - getrusage（峰值内存）
  *
  * POSIX 分支覆盖 Linux/macOS；Windows 分支覆盖 MSVC 与 MinGW。
- * ★ 本仓库没有 Windows 构建机，Windows 分支按 API 规范写，
- *   由 tools/plat_selftest 在 POSIX 侧保证"接口契约"可断言。
+ * ★ 平台差异 100% 收口在本抽象层：业务代码只调 nm_* 接口、零 #ifdef _WIN32，
+ *   同一套源文件由编译器按 _WIN32 在编译期选分支，本地/远端无分叉。
+ *   Windows 分支已在 MSYS2/UCRT64(MinGW) 实机编译验证（plat_selftest 全过）；
+ *   POSIX 侧仍由 tools/plat_selftest.c 保证"接口契约"可断言。
  * ------------------------------------------------------------------------- */
 #include <stddef.h>
 #include <stdint.h>

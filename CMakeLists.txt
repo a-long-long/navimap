@@ -4,7 +4,7 @@ project(navimap C CXX)
 set(CMAKE_C_STANDARD 11)
 set(CMAKE_C_STANDARD_REQUIRED ON)
 set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -Wall -Wextra -O2 -g")
-set(CMAKE_CXX_STANDARD 11)
+set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Wall -Wextra -O2 -g")
 
@@ -90,10 +90,19 @@ if(NOT SDL2TTF_LIB)
 endif()
 message(STATUS "SDL2_ttf lib ${SDL2TTF_LIB}")
 
-find_program(PROTOC_C protoc-c
-    HINTS $ENV{HOME}/.local/usr/bin)
-if(NOT PROTOC_C)
-    message(FATAL_ERROR "protoc-c 未找到（本机在 ~/.local/usr/bin）。请先 source ${CMAKE_SOURCE_DIR}/env.sh")
+# protobuf-c 代码生成：Linux 用 protoc-c；Windows/MSYS2 的 protoc-c 实为
+# protoc-gen-c 插件，认不了 --c_out，必须走 `protoc --plugin=protoc-gen-c=...`。
+if(WIN32)
+    find_program(PROTOC        protoc REQUIRED)
+    find_program(PROTOC_GEN_C NAMES protoc-gen-c protoc-gen-c.exe REQUIRED)
+    message(STATUS "protoc         ${PROTOC}")
+    message(STATUS "protoc-gen-c   ${PROTOC_GEN_C}")
+else()
+    find_program(PROTOC_C NAMES protoc-c REQUIRED)
+    if(NOT PROTOC_C)
+        message(FATAL_ERROR "protoc-c 未找到（本机在 ~/.local/usr/bin）。请先 source ${CMAKE_SOURCE_DIR}/env.sh")
+    endif()
+    message(STATUS "protoc-c       ${PROTOC_C}")
 endif()
 
 message(STATUS "sdl2          ${SDL2_VERSION}")
@@ -109,15 +118,28 @@ file(MAKE_DIRECTORY ${GEN_DIR})
 set(PROTO_SRCS ${GEN_DIR}/osmformat.pb-c.c ${GEN_DIR}/fileformat.pb-c.c)
 set(PROTO_HDRS ${GEN_DIR}/osmformat.pb-c.h ${GEN_DIR}/fileformat.pb-c.h)
 
-add_custom_command(
-    OUTPUT ${PROTO_SRCS} ${PROTO_HDRS}
-    COMMAND ${PROTOC_C} --c_out=${GEN_DIR} -I ${CMAKE_SOURCE_DIR}/proto
-            ${CMAKE_SOURCE_DIR}/proto/osmformat.proto
-            ${CMAKE_SOURCE_DIR}/proto/fileformat.proto
-    DEPENDS ${CMAKE_SOURCE_DIR}/proto/osmformat.proto
-            ${CMAKE_SOURCE_DIR}/proto/fileformat.proto
-    COMMENT "Generating protobuf-c bindings for OSM PBF schema"
-    VERBATIM)
+if(WIN32)
+    add_custom_command(
+        OUTPUT ${PROTO_SRCS} ${PROTO_HDRS}
+        COMMAND ${PROTOC} --plugin=protoc-gen-c=${PROTOC_GEN_C} --c_out=${GEN_DIR}
+                -I ${CMAKE_SOURCE_DIR}/proto
+                ${CMAKE_SOURCE_DIR}/proto/osmformat.proto
+                ${CMAKE_SOURCE_DIR}/proto/fileformat.proto
+        DEPENDS ${CMAKE_SOURCE_DIR}/proto/osmformat.proto
+                ${CMAKE_SOURCE_DIR}/proto/fileformat.proto
+        COMMENT "Generating protobuf-c bindings (Windows: protoc + plugin)"
+        VERBATIM)
+else()
+    add_custom_command(
+        OUTPUT ${PROTO_SRCS} ${PROTO_HDRS}
+        COMMAND ${PROTOC_C} --c_out=${GEN_DIR} -I ${CMAKE_SOURCE_DIR}/proto
+                ${CMAKE_SOURCE_DIR}/proto/osmformat.proto
+                ${CMAKE_SOURCE_DIR}/proto/fileformat.proto
+        DEPENDS ${CMAKE_SOURCE_DIR}/proto/osmformat.proto
+                ${CMAKE_SOURCE_DIR}/proto/fileformat.proto
+        COMMENT "Generating protobuf-c bindings for OSM PBF schema"
+        VERBATIM)
+endif()
 
 # ---------------------------------------------------------------------------
 # 核心库
@@ -198,6 +220,10 @@ if(MSVC)
 endif()
 if(WIN32)
     target_compile_definitions(navimap_core PUBLIC SDL_MAIN_HANDLED)
+    # MinGW-w64 的 printf 格式检查把 %z / %ll 当成非法（ms_printf 原型），
+    # 但这些是合法 C99，在 glibc/Linux 下零警告。此处仅抑制该工具链误报，
+    # 不改变语义，也不影响 Linux 的 -Wformat 严格检查。
+    target_compile_options(navimap_core PUBLIC -Wno-format)
 endif()
 
 # ---------------------------------------------------------------------------
@@ -227,21 +253,35 @@ target_link_libraries(tag_stats PRIVATE navimap_core)
 add_executable(navimap src/main.c)
 target_link_libraries(navimap PRIVATE navimap_core)
 
-# Qt 前端（可选）：找到 Qt5 Widgets 就多编一个 navmap_qt——
+# Qt 前端（可选）：找到 Qt6 或 Qt5 的 Widgets 就多编一个 navmap_qt——
 #   窗口/菜单/搜索框/右栏按钮/步骤面板全部换成真控件，C 渲染核心不动。
-#   配置时给 -DCMAKE_PREFIX_PATH=<Qt前缀>（本机 ~/.local/qt5-dev/usr，
-#   见 README「跨平台」一节的 Qt 前端说明）。找不到 Qt 只跳过本目标，
+#   同一份源码同时兼容 Qt5/Qt6：无 Q_OBJECT/信号槽，故无需 moc；
+#   事件坐标统一用 position()/angleDelta()，弃用的 x()/y()/delta() 已不用。
+#   配置时给 -DCMAKE_PREFIX_PATH=<Qt前缀> 指定具体版本（本机 Qt6 在
+#   D:/Qt/6.11.2/mingw_64；Qt5 走 MSYS2 的 mingw64 包），找不到则跳过本目标，
 #   不影响其余全部产物。
-find_package(Qt5 COMPONENTS Widgets QUIET)
-if(Qt5Widgets_FOUND)
+# 先找 Qt6，没有再退回 Qt5；同一份源码两者都可编（无 moc、事件坐标统一
+# 用 position()/angleDelta()）。配置时 -DCMAKE_PREFIX_PATH=<Qt前缀> 指定版本
+# （本机 Qt6 在 D:/Qt/6.11.2/mingw_64）。
+set(QT "")
+find_package(Qt6 COMPONENTS Widgets QUIET)
+if(Qt6Widgets_FOUND)
+    set(QT Qt6)
+else()
+    find_package(Qt5 COMPONENTS Widgets QUIET)
+    if(Qt5Widgets_FOUND)
+        set(QT Qt5)
+    endif()
+endif()
+if(QT)
     add_executable(navmap_qt
         src/ui_qt/qt_main.cpp
         src/ui_qt/map_canvas.cpp
         src/ui_qt/main_window.cpp)
-    target_link_libraries(navmap_qt PRIVATE navimap_core Qt5::Widgets)
-    message(STATUS "Qt5 前端: 启用 (Qt ${Qt5Widgets_VERSION})")
+    target_link_libraries(navmap_qt PRIVATE navimap_core ${QT}::Widgets)
+    message(STATUS "Qt 前端: 启用 (${QT} ${${QT}Widgets_VERSION})")
 else()
-    message(STATUS "Qt5 前端: 未找到 Qt5Widgets，跳过 navmap_qt")
+    message(STATUS "Qt 前端: 未找到 Qt6/Qt5 Widgets，跳过 navmap_qt")
 endif()
 
 # 离屏渲染：无人值守验证渲染结果（本机没有 xvfb-run，只能这么验）

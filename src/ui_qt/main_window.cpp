@@ -71,7 +71,7 @@ void MainWindow::buildMenus()
 {
     m_menuMain = new QMenu(QStringLiteral("菜单(&M)"), this);
     addAct(m_menuMain, QStringLiteral("搜索地点"),
-           QKeySequence(Qt::CTRL + Qt::Key_F), this, [this]() {
+           QKeySequence(Qt::CTRL | Qt::Key_F), this, [this]() {
                m_search->setFocus(); m_search->selectAll();
            });
     addAct(m_menuMain, QStringLiteral("清除路线"), QKeySequence(Qt::Key_C), this,
@@ -83,7 +83,7 @@ void MainWindow::buildMenus()
     addAct(m_menuMain, QStringLiteral("昼 / 夜 切换"), QKeySequence(Qt::Key_D), this,
            [this]() { m_a->day_night = !m_a->day_night; m_a->need_redraw = 1; });
     m_menuMain->addSeparator();
-    addAct(m_menuMain, QStringLiteral("退出"), QKeySequence(Qt::CTRL + Qt::Key_Q), this,
+    addAct(m_menuMain, QStringLiteral("退出"), QKeySequence(Qt::CTRL | Qt::Key_Q), this,
            [this]() { m_a->quit = 1; close(); });
     menuBar()->addMenu(m_menuMain);
 

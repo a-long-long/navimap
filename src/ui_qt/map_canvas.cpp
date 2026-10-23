@@ -240,39 +240,50 @@ void MapCanvas::mousePressEvent(QMouseEvent *e)
         return;
     }
     if (e->button() != Qt::LeftButton) return;
-    if (m_compassRect.isValid() && m_compassRect.contains(e->pos())) {
+#if QT_VERSION >= QT_VERSION_CHECK(6, 0, 0)
+    const QPointF ep = e->position();
+#else
+    const QPointF ep = e->pos();
+#endif
+    if (m_compassRect.isValid() && m_compassRect.contains(ep.toPoint())) {
         m_a->view.rot = 0.0;                 /* 点指北针回正北 */
         m_a->need_redraw = 1;
         renderNow();
         return;
     }
-    m_lastx = m_downx = e->x();
-    m_lasty = m_downy = e->y();
+    m_lastx = m_downx = (int)ep.x();
+    m_lasty = m_downy = (int)ep.y();
     if (e->modifiers() & Qt::ControlModifier) m_rotating = true;
     else                                      m_panning = true;
 }
 
 void MapCanvas::mouseMoveEvent(QMouseEvent *e)
 {
+#if QT_VERSION >= QT_VERSION_CHECK(6, 0, 0)
+    const QPointF ep = e->position();
+#else
+    const QPointF ep = e->pos();
+#endif
+    int ex = (int)ep.x(), ey = (int)ep.y();
     if (m_rotating) {
-        m_a->view.rot += (e->x() - m_lastx) * 0.3;
+        m_a->view.rot += (ex - m_lastx) * 0.3;
         if (m_a->view.rot > 180.0)  m_a->view.rot -= 360.0;
         if (m_a->view.rot < -180.0) m_a->view.rot += 360.0;
         m_a->need_redraw = 1;
     } else if (m_panning) {
-        int dx = e->x() - m_lastx, dy = e->y() - m_lasty;
+        int dx = ex - m_lastx, dy = ey - m_lasty;
         if (dx || dy) {
             /* 旋转正确的平移：同一视口下反投影两个屏幕点，取地理差 */
             double la1, lo1, la2, lo2;
             mv_unproject(&m_a->view, m_lastx, m_lasty, &la1, &lo1);
-            mv_unproject(&m_a->view, e->x(), e->y(), &la2, &lo2);
+            mv_unproject(&m_a->view, ex, ey, &la2, &lo2);
             m_a->view.lat += la1 - la2;
             m_a->view.lon += lo1 - lo2;
             m_a->need_redraw = 1;
         }
     }
-    m_lastx = e->x();
-    m_lasty = e->y();
+    m_lastx = ex;
+    m_lasty = ey;
 }
 
 void MapCanvas::mouseReleaseEvent(QMouseEvent *e)
@@ -284,17 +295,30 @@ void MapCanvas::mouseReleaseEvent(QMouseEvent *e)
     if (was_rotating) return;
     if (!was_panning) return;
     /* 拖动与点击的判别：位移 ≤4px 算点击（与 SDL 版同口径） */
-    if (abs(e->x() - m_downx) + abs(e->y() - m_downy) <= 4) {
+#if QT_VERSION >= QT_VERSION_CHECK(6, 0, 0)
+    const QPointF ep = e->position();
+#else
+    const QPointF ep = e->pos();
+#endif
+    if (abs((int)ep.x() - m_downx) + abs((int)ep.y() - m_downy) <= 4) {
         double la, lo;
-        mv_unproject(&m_a->view, e->x(), e->y(), &la, &lo);
+        mv_unproject(&m_a->view, (int)ep.x(), (int)ep.y(), &la, &lo);
         app_nav_click(m_a, la, lo);          /* 先起点后终点，后台算路 */
     }
 }
 
 void MapCanvas::wheelEvent(QWheelEvent *e)
 {
-    /* 锚点缩放：光标下的地理位置保持不动 */
-    mv_zoom_at(&m_a->view, e->delta() > 0 ? 0.5 : -0.5, e->x(), e->y());
+    /* 锚点缩放：光标下的地理位置保持不动。
+     * angleDelta() 自 Qt 5.0 即有；位置取点 Qt 5.14+/Qt6 用 position()，
+     * 更早的 Qt5（<5.14，如 5.1）无 position() 故用 pos()。 */
+#if QT_VERSION >= QT_VERSION_CHECK(5,14,0)
+    const QPointF p = e->position();
+#else
+    const QPointF p = e->pos();
+#endif
+    mv_zoom_at(&m_a->view, e->angleDelta().y() > 0 ? 0.5 : -0.5,
+               (int)p.x(), (int)p.y());
     mv_clamp_zoom(&m_a->view, kZoomMin, kZoomMax);
     m_a->need_redraw = 1;
 }

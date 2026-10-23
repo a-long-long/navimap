@@ -24,6 +24,7 @@
 #  endif
 #  include <windows.h>
 #  include <psapi.h>
+#  include <sys/stat.h>     /* MinGW 的 POSIX stat() / struct stat（nm_stat_file 用） */
 #else
 #  include <dirent.h>
 #  include <fcntl.h>
@@ -135,8 +136,15 @@ int nm_stat_file(const char *path, uint64_t *size, int64_t *mtime)
 {
     if (!path) return -1;
 #ifdef _WIN32
-    struct _stati64 st;
-    if (_stati64(path, &st) != 0) return -1;
+    /* MinGW-w64 提供 POSIX stat()（off_t 为 64 位，足以覆盖大图文件）；
+       MSVC 用 _stat64（等价于被取代的 _stati64）。字段名 st_size/st_mtime 一致。 */
+#  if defined(_MSC_VER)
+    struct _stat64 st;
+    if (_stat64(path, &st) != 0) return -1;
+#  else
+    struct stat st;
+    if (stat(path, &st) != 0) return -1;
+#  endif
     if (size)  *size  = (uint64_t)st.st_size;
     if (mtime) *mtime = (int64_t)st.st_mtime;
     return 0;
@@ -344,6 +352,7 @@ struct NmDir {
     HANDLE           h;
     WIN32_FIND_DATAA fd;
     int              pending;          /* 还有一条没交付 */
+    char             ent[260];         /* 复用的返回缓冲（避开 cFileName 被 FindNextFileA 覆盖） */
 #else
     DIR             *d;
 #endif
@@ -375,9 +384,17 @@ const char *nm_dir_next(NmDir *d)
     if (!d) return NULL;
 #ifdef _WIN32
     while (d->pending) {
-        const char *name = d->fd.cFileName;
+        if (strcmp(d->fd.cFileName, ".") != 0 &&
+            strcmp(d->fd.cFileName, "..") != 0) {
+            /* 复制到自有缓冲再推进 fd：FindNextFileA 会覆盖 d->fd.cFileName，
+               直接返回别名指针会指向错误条目；且必须在交付前推进，否则会
+               无限返回同一条（死循环）。 */
+            strncpy(d->ent, d->fd.cFileName, sizeof(d->ent) - 1);
+            d->ent[sizeof(d->ent) - 1] = '\0';
+            d->pending = FindNextFileA(d->h, &d->fd) ? 1 : 0;
+            return d->ent;
+        }
         d->pending = FindNextFileA(d->h, &d->fd) ? 1 : 0;
-        if (strcmp(name, ".") != 0 && strcmp(name, "..") != 0) return name;
     }
     return NULL;
 #else
@@ -666,6 +683,7 @@ int nm_chmod_x(const char *path)
 
 /* ---- 字体候选链：宋体优先，理由见 render/font.c ---- */
 
+#if !defined(_WIN32) && !defined(__APPLE__)
 static const char *kLinuxFonts[] = {
     "/usr/share/fonts/truetype/yozo/CESI_SS_GB18030.TTF",  /* CESI宋体  GB18030 */
     "/usr/share/fonts/fonts-cesi/CESI_SS_GB2312.TTF",      /* CESI宋体  GB2312  */
@@ -673,6 +691,7 @@ static const char *kLinuxFonts[] = {
     "/usr/share/fonts/truetype/yozo/FZFSK.TTF",            /* 方正仿宋          */
     "/usr/share/fonts/fonts-gb/GB_HT_GB18030.ttf",         /* 国标黑体（兜底）  */
 };
+#endif
 
 #ifdef _WIN32
 /* %WINDIR% 形如 C:\WINDOWS；路径拼好后统一转成正斜杠（Win32 API 两种都收）。 */
