@@ -3,6 +3,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <math.h>
 
 /* ------------------------------------------------------------------ */
 /* 路名池（每省一份）                                                    */
@@ -68,16 +69,18 @@ void label_cache_free(LabelCache *lc)
     memset(lc, 0, sizeof(*lc));
 }
 
-/* zoom → 地名等级上限。kind 语义按抽取约定：数值小 = 行政级别高。 */
+/* zoom → 地名等级上限。kind 语义按抽取约定：数值小 = 行政级别高。
+ * 2026-10-24 调整：把 POI（kind 11）的可见起点从 z15 下探到 z13，
+ * 让"POI 图标"在城区尺度就能看到（此前只在 z15 才画到，基本看不见）。 */
 static int kind_max_for_zoom(double zoom)
 {
     if (zoom < 6)  return 1;
     if (zoom < 8)  return 2;
     if (zoom < 10) return 3;
-    if (zoom < 12) return 4;
-    if (zoom < 13) return 6;
-    if (zoom < 14) return 9;
-    if (zoom < 15) return 10;
+    if (zoom < 11) return 4;
+    if (zoom < 12) return 6;
+    if (zoom < 13) return 9;
+    if (zoom < 14) return 11;     /* POI(kind 11) 自 z13 起可见 */
     return 12;
 }
 
@@ -160,6 +163,92 @@ static void grid_for_font(Font *font)
     g_grid_h = (int)(cw * 2.4); if (g_grid_h < 22) g_grid_h = 22;
 }
 
+/* ------------------------------------------------------------------ */
+/* POI / 地名图标（矢量标记，按类别着色 + 形状区分）                     */
+/* ------------------------------------------------------------------ */
+
+typedef enum { SH_DISC, SH_TRI, SH_DIAMOND } PoiShape;
+
+/* kind 语义见 places_build.c：数值小 = 行政级别高。按类别给颜色与形状。 */
+static void poi_style(int kind, uint8_t *r, uint8_t *g, uint8_t *b, PoiShape *sh)
+{
+    if      (kind <= 2) { *r = 214; *g = 48;  *b = 48;  *sh = SH_DISC; }   /* 首都/直辖市 红 */
+    else if (kind <= 4) { *r = 232; *g = 128; *b = 24;  *sh = SH_DISC; }   /* 市/镇 橙 */
+    else if (kind <= 7) { *r = 236; *g = 192; *b = 32;  *sh = SH_DISC; }   /* 村/屯 金 */
+    else if (kind == 9) { *r = 72;  *g = 182; *b = 96;  *sh = SH_DISC; }   /* 街区 绿 */
+    else if (kind == 10){ *r = 40;  *g = 162; *b = 172; *sh = SH_TRI; }     /* 自然地物 青三角 */
+    else if (kind == 11){ *r = 40;  *g = 120; *b = 232; *sh = SH_DISC; }   /* POI 蓝圆 */
+    else                { *r = 150; *g = 150; *b = 160; *sh = SH_DIAMOND; }  /* 其他地物 灰菱 */
+}
+
+/* 实心圆（逐扫描线填充一条 hspan）。 */
+static void fill_disc(Raster *rs, int cx, int cy, int R, uint32_t c)
+{
+    if (R <= 0) { raster_point(rs, cx, cy, c); return; }
+    for (int dy = -R; dy <= R; dy++) {
+        int y = cy + dy;
+        if ((unsigned)y >= (unsigned)rs->h) continue;
+        int dx = (int)sqrtf((float)(R * R - dy * dy));
+        raster_hspan(rs, y, cx - dx, cx + dx + 1, c);
+    }
+}
+
+/* 凸多边形扫描线填充（三角 / 菱形）。 */
+static void fill_poly(Raster *rs, const int *px, const int *py, int n, uint32_t c)
+{
+    int ymin = py[0], ymax = py[0];
+    for (int i = 1; i < n; i++) {
+        if (py[i] < ymin) ymin = py[i];
+        if (py[i] > ymax) ymax = py[i];
+    }
+    if (ymin < 0) ymin = 0;
+    if (ymax >= rs->h) ymax = rs->h - 1;
+    for (int y = ymin; y <= ymax; y++) {
+        double yc = y + 0.5;
+        int xs[8]; int nx = 0;
+        for (int i = 0; i < n; i++) {
+            int j = (i + 1) % n;
+            if ((py[i] <= yc && py[j] > yc) || (py[j] <= yc && py[i] > yc)) {
+                xs[nx++] = (int)(px[i] +
+                           (yc - py[i]) / (double)(py[j] - py[i]) * (px[j] - px[i]));
+            }
+        }
+        for (int a = 0; a + 1 < nx; a++)
+            for (int b = a + 1; b < nx; b++)
+                if (xs[b] < xs[a]) { int t = xs[a]; xs[a] = xs[b]; xs[b] = t; }
+        for (int a = 0; a + 1 < nx; a += 2)
+            raster_hspan(rs, y, xs[a], xs[a + 1] + 1, c);
+    }
+}
+
+static void shape_fill(Raster *rs, int x, int y, int t, PoiShape sh, uint32_t c)
+{
+    if (sh == SH_DISC) { fill_disc(rs, x, y, t, c); return; }
+    if (sh == SH_TRI) {
+        int px[3] = { x, x - t + 1, x + t - 1 };
+        int py[3] = { y - t, y + t, y + t };
+        fill_poly(rs, px, py, 3, c);
+        return;
+    }
+    int px[4] = { x, x + t, x, x - t };
+    int py[4] = { y - t, y, y + t, y };
+    fill_poly(rs, px, py, 4, c);
+}
+
+/* 画一个 POI 标记：深灰描边 + 白底 + 类别色芯，紧贴 (x,y) 坐标点。 */
+static void draw_poi_marker(Raster *rs, int x, int y, int kind)
+{
+    uint8_t r, g, b; PoiShape sh;
+    poi_style(kind, &r, &g, &b, &sh);
+    uint32_t dark  = raster_rgb(rs, 40, 42, 48);
+    uint32_t white = raster_rgb(rs, 255, 255, 255);
+    uint32_t col   = raster_rgb(rs, r, g, b);
+    int R = 6;
+    shape_fill(rs, x, y, R + 1, sh, dark);
+    shape_fill(rs, x, y, R,     sh, white);
+    shape_fill(rs, x, y, R - 2, sh, col);
+}
+
 void paint_place_labels(Raster *rs, const MapView *v,
                         LabelCache *lc, Font *font, PaintStats *st)
 {
@@ -176,7 +265,7 @@ void paint_place_labels(Raster *rs, const MapView *v,
     memset(g_grid, 0, sizeof(g_grid));
     grid_for_font(font);
 
-    int drawn = 0;
+    int drawn = 0, icons = 0;
     for (int i = 0; i < lc->n_items; i++) {
         LabelItem *it = &lc->items[i];
         int x, y;
@@ -188,11 +277,14 @@ void paint_place_labels(Raster *rs, const MapView *v,
         if (g_grid[gy * GRID_COLS + gx]) continue;
         g_grid[gy * GRID_COLS + gx] = 1;
 
-        int tw = font_text_w(font, it->name);
-        font_draw(font, rs, x - tw / 2, y - 8, it->name, 60, 60, 65, 1);
+        /* 先画矢量图标（贴在坐标点），再在右侧画标签，二者共用一个避让格 */
+        draw_poi_marker(rs, x, y, it->kind);
+        icons++;
+
+        font_draw(font, rs, x + 10, y - 8, it->name, 46, 48, 56, 1);
         drawn++;
     }
-    if (st) st->labels_drawn = drawn;
+    if (st) { st->labels_drawn = drawn; st->poi_icons = icons; }
 }
 
 /* ------------------------------------------------------------------ */

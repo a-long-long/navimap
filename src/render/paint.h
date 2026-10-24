@@ -26,6 +26,7 @@ typedef struct {
     uint64_t areas_dotted;/* 其中走了"小面画点"快速路径的数量 */
     uint64_t lines_drawn; /* 线要素画出数 */
     uint64_t labels_drawn;     /* 地名标注数 */
+    uint64_t poi_icons;        /* POI / 地名矢量图标标记数 */
     uint64_t road_labels_drawn;/* 路名标注数 */
     uint64_t dedup_skipped;    /* 因跨省重复而跳过的要素数 */
 

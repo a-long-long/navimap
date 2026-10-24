@@ -467,6 +467,7 @@ int main(int argc, char **argv)
     printf("lines_drawn    %llu\n", (unsigned long long)st.lines_drawn);
     printf("dedup_skipped  %llu\n", (unsigned long long)st.dedup_skipped);
     printf("place_labels   %llu\n", (unsigned long long)st.labels_drawn);
+    printf("poi_icons      %llu\n", (unsigned long long)st.poi_icons);
     printf("road_labels    %llu\n", (unsigned long long)st.road_labels_drawn);
 
     int fail = 0;
