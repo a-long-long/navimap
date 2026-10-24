@@ -16,6 +16,9 @@
 #include "route/navsim.h"
 #include "search/search.h"
 
+/* 设置持久化（完整设置系统）：前向声明，避免 window.h 直接依赖 settings 头。 */
+typedef struct Settings Settings;
+
 /* 选点：用户点下去的位置 + 吸附到路网之后的位置（吸附由后台算路线程做）。 */
 typedef struct {
     int    have;
@@ -133,6 +136,17 @@ typedef struct {
     /* Qt 前端开关：置 1 时 paint_frame 跳过 SDL 自绘 chrome/搜索框/面板/
      * 指令条（这些由 Qt 真控件承担），但地图渲染、结果图钉、夜间蒙版保留。 */
     int           qt_ui;
+
+    /* ---- 设置持久化（完整设置系统）----
+     * cfg 在 app_init 载入、app_shutdown 写回；show_poi/show_labels 是本次新增的
+     * 显示开关（受设置面板控制）；settings_* 是 chrome 设置面板的命中结果，
+     * 由 chrome.c 写入、window.c 的 chrome_act 消费。 */
+    int           show_poi;        /* POI 图标开关 */
+    int           show_labels;     /* 地名标注开关 */
+    int           settings_open;   /* 设置面板是否展开（仅 SDL 自绘 chrome） */
+    int           settings_row;    /* 面板命中行：>=0 schema 下标，-1 关闭，-2 重置全部 */
+    int           settings_btn;    /* 命中按钮：0=左/− 1=右/+ 2=行体（切换） */
+    Settings     *cfg;             /* 配置文件（NULL=未启用） */
 } App;
 
 /* font_path：NULL = 用默认字体（宋体优先的候选链）；"none" 或 "" = 不加载字体
@@ -152,6 +166,11 @@ void app_focus_point(const App *a, double *lat, double *lon);
    链 SDL 的目标（navmap / map_shot）才编入。Qt 前端有自己的主循环，不调它。 */
 void app_run(App *a);
 void app_shutdown(App *a);
+
+/* 设置持久化：app_apply_settings 把配置(cfg)→App 字段；app_persist_settings
+ * 把 App→配置并写盘。面板编辑 / 键位 / 菜单切换后调用后者即时落盘。 */
+void app_apply_settings(App *a);
+void app_persist_settings(App *a);
 
 /* 状态栏文本（窗口标题栏用）。实现留在 window.c（Qt 前端也可用）。 */
 void update_status(App *a, double frame_ms);

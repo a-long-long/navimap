@@ -12,6 +12,7 @@
 #include "map/map_view.h"
 #include "utils/geo.h"
 #include "utils/plat.h"
+#include "settings/settings.h"
 
 /* ---- 模拟导航 ----
  * 倍速档：为什么要分档而不是随便填——软件渲染一帧几百毫秒，倍速太大时
@@ -42,9 +43,18 @@ int app_init(App *a, const char *graph_dir, int w, int h,
              const char *font_path, int font_size, const AutoBuildOpt *ab)
 {
     memset(a, 0, sizeof(*a));
-    a->max_class = 4;
+    /* 设置持久化：先载入配置文件，把值当成默认值填进 App；下面既有的
+       CLI 参数 / NAVIMAP_* 环境变量读取会自然覆盖（谁后写谁赢），
+       从而满足"命令行与环境变量优先级高于配置文件"。 */
+    a->cfg = settings_create();
+    if (a->cfg) settings_load(a->cfg, NULL);
+    a->max_class = settings_get_int(a->cfg, "max_class", 4);
     a->need_redraw = 1;
-    a->show_panel = 1;
+    a->show_panel = settings_get_bool(a->cfg, "show_panel", 1);
+    a->day_night  = settings_get_bool(a->cfg, "day_night", 0);
+    a->show_poi    = settings_get_bool(a->cfg, "show_poi", 1);
+    a->show_labels = settings_get_bool(a->cfg, "show_labels", 1);
+    a->mode        = settings_get_int(a->cfg, "mode", 0);
     a->sim_speed_idx = SIM_SPEED_DEFAULT;
     a->sim_follow = 1;
     /* 互斥量用平台抽象层（不直接碰 pthread / CRITICAL_SECTION）。
@@ -66,7 +76,8 @@ int app_init(App *a, const char *graph_dir, int w, int h,
     if (!font_path) font_path = getenv("NAVMAP_FONT");
     int want_font = !(font_path && (font_path[0] == '\0' ||
                                     strcmp(font_path, "none") == 0));
-    a->font_size = font_size > 0 ? font_size : 14;
+    a->font_size = font_size > 0 ? font_size
+                                  : settings_get_int(a->cfg, "font_size", 14);
 
     if (want_font) {
         if (font_path && *font_path) {
@@ -127,6 +138,12 @@ int app_init(App *a, const char *graph_dir, int w, int h,
         clon = ((int64_t)a->ms.bbox[1] + a->ms.bbox[3]) / 2 / 1e7;
         czoom = 9.0;
     }
+    /* 记住上次退出时的位置（首次运行无 view_* 键则保留上面的图集中心） */
+    if (a->cfg && settings_has(a->cfg, "view_lat")) {
+        clat = settings_get_dbl(a->cfg, "view_lat", clat);
+        clon = settings_get_dbl(a->cfg, "view_lon", clon);
+        czoom = settings_get_dbl(a->cfg, "view_zoom", czoom);
+    }
     mv_init(&a->view, clat, clon, czoom, w, h);
     dedup_init(&a->dd);
     return 0;
@@ -134,6 +151,13 @@ int app_init(App *a, const char *graph_dir, int w, int h,
 
 void app_shutdown(App *a)
 {
+    /* 退出前把当前状态（含视图位置）写回配置文件，再释放配置对象。
+       必须在字体/视图等字段还有效时做——放在最前面。 */
+    if (a->cfg) {
+        app_persist_settings(a);
+        settings_destroy(a->cfg);
+        a->cfg = NULL;
+    }
     /* 后台线程可能还在跑（用户点了算路又直接 Esc）。Router 不是线程安全的，
        必须等它退出再销毁：nav_busy 由 nav_mu 保护，这里自旋等一下。
        退出路径上最多等几秒，不当成错误。 */
@@ -192,6 +216,40 @@ int app_set_font_size(App *a, int size)
     font_close(a->font_big);
     a->font_big = font_open(a->font_path, app_big_size(size));
     return size;
+}
+
+/* ---------------------------------------------------------------------------
+ * 设置持久化：cfg ↔ App 双向同步
+ * ------------------------------------------------------------------------- */
+
+void app_apply_settings(App *a)
+{
+    if (!a || !a->cfg) return;
+    a->day_night    = settings_get_bool(a->cfg, "day_night", 0);
+    a->show_panel   = settings_get_bool(a->cfg, "show_panel", 1);
+    a->show_poi     = settings_get_bool(a->cfg, "show_poi", 1);
+    a->show_labels  = settings_get_bool(a->cfg, "show_labels", 1);
+    a->mode         = settings_get_int(a->cfg, "mode", 0);
+    a->max_class    = settings_get_int(a->cfg, "max_class", 4);
+    int fs = settings_get_int(a->cfg, "font_size", 14);
+    if (fs != a->font_size) app_set_font_size(a, fs);
+}
+
+void app_persist_settings(App *a)
+{
+    if (!a || !a->cfg) return;
+    settings_set_bool(a->cfg, "day_night",   a->day_night);
+    settings_set_bool(a->cfg, "show_panel",  a->show_panel);
+    settings_set_bool(a->cfg, "show_poi",    a->show_poi);
+    settings_set_bool(a->cfg, "show_labels", a->show_labels);
+    settings_set_int(a->cfg,  "mode",        a->mode);
+    settings_set_int(a->cfg,  "font_size",   a->font_size);
+    settings_set_int(a->cfg,  "max_class",   a->max_class);
+    /* 视图位置：记住上次退出时所在（下次启动直接回到这里） */
+    settings_set_dbl(a->cfg, "view_lat",  a->view.lat);
+    settings_set_dbl(a->cfg, "view_lon",  a->view.lon);
+    settings_set_dbl(a->cfg, "view_zoom", a->view.zoom);
+    settings_save(a->cfg);
 }
 
 /* ---------------------------------------------------------------------------
@@ -440,6 +498,7 @@ void app_nav_fit(App *a)
 void app_nav_toggle_panel(App *a)
 {
     a->show_panel = !a->show_panel;
+    app_persist_settings(a);
     a->need_redraw = 1;
 }
 
@@ -851,7 +910,8 @@ static void paint_frame(Raster *rs, App *a, PaintStats *st)
     TICK(ms_lines);
     if (a->font) {
         /* 地名库是全局一份（places.db 跨省通用），只需查一次 */
-        paint_place_labels(rs, &a->view, &a->places, a->font, st);
+        paint_place_labels(rs, &a->view, &a->places, a->font, st,
+                           a->show_poi, a->show_labels);
         paint_road_labels(rs, &a->view, a->font, st);
     }
     TICK(ms_labels);

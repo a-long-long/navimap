@@ -28,8 +28,11 @@ typedef struct {
 
 int  label_cache_init(LabelCache *lc, const char *db_path);
 void label_cache_free(LabelCache *lc);
+/* show_poi / show_labels：分别控制"矢量图标"与"文字标签"是否绘制
+ * （受设置面板里的 POI 图标 / 地名标注 开关控制）。二者独立，共用一个避让格。 */
 void paint_place_labels(Raster *rs, const MapView *v,
-                        LabelCache *lc, Font *font, PaintStats *st);
+                        LabelCache *lc, Font *font, PaintStats *st,
+                        int show_poi, int show_labels);
 
 /* 路名池：每省目录一份 names.bin，id 只在本省内有意义，所以做成可实例化的，
  * 由 MapSrc 持有；不再用全局单例。NamePool 定义见 paint.h。 */

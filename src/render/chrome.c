@@ -9,6 +9,12 @@
 #include "render/raster.h"
 #include "route/maneuver.h"
 #include "map/coverage.h"
+#include "settings/settings.h"
+
+/* ===================== 前向声明 ===================== */
+static int  settings_hit(App *a, int x, int y);
+static void chrome_act_settings(App *a);
+static void draw_settings_panel(Raster *rs, App *a);
 
 /* ===================== 几何：绘制与命中测试共用 ===================== */
 
@@ -118,6 +124,7 @@ static const char *MENU_ITEMS[] = {
     "清除路线",
     "缩放到路线",
     "跟随车头",
+    "设置",
     "退出",
 };
 int chrome_menu_count(void) { return (int)(sizeof(MENU_ITEMS)/sizeof(MENU_ITEMS[0])); }
@@ -344,6 +351,7 @@ void paint_chrome(Raster *rs, App *a)
     draw_navbottom(rs, a, &L);
     draw_steps(rs, a, &L);
     draw_menu(rs, a, &L);
+    draw_settings_panel(rs, a);
     draw_nomap(rs, a, &L);
     draw_scale(rs, a, &L);
     draw_compass(rs, a, &L);
@@ -354,6 +362,9 @@ void paint_chrome(Raster *rs, App *a)
 int chrome_hit(App *a, int x, int y)
 {
     CLay L; layout(a, &L);
+
+    /* 设置面板优先：打开时所有点击归面板处理，吞掉地图平移 */
+    if (a->settings_open) return settings_hit(a, x, y);
 
     if (IN(L.wclose, x, y)) return CH_WIN_CLOSE;
     if (IN(L.wmax,   x, y)) return CH_WIN_MAX;
@@ -397,10 +408,10 @@ void chrome_act(App *a, int id, int x, int y)
         a->need_redraw = 1;
         break;
     case CH_MODE_BROWSE:
-        a->mode = 0; a->need_redraw = 1;
+        a->mode = 0; app_persist_settings(a);
         break;
     case CH_MODE_NAV:
-        a->mode = 1; a->need_redraw = 1;
+        a->mode = 1; app_persist_settings(a);
         break;
     case CH_SEARCH:
         app_search_open(a);
@@ -422,7 +433,7 @@ void chrome_act(App *a, int id, int x, int y)
         break;
     }
     case CH_DAYNIGHT:
-        a->day_night = !a->day_night; a->need_redraw = 1;
+        a->day_night = !a->day_night; app_persist_settings(a);
         break;
     case CH_NAV_BACK:
         app_nav_clear(a);
@@ -436,17 +447,175 @@ void chrome_act(App *a, int id, int x, int y)
         break;
     case CH_MENU_ITEM:
         switch (a->chrome_menu_item) {
-        case 0: a->day_night = !a->day_night; break;
+        case 0: a->day_night = !a->day_night; app_persist_settings(a); break;
         case 1: app_search_open(a); break;
         case 2: app_nav_clear(a); break;
         case 3: app_nav_fit(a); break;
         case 4: app_nav_sim_follow(a); break;
-        case 5: a->quit = 1; break;
+        case 5: a->settings_open = 1; break;
+        case 6: a->quit = 1; break;
         }
         a->menu_open = 0;
         a->need_redraw = 1;
         break;
+    case CH_SETTINGS:
+        chrome_act_settings(a);
+        break;
     default:
         break;
+    }
+}
+
+/* ===================== 设置面板（完整设置系统） ===================== */
+
+/* 面板整体矩形 */
+static void settings_panel_rect(const App *a, RectI *panel)
+{
+    int W = 380;
+    int H = 40 + SETTINGS_SCHEMA_N * 34 + 52;
+    panel->x = (a->view.w - W) / 2;
+    panel->y = (a->view.h - H) / 2;
+    panel->w = W; panel->h = H;
+}
+
+/* 第 i 行矩形（0..N-1） */
+static void settings_row_rect(const RectI *panel, int i, RectI *row)
+{
+    row->x = panel->x + 12;
+    row->y = panel->y + 40 + i * 34;
+    row->w = panel->w - 24;
+    row->h = 28;
+}
+
+/* 行内控件矩形：bool 返回两等宽格（左=关/右=开）；int 返回 减/加 两格。
+ * 绘制与命中测试共用，保证一致。第三个返回值含义：l=左(0)/减，r=右(1)/加。 */
+static void settings_control_rects(const RectI *row, int is_bool, RectI *l, RectI *r)
+{
+    int vx = row->x + row->w - 120, vy = row->y + 2, vw = 108, vh = 24;
+    if (is_bool) {
+        l->x = vx;         l->y = vy; l->w = vw / 2; l->h = vh;
+        r->x = vx + vw/2;  r->y = vy; r->w = vw / 2; r->h = vh;
+    } else {
+        l->x = vx;          l->y = vy; l->w = 28; l->h = vh;
+        r->x = vx + vw - 28; r->y = vy; r->w = 28; r->h = vh;
+    }
+}
+
+/* 底部按钮：重置全部（左）/ 关闭（右） */
+static void settings_footer_rects(const RectI *panel, RectI *reset, RectI *close)
+{
+    int fy = panel->y + panel->h - 40;
+    reset->x = panel->x + 12;  reset->y = fy;
+    reset->w = (panel->w - 36) / 2; reset->h = 30;
+    close->x = reset->x + reset->w + 12; close->y = fy;
+    close->w = reset->w; close->h = 30;
+}
+
+static void draw_settings_panel(Raster *rs, App *a)
+{
+    if (!a->settings_open || !a->cfg) return;
+    RectI panel; settings_panel_rect(a, &panel);
+    rfill(rs, panel.x, panel.y, panel.w, panel.h, 250, 251, 253, 252);
+    rstroke(rs, panel.x, panel.y, panel.w, panel.h, 120, 128, 144, 255);
+    if (!a->font) return;
+    font_draw(a->font, rs, panel.x + 14, panel.y + 12, "设置", 30, 36, 48, 0);
+
+    for (int i = 0; i < SETTINGS_SCHEMA_N; i++) {
+        const SettingMeta *m = &SETTINGS_SCHEMA[i];
+        RectI row; settings_row_rect(&panel, i, &row);
+        int ry = row.y + 6;
+        font_draw(a->font, rs, row.x + 4, ry, m->label, 40, 46, 60, 0);
+
+        RectI l, r; settings_control_rects(&row, m->type == ST_BOOL, &l, &r);
+        if (m->type == ST_BOOL) {
+            int on = settings_get_bool(a->cfg, m->key, (int)m->def);
+            rfill(rs, l.x, l.y, l.w, l.h, on ? 200 : 96, on ? 205 : 150, on ? 215 : 160, 255);
+            rfill(rs, r.x, r.y, r.w, r.h, on ? 96 : 200, on ? 150 : 205, on ? 160 : 215, 255);
+            font_draw(a->font, rs, l.x + l.w/2 - 8,  l.y + 5, "关", on?140:255, on?140:255, on?140:255, 0);
+            font_draw(a->font, rs, r.x + r.w/2 - 8,  r.y + 5, "开", on?255:140, on?255:140, on?255:140, 0);
+        } else {
+            int cur = settings_get_int(a->cfg, m->key, (int)m->def);
+            rfill(rs, l.x, l.y, l.w, l.h, 150, 160, 175, 255);
+            rfill(rs, r.x, r.y, r.w, r.h, 150, 160, 175, 255);
+            font_draw(a->font, rs, l.x + 9, l.y + 4, "-", 40, 40, 40, 0);
+            font_draw(a->font, rs, r.x + 8, r.y + 4, "+", 40, 40, 40, 0);
+            char val[64];
+            if (m->opts) snprintf(val, sizeof(val), "%s",
+                                  m->opts + (cur ? (int)strlen(m->opts) + 1 : 0));
+            else         snprintf(val, sizeof(val), "%d", cur);
+            font_draw(a->font, rs, l.x + l.w + 8, ry, val, 40, 46, 60, 0);
+        }
+    }
+
+    RectI reset, close; settings_footer_rects(&panel, &reset, &close);
+    rfill(rs, reset.x, reset.y, reset.w, reset.h, 220, 90, 80, 255);
+    rfill(rs, close.x, close.y, close.w, close.h, 90, 130, 210, 255);
+    font_draw(a->font, rs, reset.x + reset.w/2 - 24, reset.y + 7, "重置全部", 255, 255, 255, 0);
+    font_draw(a->font, rs, close.x + close.w/2 - 16, close.y + 7, "关闭",    255, 255, 255, 0);
+}
+
+/* 设置面板命中：settings_open 时优先处理面板，吞掉地图平移。 */
+static int settings_hit(App *a, int x, int y)
+{
+    if (!a->settings_open) return CH_NONE;
+    RectI panel; settings_panel_rect(a, &panel);
+    if (!IN(panel, x, y)) {
+        /* 点在面板外：关闭面板并吞掉这次点击（不当成地图操作） */
+        a->settings_row = -1; a->settings_btn = 0;
+        return CH_SETTINGS;
+    }
+    RectI reset, close; settings_footer_rects(&panel, &reset, &close);
+    if (IN(reset, x, y)) { a->settings_row = -2; a->settings_btn = 0; return CH_SETTINGS; }
+    if (IN(close, x, y)) { a->settings_row = -1; a->settings_btn = 0; return CH_SETTINGS; }
+    for (int i = 0; i < SETTINGS_SCHEMA_N; i++) {
+        RectI row; settings_row_rect(&panel, i, &row);
+        if (IN(row, x, y)) {
+            RectI l, r; settings_control_rects(&row, SETTINGS_SCHEMA[i].type == ST_BOOL, &l, &r);
+            a->settings_row = i;
+            if (IN(l, x, y))      a->settings_btn = 0;
+            else if (IN(r, x, y)) a->settings_btn = 1;
+            else                  a->settings_btn = 2;
+            return CH_SETTINGS;
+        }
+    }
+    a->settings_row = -1; a->settings_btn = 0;   /* 面板内空白处：吞掉 */
+    return CH_SETTINGS;
+}
+
+/* 处理一次设置面板点击（由 chrome_act 派发） */
+void chrome_act_settings(App *a)
+{
+    if (!a->cfg) { a->settings_open = 0; a->need_redraw = 1; return; }
+    if (a->settings_row >= 0 && a->settings_row < SETTINGS_SCHEMA_N) {
+        const SettingMeta *m = &SETTINGS_SCHEMA[a->settings_row];
+        if (m->type == ST_BOOL) {
+            int on = settings_get_bool(a->cfg, m->key, (int)m->def);
+            int v = (a->settings_btn == 0) ? 0
+                  : (a->settings_btn == 1) ? 1
+                  : (on ? 0 : 1);
+            settings_set_bool(a->cfg, m->key, v);
+        } else { /* ST_INT */
+            double cur = settings_get_dbl(a->cfg, m->key, m->def);
+            if (a->settings_btn == 0)      cur -= m->step;
+            else if (a->settings_btn == 1) cur += m->step;
+            else { /* 行体点击：枚举切换（wrap）/ 否则 +step */
+                if (m->opts) cur = (cur >= m->max) ? m->min : cur + m->step;
+                else         cur += m->step;
+            }
+            if (cur < m->min) cur = m->min;
+            if (cur > m->max) cur = m->max;
+            settings_set_int(a->cfg, m->key, (int)(cur + 0.5));
+        }
+        app_apply_settings(a);
+        settings_save(a->cfg);
+        a->need_redraw = 1;
+    } else if (a->settings_row == -2) {
+        settings_reset_all(a->cfg);
+        app_apply_settings(a);
+        settings_save(a->cfg);
+        a->need_redraw = 1;
+    } else { /* -1 或越界：关闭面板 */
+        a->settings_open = 0;
+        a->need_redraw = 1;
     }
 }

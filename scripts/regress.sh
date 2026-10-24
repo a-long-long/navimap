@@ -179,6 +179,9 @@ fi
 run plat_selftest     "ASSERT-OK" "$BUILD/plat_selftest"
 run plat_selftest_neg "ASSERT-OK" "$BUILD/plat_selftest" --negative
 
+# ---- 设置持久化（完整设置系统）----
+run settings_selftest "SETTINGS-OK" "$BUILD/settings_selftest"
+
 # ---- 去 SDL 化的三条门禁（方案2）----
 #
 # 背景：navimap_core 已做到"零 SDL"，Qt 前端（navmap_qt）一行 SDL 都不链，

@@ -250,7 +250,8 @@ static void draw_poi_marker(Raster *rs, int x, int y, int kind)
 }
 
 void paint_place_labels(Raster *rs, const MapView *v,
-                        LabelCache *lc, Font *font, PaintStats *st)
+                        LabelCache *lc, Font *font, PaintStats *st,
+                        int show_poi, int show_labels)
 {
     if (!lc || !font) return;
     double bb[4];
@@ -277,12 +278,12 @@ void paint_place_labels(Raster *rs, const MapView *v,
         if (g_grid[gy * GRID_COLS + gx]) continue;
         g_grid[gy * GRID_COLS + gx] = 1;
 
-        /* 先画矢量图标（贴在坐标点），再在右侧画标签，二者共用一个避让格 */
-        draw_poi_marker(rs, x, y, it->kind);
-        icons++;
-
-        font_draw(font, rs, x + 10, y - 8, it->name, 46, 48, 56, 1);
-        drawn++;
+        /* 图标与标签独立开关，但共用一个避让格（任一个显示就占格，避免重叠） */
+        if (show_poi)   { draw_poi_marker(rs, x, y, it->kind); icons++; }
+        if (show_labels){
+            font_draw(font, rs, x + 10, y - 8, it->name, 46, 48, 56, 1);
+            drawn++;
+        }
     }
     if (st) { st->labels_drawn = drawn; st->poi_icons = icons; }
 }

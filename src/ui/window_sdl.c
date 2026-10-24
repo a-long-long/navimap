@@ -140,11 +140,12 @@ void app_run(App *a)
                 if (e.key.keysym.sym == SDLK_ESCAPE) {
                     if (a->menu_open) { a->menu_open = 0; a->need_redraw = 1; }
                     else if (a->su.active) app_search_close(a);
+                    else if (a->settings_open) { a->settings_open = 0; a->need_redraw = 1; }
                     else a->quit = 1;
                 }
                 else if (e.key.keysym.sym == SDLK_q) a->quit = 1;
                 else if (e.key.keysym.sym == SDLK_d) {
-                    a->day_night = !a->day_night; a->need_redraw = 1;
+                    a->day_night = !a->day_night; app_persist_settings(a);
                 }
                 else if (e.key.keysym.sym == SDLK_EQUALS || e.key.keysym.sym == SDLK_KP_PLUS)
                     mv_zoom_at(&a->view, 0.5, a->view.w / 2, a->view.h / 2), a->need_redraw = 1;
@@ -157,9 +158,11 @@ void app_run(App *a)
                 /* 字号：[ 减小 / ] 增大（+/- 已给缩放用了） */
                 else if (e.key.keysym.sym == SDLK_LEFTBRACKET) {
                     app_set_font_size(a, a->font_size - 1);
+                    app_persist_settings(a);
                     a->need_redraw = 1;
                 }                 else if (e.key.keysym.sym == SDLK_RIGHTBRACKET) {
                     app_set_font_size(a, a->font_size + 1);
+                    app_persist_settings(a);
                     a->need_redraw = 1;
                 }
                 /* 导航：c 清除 / f 缩放到路线 / p 开关面板 */

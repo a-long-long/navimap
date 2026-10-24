@@ -119,6 +119,11 @@ int        nm_strcasecmp(const char *a, const char *b);
 char      *nm_strdup(const char *s);  /* 失败返回 NULL（与 strdup 一致） */
 /* 临时目录：TMPDIR/TEMP/TMP 里第一个存在的，退回 /tmp，再退回 "." */
 const char *nm_temp_dir(void);
+/* 用户级配置目录（跨平台）：POSIX 取 $XDG_CONFIG_HOME/navimap 或
+   $HOME/.config/navimap；Windows 取 %APPDATA%/navimap。返回的字符串属于
+   ﻿本函数（静态缓冲），调用方不应 free，也无需手动建目录（settings 写盘时
+   会用 nm_mkdir_p 确保存在）。统一返回正斜杠形式。 */
+const char *nm_config_dir(void);
 /* 环境变量覆盖式设置（setenv / _putenv_s） */
 int nm_setenv(const char *key, const char *val);
 /* 加可执行位。Windows 无可执行位，直接成功（存在即可执行）。 */

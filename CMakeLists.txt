@@ -285,7 +285,7 @@ target_include_directories(navmap_render PUBLIC
     ${ZLIB_INCLUDE_DIRS} ${SQLITE3_INCLUDE_DIRS}
     ${PROTOC_INCLUDE_DIRS} ${PROTOC_REAL_INCLUDE_DIR})
 target_link_libraries(navmap_render PUBLIC
-    navmap_map navmap_route navmap_search
+    navmap_map navmap_route navmap_search navmap_settings
     navmap_geo navmap_strpool navmap_plat navmap_mem)
 
 # navmap_ui：render + route + search + map + 叶子库
@@ -295,8 +295,13 @@ target_include_directories(navmap_ui PUBLIC
     ${ZLIB_INCLUDE_DIRS} ${SQLITE3_INCLUDE_DIRS}
     ${PROTOC_INCLUDE_DIRS} ${PROTOC_REAL_INCLUDE_DIR})
 target_link_libraries(navmap_ui PUBLIC
-    navmap_render navmap_route navmap_search navmap_map
+    navmap_render navmap_route navmap_search navmap_map navmap_settings
     navmap_geo navmap_strpool navmap_plat navmap_mem)
+
+# navmap_settings：完整设置系统（极简 INI 存读 + 设置清单），依赖仅 plat。
+add_library(navmap_settings STATIC src/settings/settings.c)
+target_include_directories(navmap_settings PUBLIC ${CMAKE_SOURCE_DIR}/src)
+target_link_libraries(navmap_settings PUBLIC navmap_plat)
 
 # navimap_core：聚合层（方案2 架构边界的对外门面）。
 #   ★ 仅含一个无副作用的锚点符号（src/core_anchor.c），不含业务 .c；
@@ -332,13 +337,13 @@ endif()
 #   全部项目库，让链接器多轮扫描消解环。MSVC 的 link.exe 自带多轮，无需该选项。
 if(MSVC)
     target_link_libraries(navimap_core PUBLIC
-        navmap_map navmap_route navmap_search navmap_render navmap_ui
+        navmap_map navmap_route navmap_search navmap_render navmap_ui navmap_settings
         navmap_pbf navmap_geo navmap_strpool navmap_plat navmap_mem
         ${ZLIB_LIBRARIES} ${SQLITE3_LIBRARIES} ${PROTOC_LIB} ${NAVIMAP_CORE_SYS_LIBS})
 else()
     target_link_libraries(navimap_core PUBLIC
         -Wl,--start-group
-        navmap_map navmap_route navmap_search navmap_render navmap_ui
+        navmap_map navmap_route navmap_search navmap_render navmap_ui navmap_settings
         navmap_pbf navmap_geo navmap_strpool navmap_plat navmap_mem
         ${ZLIB_LIBRARIES} ${SQLITE3_LIBRARIES} ${PROTOC_LIB} ${NAVIMAP_CORE_SYS_LIBS}
         -Wl,--end-group)
@@ -363,7 +368,7 @@ if(WIN32)
 # 阶段 2：同样的 Windows 编译选项/宏也要套到五个模块库上（navimap_core 已不含业务 .c，
 # 真正的编译单元在模块库里）。叶子库（navmap_pbf/geo/...）已在各自定义处挂过 -Wno-format。
 set(NM_ALL_MOD_LIBS
-    navmap_map navmap_route navmap_search navmap_render navmap_ui navimap_core)
+    navmap_map navmap_route navmap_search navmap_render navmap_ui navmap_settings navimap_core)
 if(MSVC)
     foreach(t ${NM_ALL_MOD_LIBS})
         target_compile_definitions(${t} PUBLIC
@@ -581,6 +586,10 @@ nm_link_tool(plat_selftest)
 # 字体契约验收：内置 Noto 字体集是否真能加载并出字形。
 add_executable(font_selftest tools/font_selftest.c)
 nm_link_tool(font_selftest navmap_map navmap_route navmap_search navmap_render navmap_ui)
+
+# 设置持久化模块自测：默认值/存读往返/reset/env覆盖/损坏文件健壮性。
+add_executable(settings_selftest tools/settings_selftest.c)
+nm_link_tool(settings_selftest navmap_settings)
 
 # 字体诊断探针：中文变方框（tofu）时定位是"没有字形"还是"有字形但画不出"。
 add_executable(font_probe tools/font_probe.c)

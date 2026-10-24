@@ -662,6 +662,27 @@ const char *nm_temp_dir(void)
     return buf;
 }
 
+const char *nm_config_dir(void)
+{
+    static char buf[1024];
+    static int  done = 0;
+    if (done) return buf;
+    done = 1;
+#ifdef _WIN32
+    const char *app = getenv("APPDATA");
+    if (app && *app) snprintf(buf, sizeof(buf), "%s/navimap", app);
+    else             snprintf(buf, sizeof(buf), ".");
+#else
+    const char *xdg  = getenv("XDG_CONFIG_HOME");
+    const char *home = getenv("HOME");
+    if (xdg && *xdg)            snprintf(buf, sizeof(buf), "%s/navimap", xdg);
+    else if (home && *home)     snprintf(buf, sizeof(buf), "%s/.config/navimap", home);
+    else                        snprintf(buf, sizeof(buf), ".navimap");
+#endif
+    for (char *p = buf; *p; p++) if (*p == '\\') *p = '/';
+    return buf;
+}
+
 int nm_setenv(const char *key, const char *val)
 {
     if (!key || !*key || !val) return -1;
