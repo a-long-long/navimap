@@ -121,3 +121,37 @@
 - 多省不变量：多省画面 == 只加载包含方；整省包含的省（dup_of>=0）面/路/线全跳；面/线不去重。
   `DEFAULT_MAX_EXPAND` 1200 万；`SEW_SLOTS`=16384；瓦片回退带 2e-3 > 查表误差（85° 3.6e-4）；
   `NMBIN_VERSION=3` 改格式必须顶。
+
+## 阶段3：route.c 拆分定式（2026-10-24，1856 → 928 行）
+
+- route 模块现状：`src/route/` 下 **route.c（只剩搜索本体）+ st/sew/restr/cost/lmdist/result**（新拆）
+  + 既有的 lmtable/revidx/navsim/maneuver；全部编进 `libnavmap_route.a`（**不单独成 lib**）。
+  剩余核心：`members_of` / `expand_dir` / `plan_search` / `router_plan` —— **最后才动**。
+- ★ `route.h` 是**公共**头（被 render/ui 包含）⇒ 完整 `Router` / `RestrIdx` / `Sew*` 只能放
+  私有头 **`route_priv.h`**（仅 route 模块的 .c 用）。lmtable.c/revidx.c 只用 Router 不完整类型。
+- ★★ 新模块头（`restr.h`/`sew.h`）一律 **`#include "route/route_priv.h"`**，
+  **不要把私有类型搬进模块头**：struct Router 要用 SewSlot ⇒ route_priv.h 必须反过来 include
+  sew.h ⇒ 谁先被 include 都会"类型未定义"（guard 让后半段变空）。类型留在 route_priv.h 不动。
+- ★ 公共头已声明的函数出来不必新建 .h：`lmdist.c` / `result.c` 就是如此（route.h 里已有声明）。
+- ★ 被跨文件调用的函数必须**去掉 static**（否则 static/non-static 冲突）；
+  只在本文件用的（sort_kv / sew_cb / cmp_pn / lm_prov_of）保留 static。
+- 跨 `.c` 共用的宏（MAX_MEMBER）下沉到 `route_priv.h`；先把所有使用点 grep 一遍再决定。
+
+### 拆大型 .c 的搬迁脚本纪律（C）
+
+- 锚点：唯一子串 + `assert count==1`；**右边界用下一个段落标题**，别用"找下一个 `}`"
+  （会拿到内层函数的花括号）。
+- 断言要双向：该消失的（旧定义）+ 该保留的（调用点、类型用法）都写；
+  断言在写盘**之前** ⇒ 脚本崩了工作区是干净的（安全）。
+- ⚠️ 脚本**漏写 write()** 这类错拦不住（cost.c 那次文件没生成却在被调用）⇒
+  每次跑完必须 `ls` 新文件、`cmake --build` 零警告才算过。
+
+### 行为等价判据（路由）
+
+- 探针必须用 `--graph=products/graph`（多省父目录）：单省配不上 8 省 lm.bin ⇒ 退回直线 w=1.40、不可复现。
+- 确定性字段优先级：**展开节点数 > 预计分钟 > 总长**；`耗时 ms` 随负载波动，只兜底不作判据。
+  基准值：120294 / 531738 / 789703 / 546391 / 5135（route_cross/hard/far_dalian/lm_exact/navsim_bj）。
+- 每块要有**专属判据**：lmdist→lmdist_cli 三距离逐字节（23136.791/21932.828/27700.450 秒）；
+  result→route_check 自检行「通过（3917 段，跨省次数 1）」；restr→restr_ab 正向 OK + 负向 FAIL。
+- **regress.sh 基线 = 52 通过 / 2 失败**（两项本机环境 glitch：plat_selftest 字体偏好、
+  core_no_sdl_sdl 找不到 build/navimap 给 objdump）。见到 52/54 就是没回归。

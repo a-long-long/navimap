@@ -12,7 +12,7 @@
 |---|---|---|---|---|---|
 | **L1 拆文件/目录** | 按职责把类/文件挪进子目录 | ✅ 已完成 | 极低（几乎为 0） | 中（可读性） | **无需再做** |
 | **L2 拆独立库** | 每模块编成独立静态库，只暴露 API | ✅ **已完成（阶段1+2）** | 中（CMake 改造） | 中高（边界被链接器强制、可独立复用） | 已落地（12 个 libnavmap_*.a） |
-| **L3 拆上帝文件** | 把 route.c / paint.c 等大文件按职责分解 | ⚠️ 暂不推荐 | 高（且破热路径风险） | 低（已内部高内聚） | **等具体复用/测试需求出现再做** |
+| **L3 拆上帝文件** | 把 route.c / paint.c 等大文件按职责分解 | 🟢 **部分进行中（阶段3）** | 实测**中低**（有回归门禁时每步约 15 min） | 中（`route.c` 1856→928，搜索核心已可独立测试/复用） | **已按「低耦合优先 + 逐行为等价」推进；`paint.c` 未动**（见 §4 阶段 3、下面的 L3 小节） |
 
 **一句话结论**：代码组织已经"天然模块化"——目录即模块、依赖除 `render↔ui` 环外是干净的 DAG（见 §1.3 修正注）、零跨文件可变全局、符号带模块前缀。当前最大的可回收价值不是"重构代码"，而是**把已有的模块边界用构建系统固化成独立库（L2，已完成阶段1+2）**，从而解锁局部复用与更快的增量构建；L3 不要现在动。
 
@@ -72,7 +72,7 @@ Layer 0  src/utils     ──▶ (leaf, 被其余 5 个模块全部依赖)
 ### 1.6 "上帝文件"判定（L3 是否必要）
 | 文件 | 行数 | 内部 static 函数 | 判定 |
 |---|---|---|---|
-| `route/route.c` | 1856 | 34 | 大而内聚：路由核心，已拆 34 个静态辅助；fan-out 显示它是"路由枢纽"（调用 lm/rev/st/coord/tile/mapset/nm），属角色固有，非职责混乱 |
+| `route/route.c` | **928**（原 1856） | 34 → 仅剩搜索本体 | 大而内聚：路由核心。fan-out 显示它是"路由枢纽"（调用 lm/rev/st/coord/tile/mapset/nm），属角色固有、非职责混乱；**阶段 3 已把 6 类非核心职责（状态表 / 转向限制 / 代价启发式 / 瓦片缝合 / 地标距离 / 结果校验）抽成独立 .c**，剩下的才是真核心 |
 | `ui/window.c` | 1288 | 14 | SDL 前端聚合（事件/循环/绘制调度），内聚 |
 | `map/graph_build.c` | 1260 | 26 | 图构建流水线，已分 26 段 |
 | `render/paint.c` | 947 | 19 | 绘制核心，内聚；唯一问题在 §1.5 的全局状态 |
@@ -100,8 +100,20 @@ navmap_geo / navmap_strpool / navmap_plat / navmap_mem  (叶子，mem→plat)
 3. **增量构建更快**：改 `render` 不再重链整库。
 代价：CMake 把 1 个 lib 改成 N 个 lib + 调整 24 个 exe 的 `target_link_libraries`（工作量大但机械、低风险，因 `CORE_SRCS` 本就显式罗列）。
 
-### L3（拆上帝文件）—— 暂不推荐
-`route.c` / `paint.c` 是热点且已调优。在没有"需要独立测试某子功能"或"需要多渲染上下文"的具体需求前，拆解只会引入回归。若未来确有需求，按技能建议"耦合从低到高"顺序：先抽只依赖配置/工具的小块，导航/路由核心放最后。
+### L3（拆上帝文件）—— **已于阶段 3 启动（route.c 部分完成）**
+
+`route.c` / `paint.c` 是热点且已调优，**盲目**拆解确实会引入回归；但只要有**回归门禁 + 逐字节行为等价判据**，实测成本是中低而不是高。
+
+阶段 3 的实际做法（可作为后续同类工作的模板）：
+
+1. **耦合从低到高**：先抽不依赖搜索状态的子系统（状态表 → 转向限制 → 代价/启发式 → 瓦片缝合 → 地标距离 → 结果校验），搜索本体（`members_of` / `expand_dir` / `plan_search`）留到最后；
+2. **每步独立 commit + 独立证据**：`route_cli` 5 条代表路线的**展开节点数**等确定性字段逐字节不变，外加该块的专属判据（lmdist 三距离、route_check 自检行、restr_ab 正负对照）；
+3. **私有头 `route_priv.h` 承接完整结构体**，公共头 `route.h` 不泄漏，避免把整套依赖强加给 render/ui；
+4. 编译**零警告**是硬门禁，整轮 `regress.sh` 恒为 52/54（2 项本机环境 glitch）。
+
+结果：`route.c` 1856 → 928 行，抽出的 6 个子模块仍编在 `libnavmap_route.a` 内（暂不单独成库）。
+
+`paint.c` **仍未动**：它是 §1.5 记的「渲染流水线全局状态」问题，性质属于重入 / 多渲染上下文需求，与 `route.c` 不同，维持原判断——没有该需求前不做。
 
 ---
 
@@ -121,7 +133,33 @@ navmap_geo / navmap_strpool / navmap_plat / navmap_mem  (叶子，mem→plat)
 - **阶段 0（已完成）**：把本报告 §1.3 的 DAG 作为模块契约文档沉淀（注意：原 DAG 缺 `map→render` 边且误判为无环，见 §1.3 修正注）。
 - **阶段 1（已完成，commit 4986ace）**：把 `navmap_utils`（src/utils/*）拆成 4 个独立叶子库 `navmap_geo / navmap_strpool / navmap_plat / navmap_mem`（mem→plat），加 `navmap_pbf`，共 5 个叶子库；`navimap_core` 改为依赖它们。零破环风险。验收：regress.sh 52/54（2 项为环境相关 glitch）、零警告。
 - **阶段 2（已完成，commit a244de9 + 9316777）**：把 `map / route / search / render / ui` 提升为 5 个独立模块库，`navimap_core` 退化为聚合层（仅含 `core_anchor.c`，用 `-Wl,--start-group` 包裹所有模块库 + 叶子库 + 3rd 方库）；24 个 CLI 工具裁剪为只链所需模块子集（via `nm_link_tool()`）；`navmap_qt` 仍链聚合层。纯 CMake 改动。验收：regress.sh 52/54 零回归、核心 `core_no_sdl` 门禁仍报 CORE-NO-SDL-OK。
-- **阶段 3（按需）**：仅当出现“独立复用/单测某子模块”或“多渲染上下文”需求时，再分解 `route.c` / `paint.c` 内部；否则不动。
+- **阶段 3（进行中，触发点：让路由核心可测试/可分解）**：分解 `route.c` 内部。
+  用户拍板的原则：**从低耦合小块开始、搜索核心 `plan_search` 放最后，每步必须有行为等价证据**。
+
+  `route.c` 1856 → 928 行，已抽出 6 个子模块（仍在 `libnavmap_route.a` 内，不单独成库），
+  每个 commit 都带**逐字节等价证据**：
+
+  | 抽出物 | 内容 | commit |
+  |---|---|---|
+  | `st.c/st.h` | StateTab 开地址哈希表（mix64 / st_intern / st_find …） | cc67744 |
+  | `restr.c/restr.h` | 转向限制三张索引 + restr_blocked* / seam_blocked | cc67744 |
+  | `cost.c/cost.h` | fallback_speed / edge_cost / heur / node_coord / 地标辅助 | 505ac36 |
+  | `sew.c/sew.h` | 瓦片缝合缓存（sew_get / tile_prov_count / sew_build） | abe14aa |
+  | `lmdist.c` | 一对多 Dijkstra（lm_dijkstra / lm_cost_at / lm_dist_free） | 85ef1cd |
+  | `result.c` | route_result_free / route_check | 99924a5 |
+
+  **拆出来的私有定义纪律**：完整 `Router` / `RestrIdx` / `Sew*` 只放在私有头 `route_priv.h`
+  （公共 `route.h` 被 render/ui 包含，不能泄漏）；新模块头 `restr.h` / `sew.h` 一律 include
+  `route_priv.h`，**私有类型不随模块搬走**（否则 route_priv.h 反向 include 会形成包含环）。
+
+  **剩余（留到最后）**：`members_of` / `expand_dir` / `plan_search` / `router_plan`
+  与 Router 生命周期，即搜索本体。`paint.c` 未动。
+
+  验收口径：每步 `route_cli` 5 条代表路线的**展开节点数**（120294 / 531738 / 789703 /
+  546391 / 5135）与总长/预计/吸附/地标表逐字节不变（耗时 ms 随负载波动，不作判据），
+  外加**各块专属判据**（lmdist 三距离 23136.791 / 21932.828 / 27700.450 秒；
+  route_check 自检行「通过（3917 段，跨省次数 1）」；restr_ab 正向 OK + 负向 FAIL）；
+  整轮 `regress.sh` 恒为 52/54（2 项环境 glitch），零警告。
 
 ---
 
