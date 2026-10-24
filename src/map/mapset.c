@@ -59,6 +59,8 @@ static void src_close(MapSrc *s)
  * 重载走这个，身份不变；首次打开由 src_open 先置身份再调它。 */
 static int src_open_files(MapSrc *s)
 {
+    s->dmap_inflight = 0;   /* 重载 = 重新尝试解码（清掉失败标记） */
+    s->dmap_failed   = 0;
     char p[4096];
     char err[256];
 
@@ -165,6 +167,7 @@ static int src_open(MapSrc *s, const char *dir, const char *name)
  * 只是文件不再 mmap——下次 set_view 命中视口时 src_open_files 重新打开。 */
 static void src_unload(MapSrc *s)
 {
+    if (s->dmap_inflight) return;   /* 后台解码中：保留 nodes 映射，待解码完再卸 */
     nmbin_close(&s->nodes);
     nmbin_close(&s->edges);
     if (s->has_restr) nmbin_close(&s->restrictions);
@@ -400,6 +403,10 @@ int mapset_load(MapSet *ms, const char *graph_dir)
 {
     memset(ms, 0, sizeof(*ms));
 
+    /* PBF 显示层后台解码：建锁 + 初始空闲任务槽（job_prov=-1 表示无在途）。 */
+    ms->dmap_mtx = nm_mutex_create();
+    ms->job_prov = -1;
+
     /* 单省目录：下面直接有 nodes.bin */
     char p[4096];
     if (nm_path_join(p, sizeof(p), graph_dir, "nodes.bin") == 0 &&
@@ -481,9 +488,15 @@ static int bbox_overlap(const int32_t a[4], const int32_t b[4])
     return !(a[2] < b[0] || a[3] < b[1] || a[0] > b[2] || a[1] > b[3]);
 }
 
+/* 后台解码线程的"发布 / 派发 / worker"（定义见文件末尾 PBF 显示层节）。 */
+static void mapset_publish_display(MapSet *ms);
+static void mapset_dispatch_display(MapSet *ms, int prov);
+static void dmap_worker(void *arg);
+
 void mapset_set_view(MapSet *ms, const int32_t vb[4])
 {
     if (!ms || ms->n == 0) return;
+    mapset_publish_display(ms);   /* 把后台线程已解完的省挂上显示层 */
     /* 边距：视口四周各扩 50%，让即将滚入的相邻省提前打开，也覆盖吸附/导航预览 */
     int32_t m  = (vb[2] - vb[0]) / 2;
     int32_t mn = (vb[3] - vb[1]) / 2;
@@ -498,14 +511,16 @@ void mapset_set_view(MapSet *ms, const int32_t vb[4])
             src_unload(s);
             s->loaded = 0;
         }
-        /* PBF 显示层：视口进省 ⇒ 需要它的显示层（若还没解就解）。
-         * 解码较慢（一省几百 ms ~ 数秒），调用方最好在后台线程里先
-         * mapset_ensure_display 好，这里只是兜底。 */
+        /* PBF 显示层：视口进省 ⇒ 后台线程异步解码（见 dmap_worker）。
+         * 不再在主线程同步解码（旧逻辑会阻塞渲染 0.6~4.4s）。解码完成前
+         * 该省 has_features=0，渲染自然跳过（空白），就绪后下一帧经 publish
+         * 挂上、立即显示——也就是"渐进式加载"，零卡顿。 */
         if (ov && ms->pbf_dir[0]) {
             if (!s->dmap_from_pbf) {
-                mapset_ensure_display(ms, i);
+                mapset_dispatch_display(ms, i);   /* 无任务在途才派发，异步 */
+            } else {
+                s->dmap_used = ++ms->dmap_clock;  /* 已就绪才刷新 LRU */
             }
-            s->dmap_used = ++ms->dmap_clock;
         }
     }
 
@@ -604,9 +619,123 @@ int mapset_ensure_display(MapSet *ms, int prov)
     return 0;
 }
 
+/* ------------------------------------------------------------------ */
+/* PBF 显示层：后台解码线程（消除同步解码对渲染的 0.6~4.4s 阻塞）       */
+/* ------------------------------------------------------------------ */
+
+/* 把 worker 已解完的省挂上显示层。只在主线程（set_view 顶部）调用。
+ * 与 dmap_worker 通过 dmap_mtx 串行化，作业槽的读改写都在锁内完成。 */
+static void mapset_publish_display(MapSet *ms)
+{
+    if (!ms->dmap_mtx) return;
+    nm_mutex_lock(ms->dmap_mtx);
+    if (!ms->job_done) { nm_mutex_unlock(ms->dmap_mtx); return; }
+
+    int      p   = ms->job_done_prov;
+    PbfMap   res = ms->job_result;
+    int      ok  = ms->job_ok;
+    ms->job_done = 0;
+    memset(&ms->job_result, 0, sizeof(PbfMap));   /* 缓冲所有权已交出 */
+    nm_mutex_unlock(ms->dmap_mtx);
+
+    if (p < 0 || p >= ms->n) return;
+    MapSrc *s = &ms->srcs[p];
+    s->dmap_inflight = 0;                          /* 解码结束，解除 pin */
+    if (ok) {
+        s->lines    = res.lines;
+        s->areas    = res.areas;
+        s->polyrefs = res.polyrefs;
+        s->dmap     = res;
+        s->dmap_from_pbf = 1;
+        s->has_features  = 1;
+        s->dmap_used = ++ms->dmap_clock;
+    } else {
+        s->dmap_failed = 1;   /* 解码失败：不再重试，等重载（src_open_files 清标记） */
+    }
+}
+
+/* 派发一省去后台解码：仅当没有任务在途 / 待发布 / 已失败 / 已就绪时才派发。
+ * 派发时置 dmap_inflight=1，让 src_unload 在解码期间保留 nodes 映射
+ * （worker 要读 s->nodes 做节点下标查表）。 */
+static void mapset_dispatch_display(MapSet *ms, int prov)
+{
+    if (prov < 0 || prov >= ms->n) return;
+    if (!ms->dmap_mtx) { mapset_ensure_display(ms, prov); return; }  /* 无锁则退回同步 */
+    MapSrc *s = &ms->srcs[prov];
+    if (s->dmap_from_pbf || s->dmap_failed || s->dmap_inflight) return;
+
+    nm_mutex_lock(ms->dmap_mtx);
+    if (ms->job_prov >= 0 || ms->job_done) {       /* 已有在途/待发布，本帧不重复派发 */
+        nm_mutex_unlock(ms->dmap_mtx);
+        return;
+    }
+    ms->job_prov = prov;
+    s->dmap_inflight = 1;
+    if (!ms->dmap_worker_started) {
+        nm_thread_spawn(dmap_worker, ms);
+        ms->dmap_worker_started = 1;
+    }
+    nm_mutex_unlock(ms->dmap_mtx);
+}
+
+/* 后台解码线程：轮询任务槽（无 condvar，解码本身 0.6~4.4s，4ms 轮询延迟可忽略），
+ * 在锁外做耗时解码，完成后把结果放入 job_result 并置 job_done。pbfmap_decode
+ * 仅用局部状态（Buf/StrPool/本地数组），无文件级可变全局 ⇒ 线程安全。 */
+static void dmap_worker(void *arg)
+{
+    MapSet *ms = (MapSet *)arg;
+    for (;;) {
+        nm_sleep_ms(4);
+        nm_mutex_lock(ms->dmap_mtx);
+        if (ms->dmap_quit) { nm_mutex_unlock(ms->dmap_mtx); break; }
+        int p = ms->job_prov;
+        int have = (p >= 0 && !ms->job_done);
+        nm_mutex_unlock(ms->dmap_mtx);
+        if (!have) continue;
+
+        int    ok = 0;
+        PbfMap m; memset(&m, 0, sizeof(m));
+        if (p < ms->n && ms->srcs[p].loaded) {
+            MapSrc *s = &ms->srcs[p];
+            char pbf[4096], nm_[512];
+            int k = snprintf(nm_, sizeof(nm_), "%s.osm.pbf", s->name);
+            if (k > 0 && (size_t)k < sizeof(nm_) &&
+                nm_path_join(pbf, sizeof(pbf), ms->pbf_dir, nm_) == 0 &&
+                nm_file_exists(pbf)) {
+                ok = (pbfmap_decode(pbf, &s->nodes, &m) == 0);
+            }
+        }
+
+        nm_mutex_lock(ms->dmap_mtx);
+        if (ms->dmap_quit) {            /* 让出：放弃半成品，不发布 */
+            if (!ok) pbfmap_free(&m);
+            nm_mutex_unlock(ms->dmap_mtx);
+            break;
+        }
+        ms->job_result    = m;
+        ms->job_ok        = ok;
+        ms->job_done      = 1;
+        ms->job_done_prov = p;
+        ms->job_prov      = -1;         /* 释放任务槽，主线程可派发下一省 */
+        nm_mutex_unlock(ms->dmap_mtx);
+    }
+    ms->dmap_stopped = 1;
+}
+
 void mapset_free(MapSet *ms)
 {
     if (!ms) return;
+    /* 先让 worker 退出，避免它读已释放的 srcs / nodes。detached 线程无法 join，
+     * 故置 quit 后轮询 dmap_stopped（上限 ~10s，正常只在数 ms 内停）。 */
+    if (ms->dmap_worker_started) {
+        ms->dmap_quit = 1;
+        for (int i = 0; i < 2000 && !ms->dmap_stopped; i++)
+            nm_sleep_ms(5);
+    }
+    if (ms->dmap_mtx) {
+        nm_mutex_destroy(ms->dmap_mtx);
+        ms->dmap_mtx = NULL;
+    }
     for (int i = 0; i < ms->n; i++)
         src_close(&ms->srcs[i]);
     free(ms->srcs);

@@ -80,7 +80,6 @@ int main(int argc, char **argv)
     int nwords = (int)(sizeof(words) / sizeof(words[0]));
     if (q) { words[0] = q; nwords = 1; }
 
-    double sum_ms = 0, max_ms = 0;
     int sum_n = 0;
 
     for (int w = 0; w < nwords; w++) {
@@ -93,8 +92,7 @@ int main(int argc, char **argv)
         }
         printf("\n查询 %-10s %d 条  %llu ms\n", words[w], n,
                (unsigned long long)ms);
-        sum_ms += ms; sum_n++;
-        if ((double)ms > max_ms) max_ms = (double)ms;
+        sum_n++;
 
         if (n == 0) { FAIL("%s 一条都没搜到\n", words[w]); continue; }
         if (n > limit) { FAIL("%s 返回 %d 条，超过 limit %d\n", words[w], n, limit); }

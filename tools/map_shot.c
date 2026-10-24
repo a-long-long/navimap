@@ -251,6 +251,10 @@ int main(int argc, char **argv)
             fprintf(stderr, "提示: PBF 显示层不可用（%s），改用 nmbin 产物\n", pbf_display);
         } else {
             printf("显示层: PBF 运行时解码（%s, LRU %d）\n", pbf_display, pbf_lru);
+            /* map_shot 是一次性离屏截图：没有"逐帧渐进"可言，直接同步解码
+             * 各省（与交互前端走后台线程不同），保证出图即是对的。 */
+            for (int i = 0; i < a.ms.n; i++)
+                mapset_ensure_display(&a.ms, i);
         }
     }
     if (have_center == 3) { a.view.lat = lat; a.view.lon = lon; }

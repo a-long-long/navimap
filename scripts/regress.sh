@@ -35,7 +35,10 @@ if [ "$DO_BUILD" = 1 ]; then
     # 本项目保持零警告：新警告一律当失败，不然警告会堆到没人看的程度
     touch src/utils/*.c src/pbf/*.c src/map/*.c src/route/*.c src/render/*.c \
           src/search/*.c src/ui/*.c tools/*.c
-    if cmake --build "$BUILD" -j 4 2>&1 | grep -iE "warning"; then
+    # lto-wrapper 的 "using serial compilation of N LTRANS jobs" 是 LTO 并行
+    # 调度的提示性 note、非代码警告，且非本项目可控，过滤掉以免假 FAIL。
+    if cmake --build "$BUILD" -j 4 2>&1 | grep -iE "warning" \
+            | grep -v "lto-wrapper.exe: warning: using serial compilation"; then
         echo "警告检查   FAIL（上面有编译警告）"
         exit 1
     fi

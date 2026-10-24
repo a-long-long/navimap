@@ -363,7 +363,7 @@ if(WIN32)
 # 阶段 2：同样的 Windows 编译选项/宏也要套到五个模块库上（navimap_core 已不含业务 .c，
 # 真正的编译单元在模块库里）。叶子库（navmap_pbf/geo/...）已在各自定义处挂过 -Wno-format。
 set(NM_ALL_MOD_LIBS
-    navmap_map navmap_route navmap_search navmap_render navmap_ui navmap_core)
+    navmap_map navmap_route navmap_search navmap_render navmap_ui navimap_core)
 if(MSVC)
     foreach(t ${NM_ALL_MOD_LIBS})
         target_compile_definitions(${t} PUBLIC

@@ -4,6 +4,7 @@
 #include "map/binfmt.h"
 #include "map/pbfmap.h"
 #include "render/labels.h"
+#include "utils/plat.h"     /* NmMutex：后台解码线程的锁 */
 
 /* 多省图集：一次加载 products/graph 下的所有省，渲染时按 bbox 裁剪。
  *
@@ -34,6 +35,8 @@ typedef struct {
                                    * lines/areas/polyrefs） */
     PbfMap    dmap;                     /* 从 PBF 解码出的显示层（内存缓冲） */
     uint64_t  dmap_used;                /* LRU 时间戳（越大越新） */
+    int       dmap_inflight;  /* 后台解码进行中：src_unload 不得卸 nodes 映射 */
+    int       dmap_failed;    /* 该省 PBF 解码失败：重载前不再重试 */
     NMBinFile tiles, edgelist;          /* 空间索引（可选） */
     int       has_tiles;
     int       loaded;       /* 本省份 mmap 是否已打开；mapset_set_view 按需置 1 / 清 0。
@@ -62,6 +65,19 @@ typedef struct {
     char    pbf_dir[4096];
     int     dmap_lru_cap;  /* 同时驻留几个省的解码结果（默认 3） */
     uint64_t dmap_clock;   /* LRU 时钟（单调递增） */
+
+    /* ---- 后台解码线程（避免同步解码阻塞渲染 0.6~4.4s）----
+     * 单一 worker 串行解码；主线程每帧 publish 已完成的结果、并 dispatch 新任务。
+     * 所有字段都受 dmap_mtx 保护（job_prov / job_done / job_*）。 */
+    NmMutex  *dmap_mtx;         /* 保护下面的任务槽；NULL 则退回同步解码 */
+    int       dmap_quit;        /* 置 1 让 worker 退出 */
+    int       dmap_stopped;     /* worker 已退出（free 时等待） */
+    int       dmap_worker_started;
+    int       job_prov;         /* 正在解码的省下标；-1 = 空闲 */
+    int       job_done;         /* 有结果待发布 */
+    int       job_done_prov;    /* 待发布结果属于哪个省 */
+    int       job_ok;           /* 1 成功 / 0 失败 */
+    PbfMap    job_result;       /* 解码产物（malloc 缓冲），发布时移交 src */
 } MapSet;
 
 /* graph_dir 可以是单个省目录（含 nodes.bin），也可以是父目录
