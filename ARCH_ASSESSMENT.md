@@ -161,6 +161,13 @@ navmap_geo / navmap_strpool / navmap_plat / navmap_mem  (叶子，mem→plat)
   route_check 自检行「通过（3917 段，跨省次数 1）」；restr_ab 正向 OK + 负向 FAIL）；
   整轮 `regress.sh` 恒为 52/54（2 项环境 glitch），零警告。
 
+- **工具层去重（已完成，commit a8f3441）**：8 个 CLI 里逐字重复的样板收敛到
+  `tools/tool_common.{h,c}`（`tc_arg_val` / `tc_ab_init` / `tc_load_graph`）。
+  验收同口径：regress 日志改前改后逐行一致（仅 `route_hard_ms` 471→487 ms 负载噪声），
+  map_shot 10 张 BMP 用 `git stash` A/B **逐字节 IDENTICAL**。
+  ⚠️ `parse_ll` **故意不统一**：`lmbuild_cli` 多一道空纬度防护，统一会改变另外
+  5 个工具的行为（已在 tool_common.h 顶部注明，留作独立的有意改动）。
+
 ---
 
 ## 5. 不建议现在做的事
