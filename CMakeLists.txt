@@ -139,7 +139,14 @@ set(PBF_SRCS
     ${PROTO_SRCS}
     ${PROTO_HDRS})
 
-set(CORE_SRCS
+# 阶段 2：把核心剩余模块提升为独立 STATIC 库（ARCH_ASSESSMENT.md §4 DAG）。
+#   map → pbf, utils        route → map, utils
+#   search → utils          render → map, route, search, utils（并反向引用 ui，见下）
+#   ui → map, render, route, search, utils
+# 注意：实测 render/chrome.c 调用 ui/window.c 的 app_nav_*（导航动作），ui/window.c
+# 又调用 render 的 paint/navdraw/chrome —— render↔ui 是真实的符号级环（文档 DAG 未体现）。
+# 用 LINKER:-start-group 包住全部模块库消解该环（仅 GNU/MinGW ld 需要；MSVC link 自带多轮）。
+set(MAP_SRCS
     src/map/road_tags.c
     src/map/binfmt.c
     src/map/graph_build.c
@@ -148,21 +155,24 @@ set(CORE_SRCS
     src/map/autobuild.c
     src/map/coverage.c
     src/map/map_view.c
-    src/map/tileidx.c
+    src/map/tileidx.c)
+set(ROUTE_SRCS
     src/route/route.c
     src/route/lmtable.c
     src/route/revidx.c
     src/route/maneuver.c
-    src/route/navsim.c
-    src/search/search.c
+    src/route/navsim.c)
+set(SEARCH_SRCS
+    src/search/search.c)
+set(RENDER_SRCS
     src/render/paint.c
     src/render/raster.c
     src/render/navdraw.c
     src/render/chrome.c
     src/render/font.c
-    src/render/labels.c
-    src/ui/window.c
-    )
+    src/render/labels.c)
+set(UI_SRCS
+    src/ui/window.c)
 
 # 阶段 1 叶子库：把 src/utils 按模块拆成 4 个独立 STATIC 库（字面补全阶段1）。
 # 依赖关系：mem → plat；geo / strpool / plat 为纯叶子（零内部依赖）。
@@ -225,8 +235,66 @@ if(WIN32)
     target_compile_options(navmap_pbf PUBLIC -Wno-format)
 endif()
 
-# 核心库：去掉 utils/pbf 后剩余的模块。
-add_library(navimap_core STATIC ${CORE_SRCS})
+# 阶段 2 模块库（DAG 顺序，见上方 MODULE_SRCS 注释；聚合层 navimap_core 见下方）。
+# 每个模块库 PUBLIC 暴露 ${CMAKE_SOURCE_DIR}/src 含入根（消费者可用 "map/xxx.h"），
+# 并链入自身的模块依赖。第三方库（z/sqlite3/protoc/m）统一由下方 navimap_core 聚合层
+# 承载，模块库本身只表达"模块↔模块"依赖，便于独立复用。
+
+# navmap_map：pbf + 全部叶子库
+add_library(navmap_map STATIC ${MAP_SRCS})
+target_include_directories(navmap_map PUBLIC
+    ${CMAKE_SOURCE_DIR}/src ${GEN_DIR}
+    ${ZLIB_INCLUDE_DIRS} ${SQLITE3_INCLUDE_DIRS}
+    ${PROTOC_INCLUDE_DIRS} ${PROTOC_REAL_INCLUDE_DIR})
+target_link_libraries(navmap_map PUBLIC
+    navmap_pbf navmap_geo navmap_strpool navmap_plat navmap_mem)
+
+# navmap_search：仅叶子库（search→utils）
+add_library(navmap_search STATIC ${SEARCH_SRCS})
+target_include_directories(navmap_search PUBLIC
+    ${CMAKE_SOURCE_DIR}/src ${GEN_DIR}
+    ${ZLIB_INCLUDE_DIRS} ${SQLITE3_INCLUDE_DIRS}
+    ${PROTOC_INCLUDE_DIRS} ${PROTOC_REAL_INCLUDE_DIR})
+target_link_libraries(navmap_search PUBLIC
+    navmap_geo navmap_strpool navmap_plat navmap_mem)
+
+# navmap_route：map + 叶子库
+add_library(navmap_route STATIC ${ROUTE_SRCS})
+target_include_directories(navmap_route PUBLIC
+    ${CMAKE_SOURCE_DIR}/src ${GEN_DIR}
+    ${ZLIB_INCLUDE_DIRS} ${SQLITE3_INCLUDE_DIRS}
+    ${PROTOC_INCLUDE_DIRS} ${PROTOC_REAL_INCLUDE_DIR})
+target_link_libraries(navmap_route PUBLIC
+    navmap_map navmap_geo navmap_strpool navmap_plat navmap_mem)
+
+# navmap_render：map + route + search + 叶子库
+#   （render 反向引用 ui 的 app_nav_*，由下方 start-group 消解；此处不显式声明 ui 依赖，
+#    以避免 CMake 报循环依赖警告，同时保留 DAG 可读性）
+add_library(navmap_render STATIC ${RENDER_SRCS})
+target_include_directories(navmap_render PUBLIC
+    ${CMAKE_SOURCE_DIR}/src ${GEN_DIR}
+    ${ZLIB_INCLUDE_DIRS} ${SQLITE3_INCLUDE_DIRS}
+    ${PROTOC_INCLUDE_DIRS} ${PROTOC_REAL_INCLUDE_DIR})
+target_link_libraries(navmap_render PUBLIC
+    navmap_map navmap_route navmap_search
+    navmap_geo navmap_strpool navmap_plat navmap_mem)
+
+# navmap_ui：render + route + search + map + 叶子库
+add_library(navmap_ui STATIC ${UI_SRCS})
+target_include_directories(navmap_ui PUBLIC
+    ${CMAKE_SOURCE_DIR}/src ${GEN_DIR}
+    ${ZLIB_INCLUDE_DIRS} ${SQLITE3_INCLUDE_DIRS}
+    ${PROTOC_INCLUDE_DIRS} ${PROTOC_REAL_INCLUDE_DIR})
+target_link_libraries(navmap_ui PUBLIC
+    navmap_render navmap_route navmap_search navmap_map
+    navmap_geo navmap_strpool navmap_plat navmap_mem)
+
+# navimap_core：聚合层（方案2 架构边界的对外门面）。
+#   ★ 仅含一个无副作用的锚点符号（src/core_anchor.c），不含业务 .c；
+#     把 5 个模块库 + 5 个叶子库 + 第三方库聚合成一个链接面，
+#     使 24 个 exe / navmap_sdl / navmap_qt 等无需改动即可继续链接 navimap_core。
+#   ★ 核心零 SDL：聚合层连 SDL 的 include 都不给；SDL 只在 navmap_sdl / map_shot。
+add_library(navimap_core STATIC src/core_anchor.c)
 
 # ★ 核心不含 SDL：连 include 路径都不给。理由见上面"依赖"一节的架构约束。
 #   谁需要 SDL（窗口版 / 离屏出图）自己去链 navimap_sdl 或直接链 SDL2。
@@ -251,16 +319,21 @@ else()
     set(NAVIMAP_CORE_SYS_LIBS "")
 endif()
 
-target_link_libraries(navimap_core PUBLIC
-    navmap_geo
-    navmap_strpool
-    navmap_plat
-    navmap_mem
-    navmap_pbf
-    ${ZLIB_LIBRARIES}
-    ${SQLITE3_LIBRARIES}
-    ${PROTOC_LIB}
-    ${NAVIMAP_CORE_SYS_LIBS})
+# ★ render↔ui 是真实的符号级环（见 MODULE_SRCS 注释），必须用 --start-group 包住
+#   全部项目库，让链接器多轮扫描消解环。MSVC 的 link.exe 自带多轮，无需该选项。
+if(MSVC)
+    target_link_libraries(navimap_core PUBLIC
+        navmap_map navmap_route navmap_search navmap_render navmap_ui
+        navmap_pbf navmap_geo navmap_strpool navmap_plat navmap_mem
+        ${ZLIB_LIBRARIES} ${SQLITE3_LIBRARIES} ${PROTOC_LIB} ${NAVIMAP_CORE_SYS_LIBS})
+else()
+    target_link_libraries(navimap_core PUBLIC
+        -Wl,--start-group
+        navmap_map navmap_route navmap_search navmap_render navmap_ui
+        navmap_pbf navmap_geo navmap_strpool navmap_plat navmap_mem
+        ${ZLIB_LIBRARIES} ${SQLITE3_LIBRARIES} ${PROTOC_LIB} ${NAVIMAP_CORE_SYS_LIBS}
+        -Wl,--end-group)
+endif()
 
 
 
@@ -277,6 +350,23 @@ if(WIN32)
     # MinGW-w64 的 printf 格式检查把 %z / %ll 当成非法（ms_printf 原型），但这些
     # 是合法 C99，在 glibc/Linux 下零警告。此处仅抑制该工具链误报，不改变语义。
     target_compile_options(navimap_core PUBLIC -Wno-format)
+
+# 阶段 2：同样的 Windows 编译选项/宏也要套到五个模块库上（navimap_core 已不含业务 .c，
+# 真正的编译单元在模块库里）。叶子库（navmap_pbf/geo/...）已在各自定义处挂过 -Wno-format。
+set(NM_ALL_MOD_LIBS
+    navmap_map navmap_route navmap_search navmap_render navmap_ui navmap_core)
+if(MSVC)
+    foreach(t ${NM_ALL_MOD_LIBS})
+        target_compile_definitions(${t} PUBLIC
+            _CRT_SECURE_NO_WARNINGS _USE_MATH_DEFINES)
+    endforeach()
+endif()
+if(WIN32)
+    foreach(t ${NM_ALL_MOD_LIBS})
+        target_compile_definitions(${t} PUBLIC SDL_MAIN_HANDLED)
+        target_compile_options(${t} PUBLIC -Wno-format)
+    endforeach()
+endif()
 
     # ★★ Windows(MSYS2) 必须走编译启动器，否则 gcc 会静默失败。
     # 现象：ninja 在 Windows 上通过 cmd.exe 执行编译命令，cmd.exe 里 gcc/g++ 退出码
