@@ -161,6 +161,7 @@ set(ROUTE_SRCS
     src/route/sew.c
     src/route/restr.c
     src/route/cost.c
+    src/route/lmdist.c
     src/route/route.c
     src/route/lmtable.c
     src/route/revidx.c

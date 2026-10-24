@@ -24,6 +24,10 @@
 /* 瓦片缝合缓存槽数（2 的幂，哈希 + 线性探测）。详见 route.c 顶部注释历史。 */
 #define SEW_SLOTS 16384
 
+/* 同一坐标最多取多少个跨省成员（route.c 的 members_of/expand_dir 与
+ * lmdist.c 的 lm_dijkstra 三方共用 ⇒ 放在这里共享）。 */
+#define MAX_MEMBER     64
+
 /* A* 启发式分母；需 >= 全图最高限速才 admissible（原在 route.c，cost.c 的 heur 也用）。 */
 #define H_SPEED_KMH    130.0
 
@@ -38,6 +42,11 @@ typedef struct {
     SewEnt  *v;
     size_t   n;
 } SewSlot;
+
+/* 取落在同一坐标上的所有 (省,节点) 成员：route.c 定义，
+ * 搜索核心 expand_dir 与 lmdist.c 的 lm_dijkstra 都要用 ⇒ 导出。 */
+size_t members_of(Router *r, uint64_t ck, uint32_t in_prov, uint32_t in_node,
+                  SewEnt *mem);
 
 typedef struct {
     int       built;
