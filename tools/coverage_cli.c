@@ -15,6 +15,7 @@
 #include "map/mapset.h"
 #include "map/autobuild.h"
 #include "map/coverage.h"
+#include "tool_common.h"
 
 static const char *cov_text(int c)
 {
@@ -44,8 +45,7 @@ int main(int argc, char **argv)
     int have_ll = 0;
 
     AutoBuildOpt ab;
-    memset(&ab, 0, sizeof(ab));
-    ab.enable = 1;
+    tc_ab_init(&ab);
 
     for (int i = 1; i < argc; i++) {
         const char *a = argv[i];
@@ -58,7 +58,7 @@ int main(int argc, char **argv)
     }
 
     MapSet ms;
-    if (mapset_load_repair(&ms, graph, &ab, NULL) != 0) return 1;
+    if (tc_load_graph(&ms, graph, &ab) != 0) return 1;
     printf("图集 %d 个省\n", ms.n);
 
     if (have_ll == 3) {

@@ -24,17 +24,13 @@
 #include "route/route.h"
 #include "utils/geo.h"
 #include "utils/plat.h"
+#include "tool_common.h"
 
 static uint64_t mono_ms(void)
 {
     return nm_now_ms();                /* 平台层：clock_gettime / QPC */
 }
 
-static const char *arg_val(const char *a, const char *prefix)
-{
-    size_t n = strlen(prefix);
-    return strncmp(a, prefix, n) == 0 ? a + n : NULL;
-}
 
 static int parse_ll(const char *s, double *lat, double *lon)
 {
@@ -58,15 +54,14 @@ int main(int argc, char **argv)
     int want_stats = 0;
     RouteOpts opt = { .mode_time = 1, .bidir = 1, .heur_w = ROUTE_HEUR_W_DEFAULT };
     AutoBuildOpt ab;
-    memset(&ab, 0, sizeof(ab));
-    ab.enable = 1;
+    tc_ab_init(&ab);
 
     for (int i = 1; i < argc; i++) {
         const char *a = argv[i], *v;
-        if ((v = arg_val(a, "--graph=")))      graph = v;
-        else if ((v = arg_val(a, "--from=")))  from_s = v;
-        else if ((v = arg_val(a, "--mode=")))  opt.mode_time = (strcmp(v, "dist") != 0);
-        else if ((v = arg_val(a, "--q="))) {
+        if ((v = tc_arg_val(a, "--graph=")))      graph = v;
+        else if ((v = tc_arg_val(a, "--from=")))  from_s = v;
+        else if ((v = tc_arg_val(a, "--mode=")))  opt.mode_time = (strcmp(v, "dist") != 0);
+        else if ((v = tc_arg_val(a, "--q="))) {
             if (nq >= 256) { fprintf(stderr, "--q 太多（上限 256）\n"); return 2; }
             if (parse_ll(v, &q[nq][0], &q[nq][1]) != 0) {
                 fprintf(stderr, "--q 格式应为 lat,lon\n"); return 2;
@@ -86,7 +81,7 @@ int main(int argc, char **argv)
     }
 
     MapSet ms;
-    if (mapset_load_repair(&ms, graph, &ab, NULL) != 0) return 1;
+    if (tc_load_graph(&ms, graph, &ab) != 0) return 1;
 
     Router *r = router_create(&ms, &opt);
     if (!r) { fprintf(stderr, "路由初始化失败\n"); return 1; }

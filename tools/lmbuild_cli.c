@@ -34,6 +34,7 @@
 #include "route/route.h"
 #include "route/lmtable.h"
 #include "utils/plat.h"
+#include "tool_common.h"
 
 #define M_PER_E7  0.0111195        /* 1e-7 度纬度 = 多少米 */
 #define MAX_LM    64
@@ -44,11 +45,6 @@ static uint64_t mono_ms(void)
     return nm_now_ms();                /* 平台层：clock_gettime / QPC */
 }
 
-static const char *arg_val(const char *a, const char *prefix)
-{
-    size_t n = strlen(prefix);
-    return strncmp(a, prefix, n) == 0 ? a + n : NULL;
-}
 
 /* 内置地标（§50 定 10 个；§52 扩到 30 个；列表里备到 50 个供 §52.6 对照）
  *
@@ -234,19 +230,19 @@ int main(int argc, char **argv)
 
     for (int i = 1; i < argc; i++) {
         const char *a = argv[i], *v;
-        if ((v = arg_val(a, "--graph=")))        graph = v;
-        else if ((v = arg_val(a, "--out=")))     out   = v;
-        else if ((v = arg_val(a, "--cell=")))    cell_m = atof(v);
-        else if ((v = arg_val(a, "--penalty="))) penalty_m = atof(v);
-        else if ((v = arg_val(a, "--nlm=")))     want_nlm = atoi(v);
-        else if ((v = arg_val(a, "--lm="))) {
+        if ((v = tc_arg_val(a, "--graph=")))        graph = v;
+        else if ((v = tc_arg_val(a, "--out=")))     out   = v;
+        else if ((v = tc_arg_val(a, "--cell=")))    cell_m = atof(v);
+        else if ((v = tc_arg_val(a, "--penalty="))) penalty_m = atof(v);
+        else if ((v = tc_arg_val(a, "--nlm=")))     want_nlm = atoi(v);
+        else if ((v = tc_arg_val(a, "--lm="))) {
             if (nlm >= MAX_LM) { fprintf(stderr, "--lm 太多（上限 %d）\n", MAX_LM); return 2; }
             if (parse_ll(v, &lm[nlm][0], &lm[nlm][1]) != 0) {
                 fprintf(stderr, "--lm 格式应为 lat,lon\n"); return 2;
             }
             nlm++;
         }
-        else if ((v = arg_val(a, "--check="))) {
+        else if ((v = tc_arg_val(a, "--check="))) {
             if (nchk >= MAX_CHK) { fprintf(stderr, "--check 太多\n"); return 2; }
             if (parse_ll4(v, chk[nchk]) != 0) {
                 fprintf(stderr, "--check 格式应为 olat,olon,dlat,dlon\n"); return 2;
@@ -278,9 +274,8 @@ int main(int argc, char **argv)
 
     MapSet ms;
     AutoBuildOpt ab;
-    memset(&ab, 0, sizeof(ab));
-    ab.enable = 1;
-    if (mapset_load_repair(&ms, graph, &ab, NULL) != 0) return 1;
+    tc_ab_init(&ab);
+    if (tc_load_graph(&ms, graph, &ab) != 0) return 1;
 
     /* ★ 距离模式：表存米，用时才按 H_SPEED_KMH 换秒（时间口径下格对角罚项
        得按最慢限速算，会大到不能要 —— 见 lmtable.h 顶部注释） */

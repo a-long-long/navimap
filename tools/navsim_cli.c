@@ -27,13 +27,8 @@
 #include "route/maneuver.h"
 #include "route/navsim.h"
 #include "utils/geo.h"
+#include "tool_common.h"
 
-/* 见 route_cli.c 的注释：不要再手写 strncmp(a, "--x=", N) */
-static const char *arg_val(const char *a, const char *prefix)
-{
-    size_t n = strlen(prefix);
-    return strncmp(a, prefix, n) == 0 ? a + n : NULL;
-}
 
 static int parse_ll(const char *s, double *lat, double *lon)
 {
@@ -62,17 +57,16 @@ int main(int argc, char **argv)
 #define FAIL(...) do { printf("ASSERT-FAIL    " __VA_ARGS__); fails++; } while (0)
 
     AutoBuildOpt ab;
-    memset(&ab, 0, sizeof(ab));
-    ab.enable = 1;   /* 产物缺失/损坏时自动重建 */
+    tc_ab_init(&ab);   /* 产物缺失/损坏时自动重建 */
 
     for (int i = 1; i < argc; i++) {
         const char *a = argv[i], *v;
-        if ((v = arg_val(a, "--graph=")))       graph = v;
-        else if ((v = arg_val(a, "--from=")))   from_s = v;
-        else if ((v = arg_val(a, "--to=")))     to_s = v;
-        else if ((v = arg_val(a, "--speed=")))  speed = atof(v);
-        else if ((v = arg_val(a, "--dt=")))     dt = atof(v);
-        else if ((v = arg_val(a, "--max-steps="))) max_steps = atol(v);
+        if ((v = tc_arg_val(a, "--graph=")))       graph = v;
+        else if ((v = tc_arg_val(a, "--from=")))   from_s = v;
+        else if ((v = tc_arg_val(a, "--to=")))     to_s = v;
+        else if ((v = tc_arg_val(a, "--speed=")))  speed = atof(v);
+        else if ((v = tc_arg_val(a, "--dt=")))     dt = atof(v);
+        else if ((v = tc_arg_val(a, "--max-steps="))) max_steps = atol(v);
         else if (strcmp(a, "--no-autobuild") == 0) ab.enable = 0;
         else { fprintf(stderr, "未知参数 %s\n", a); return 2; }
     }
@@ -88,7 +82,7 @@ int main(int argc, char **argv)
     }
 
     MapSet ms;
-    if (mapset_load_repair(&ms, graph, &ab, NULL) != 0) return 1;
+    if (tc_load_graph(&ms, graph, &ab) != 0) return 1;
     /* heur_w 留 0：让 router_create 按"有没有 lm.bin"兜底（见 route.h ROUTE_HEUR_W_LM） */
     RouteOpts opt = { .mode_time = 1, .bidir = 1 };
     Router *r = router_create(&ms, &opt);

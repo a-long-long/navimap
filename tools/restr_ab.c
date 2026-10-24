@@ -30,6 +30,7 @@
 #include "map/autobuild.h"
 #include "map/binfmt.h"
 #include "route/route.h"
+#include "tool_common.h"
 
 /* 固定种子的 xorshift：验收必须可复现，不能用 rand()（不同 libc 序列不同） */
 static uint64_t rs = 88172645463325252ULL;
@@ -39,12 +40,6 @@ static double rnd01(void)
     return (double)(rs >> 11) / 9007199254740992.0;
 }
 
-static const char *arg_val(const char *a, const char *pfx)
-{
-    size_t n = strlen(pfx);
-    if (strncmp(a, pfx, n) != 0) return NULL;
-    return a + n;
-}
 
 static int32_t node_lat(const MapSrc *s, uint32_t nd)
 {
@@ -308,26 +303,25 @@ int main(int argc, char **argv)
     int nprobe = 40, nrandom = 0, nonly = 40, noseam = 0;
     double lat0 = 39.78, lat1 = 40.02, lon0 = 116.22, lon1 = 116.58;
     AutoBuildOpt ab;
-    memset(&ab, 0, sizeof(ab));
-    ab.enable = 1;
+    tc_ab_init(&ab);
 
     for (int i = 1; i < argc; i++) {
         const char *v;
-        if ((v = arg_val(argv[i], "--graph=")))  graph = v;
-        else if ((v = arg_val(argv[i], "--probe=")))  nprobe = atoi(v);
-        else if ((v = arg_val(argv[i], "--only=")))   nonly = atoi(v);
-        else if ((v = arg_val(argv[i], "--random="))) nrandom = atoi(v);
-        else if ((v = arg_val(argv[i], "--lat0=")))   lat0 = atof(v);
-        else if ((v = arg_val(argv[i], "--lat1=")))   lat1 = atof(v);
-        else if ((v = arg_val(argv[i], "--lon0=")))   lon0 = atof(v);
-        else if ((v = arg_val(argv[i], "--lon1=")))   lon1 = atof(v);
+        if ((v = tc_arg_val(argv[i], "--graph=")))  graph = v;
+        else if ((v = tc_arg_val(argv[i], "--probe=")))  nprobe = atoi(v);
+        else if ((v = tc_arg_val(argv[i], "--only=")))   nonly = atoi(v);
+        else if ((v = tc_arg_val(argv[i], "--random="))) nrandom = atoi(v);
+        else if ((v = tc_arg_val(argv[i], "--lat0=")))   lat0 = atof(v);
+        else if ((v = tc_arg_val(argv[i], "--lat1=")))   lat1 = atof(v);
+        else if ((v = tc_arg_val(argv[i], "--lon0=")))   lon0 = atof(v);
+        else if ((v = tc_arg_val(argv[i], "--lon1=")))   lon1 = atof(v);
         else if (strcmp(argv[i], "--no-seam-restr") == 0) noseam = 1;
         else if (strcmp(argv[i], "--no-autobuild") == 0) ab.enable = 0;
         else { fprintf(stderr, "未知参数 %s\n", argv[i]); return 2; }
     }
 
     MapSet ms;
-    if (mapset_load_repair(&ms, graph, &ab, NULL) != 0) {
+    if (tc_load_graph(&ms, graph, &ab) != 0) {
         fprintf(stderr, "加载失败: %s\n", graph);
         return 1;
     }

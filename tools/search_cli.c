@@ -21,12 +21,8 @@
 
 #include "search/search.h"
 #include "utils/geo.h"
+#include "tool_common.h"
 
-static const char *arg_val(const char *a, const char *prefix)
-{
-    size_t n = strlen(prefix);
-    return strncmp(a, prefix, n) == 0 ? a + n : NULL;
-}
 
 static int parse_ll(const char *s, double *lat, double *lon)
 {
@@ -53,11 +49,11 @@ int main(int argc, char **argv)
 
     for (int i = 1; i < argc; i++) {
         const char *a = argv[i], *v;
-        if ((v = arg_val(a, "--db=")))          db = v;
-        else if ((v = arg_val(a, "--q=")))      q = v;
-        else if ((v = arg_val(a, "--near=")))   near_s = v;
-        else if ((v = arg_val(a, "--limit=")))  limit = atoi(v);
-        else if ((v = arg_val(a, "--repeat="))) repeat = atoi(v);
+        if ((v = tc_arg_val(a, "--db=")))          db = v;
+        else if ((v = tc_arg_val(a, "--q=")))      q = v;
+        else if ((v = tc_arg_val(a, "--near=")))   near_s = v;
+        else if ((v = tc_arg_val(a, "--limit=")))  limit = atoi(v);
+        else if ((v = tc_arg_val(a, "--repeat="))) repeat = atoi(v);
         else if (strcmp(a, "--recall-check") == 0) recall_check = 1;
         else { fprintf(stderr, "未知参数 %s\n", a); return 2; }
     }

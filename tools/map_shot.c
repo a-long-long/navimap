@@ -29,14 +29,8 @@
 #include "map/binfmt.h"
 #include "map/coverage.h"
 #include "utils/plat.h"
+#include "tool_common.h"
 
-/* ★ 别再手写 strncmp(a, "--x=", N)：N 该写字面量长度还是长度-1 已经踩过三次。
-   统一走这里：不匹配返回 NULL，否则返回 '=' 之后的串。 */
-static const char *arg_val(const char *a, const char *prefix)
-{
-    size_t n = strlen(prefix);
-    return strncmp(a, prefix, n) == 0 ? a + n : NULL;
-}
 
 static int parse_ll(const char *s, double *lat, double *lon)
 {
@@ -198,18 +192,17 @@ int main(int argc, char **argv)
 
     /* 启动自愈（同 navimap）：源 pbf 在、产物没了/坏了就重建。默认开。 */
     AutoBuildOpt ab;
-    memset(&ab, 0, sizeof(ab));
-    ab.enable = 1;
+    tc_ab_init(&ab);
 
     for (int i = 1; i < argc; i++) {
         const char *v;
-        if ((v = arg_val(argv[i], "--from=")))     from_s = v;
-        else if ((v = arg_val(argv[i], "--to=")))  to_s = v;
+        if ((v = tc_arg_val(argv[i], "--from=")))     from_s = v;
+        else if ((v = tc_arg_val(argv[i], "--to=")))  to_s = v;
         else if (strcmp(argv[i], "--fit-route") == 0) fit_route = 1;
-        else if ((v = arg_val(argv[i], "--q=")))      q_s = v;
+        else if ((v = tc_arg_val(argv[i], "--q=")))      q_s = v;
         else if (strcmp(argv[i], "--sim") == 0)       sim = 1;
-        else if ((v = arg_val(argv[i], "--sim-sec=")))     sim_sec = atof(v);
-        else if ((v = arg_val(argv[i], "--sim-deviate="))) deviate_m = atof(v);
+        else if ((v = tc_arg_val(argv[i], "--sim-sec=")))     sim_sec = atof(v);
+        else if ((v = tc_arg_val(argv[i], "--sim-deviate="))) deviate_m = atof(v);
         else if (strncmp(argv[i], "--graph=", 8) == 0) graph = argv[i] + 8;
         else if (strncmp(argv[i], "--out=", 6) == 0) out = argv[i] + 6;
         else if (strncmp(argv[i], "--lat=", 6) == 0) { lat = atof(argv[i] + 6); have_center |= 1; }

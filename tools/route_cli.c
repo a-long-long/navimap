@@ -26,15 +26,8 @@
 #include "route/maneuver.h"
 #include "utils/geo.h"
 #include "utils/plat.h"
+#include "tool_common.h"
 
-/* ★ 别再手写 strncmp(a, "--x=", N)：N 该写字面量长度还是长度-1，这个项目
-   已经踩过三次（少 1 永不相等、多 1 把 '\0' 比进去），而且取值的偏移
-   a+N 还得跟着对。统一走这里：不匹配返回 NULL，否则返回 '=' 之后的串。 */
-static const char *arg_val(const char *a, const char *prefix)
-{
-    size_t n = strlen(prefix);
-    return strncmp(a, prefix, n) == 0 ? a + n : NULL;
-}
 
 static int parse_ll(const char *s, double *lat, double *lon)
 {
@@ -65,20 +58,19 @@ int main(int argc, char **argv)
        命令行没给 --heur-w，却一直是 1.4。要定点档位请用 --heur-w。 */
     RouteOpts opt = { .mode_time = 1, .bidir = 1 };  /* 默认双向；--bidir=0 退回单向做对照 */
     AutoBuildOpt ab;
-    memset(&ab, 0, sizeof(ab));
-    ab.enable = 1;   /* 产物缺失/损坏时自动重建 */
+    tc_ab_init(&ab);   /* 产物缺失/损坏时自动重建 */
 
     for (int i = 1; i < argc; i++) {
         const char *a = argv[i], *v;
-        if ((v = arg_val(a, "--graph=")))      graph = v;
-        else if ((v = arg_val(a, "--from=")))  from_s = v;
-        else if ((v = arg_val(a, "--to=")))    to_s = v;
-        else if ((v = arg_val(a, "--geojson="))) geojson = v;
-        else if ((v = arg_val(a, "--mode=")))
+        if ((v = tc_arg_val(a, "--graph=")))      graph = v;
+        else if ((v = tc_arg_val(a, "--from=")))  from_s = v;
+        else if ((v = tc_arg_val(a, "--to=")))    to_s = v;
+        else if ((v = tc_arg_val(a, "--geojson="))) geojson = v;
+        else if ((v = tc_arg_val(a, "--mode=")))
             opt.mode_time = (strcmp(v, "dist") != 0);
-        else if ((v = arg_val(a, "--max-expand=")))
+        else if ((v = tc_arg_val(a, "--max-expand=")))
             opt.max_expand = strtoull(v, NULL, 10);
-        else if ((v = arg_val(a, "--bidir=")))
+        else if ((v = tc_arg_val(a, "--bidir=")))
             opt.bidir = (atoi(v) != 0);
         else if (strcmp(a, "--maneuvers") == 0)     want_man = 1;
         else if (strcmp(a, "--avoid-toll") == 0)    opt.avoid_toll = 1;
@@ -96,9 +88,9 @@ int main(int argc, char **argv)
         /* 加权 A*（OsmAnd heuristicCoefficient）：f = g + w·h。
            w=1 标准 A*（默认，保证最优）；w>1 快但路径可能略长。
            用于出"速度 ↔ 路径质量"的档位表。 */
-        else if ((v = arg_val(a, "--heur-w=")))    opt.heur_w = atof(v);
-        else if ((v = arg_val(a, "--heur-w-hi="))) opt.heur_w_hi = atof(v);
-        else if ((v = arg_val(a, "--adapt-try="))) opt.adapt_try = strtoull(v, NULL, 10);
+        else if ((v = tc_arg_val(a, "--heur-w=")))    opt.heur_w = atof(v);
+        else if ((v = tc_arg_val(a, "--heur-w-hi="))) opt.heur_w_hi = atof(v);
+        else if ((v = tc_arg_val(a, "--adapt-try="))) opt.adapt_try = strtoull(v, NULL, 10);
         else if (strcmp(a, "--no-autobuild") == 0)  ab.enable = 0;
         else if (strncmp(a, "--repeat=", 9) == 0)   repeat = atoi(a + 9);
         else {
@@ -118,7 +110,7 @@ int main(int argc, char **argv)
     }
 
     MapSet ms;
-    if (mapset_load_repair(&ms, graph, &ab, NULL) != 0) return 1;
+    if (tc_load_graph(&ms, graph, &ab) != 0) return 1;
 
     Router *r = router_create(&ms, &opt);
     if (!r) { fprintf(stderr, "路由初始化失败\n"); return 1; }

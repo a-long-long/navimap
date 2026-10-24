@@ -502,7 +502,7 @@ else()
 endif()
 
 # 离屏渲染：自己用 SDL 存 BMP（SDL_SaveBMP），直接链 SDL2，但不链 navimap_sdl。
-add_executable(map_shot tools/map_shot.c)
+add_executable(map_shot tools/map_shot.c tools/tool_common.c)
 target_include_directories(map_shot PRIVATE ${SDL2_INCLUDE_DIRS})
 target_link_directories(map_shot PRIVATE ${SDL2_LIBRARY_DIRS})
 nm_link_tool(map_shot navmap_map navmap_route navmap_search navmap_render navmap_ui)
@@ -539,15 +539,15 @@ add_executable(heap_selftest tools/heap_selftest.c)
 nm_link_tool(heap_selftest navmap_route)
 
 # 路线计算（跨省 A*，坐标键接边）
-add_executable(route_cli tools/route_cli.c)
+add_executable(route_cli tools/route_cli.c tools/tool_common.c)
 nm_link_tool(route_cli navmap_map navmap_route navmap_search navmap_render navmap_ui)
 
 # 地标距离：一对多 Dijkstra（PLAN.md §48）
-add_executable(lmdist_cli tools/lmdist_cli.c)
+add_executable(lmdist_cli tools/lmdist_cli.c tools/tool_common.c)
 nm_link_tool(lmdist_cli navmap_map navmap_route navmap_search navmap_render navmap_ui)
 
 # 地标下界表 lm.bin 的构建（网格聚合，PLAN.md §49.6）
-add_executable(lmbuild_cli tools/lmbuild_cli.c)
+add_executable(lmbuild_cli tools/lmbuild_cli.c tools/tool_common.c)
 nm_link_tool(lmbuild_cli navmap_map navmap_route navmap_search navmap_render navmap_ui)
 
 # 反向入边索引 rev.bin 的生成与逐元素自验收（--verify）
@@ -555,15 +555,15 @@ add_executable(revbuild_cli tools/revbuild_cli.c)
 nm_link_tool(revbuild_cli navmap_map navmap_route navmap_search navmap_render navmap_ui)
 
 # 模拟定位 / 偏航 / 剩余 ETA 的无头验收（阶段 9 导航层）
-add_executable(navsim_cli tools/navsim_cli.c)
+add_executable(navsim_cli tools/navsim_cli.c tools/tool_common.c)
 nm_link_tool(navsim_cli navmap_map navmap_route navmap_search navmap_render navmap_ui)
 
 # via=way 两段转向限制的 A/B 对照验收（阶段 8 补）
-add_executable(restr_ab tools/restr_ab.c)
+add_executable(restr_ab tools/restr_ab.c tools/tool_common.c)
 nm_link_tool(restr_ab navmap_map navmap_route navmap_search navmap_render navmap_ui)
 
 # 地名 / POI 搜索的无头验收（阶段 7）
-add_executable(search_cli tools/search_cli.c)
+add_executable(search_cli tools/search_cli.c tools/tool_common.c)
 nm_link_tool(search_cli navmap_search)
 
 # 地名 / POI 库生成器（2026-09-23 补）
@@ -571,7 +571,7 @@ add_executable(places_build tools/places_build.c)
 nm_link_tool(places_build navmap_search)
 
 # 无地图区域检测（GUI 提示条的无头验收）
-add_executable(coverage_cli tools/coverage_cli.c)
+add_executable(coverage_cli tools/coverage_cli.c tools/tool_common.c)
 nm_link_tool(coverage_cli navmap_map navmap_route navmap_search navmap_render navmap_ui)
 
 # 平台抽象层（utils/plat.h）的全接口自验收（正反双向）。
