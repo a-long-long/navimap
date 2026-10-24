@@ -249,14 +249,17 @@ target_include_directories(navmap_map PUBLIC
 target_link_libraries(navmap_map PUBLIC
     navmap_pbf navmap_geo navmap_strpool navmap_plat navmap_mem)
 
-# navmap_search：仅叶子库（search→utils）
+# navmap_search：仅叶子库（search→utils）。search.c 真正调用 sqlite3_*，
+# 故把 sqlite3 收进本模块库，保证 search 系列工具（search_cli/places_build）
+# 只链 navmap_search 也能解析数据库符号（模块可独立复用，不必拖整库）。
 add_library(navmap_search STATIC ${SEARCH_SRCS})
 target_include_directories(navmap_search PUBLIC
     ${CMAKE_SOURCE_DIR}/src ${GEN_DIR}
     ${ZLIB_INCLUDE_DIRS} ${SQLITE3_INCLUDE_DIRS}
     ${PROTOC_INCLUDE_DIRS} ${PROTOC_REAL_INCLUDE_DIR})
 target_link_libraries(navmap_search PUBLIC
-    navmap_geo navmap_strpool navmap_plat navmap_mem)
+    navmap_geo navmap_strpool navmap_plat navmap_mem
+    ${SQLITE3_LIBRARIES})
 
 # navmap_route：map + 叶子库
 add_library(navmap_route STATIC ${ROUTE_SRCS})
@@ -396,28 +399,54 @@ endif()
 endif()
 
 # ---------------------------------------------------------------------------
+# 阶段 2（续）：24 个 exe 改为只链所需模块库。
+#   每个工具只链它真正用到的模块库（map/route/search/render/ui 的子集），
+#   叶子库（pbf/geo/strpool/plat/mem）与第三方库（z/sqlite3/protoc/m）统一在
+#   nm_link_tool 内补齐。因为 render↔ui 是真实符号级环，所有项目库必须包在
+#   -Wl,--start-group … -Wl,--end-group 里让链接器多轮扫描消解（MSVC link 自带
+#   多轮，走 else 分支纯列清单）。
+#   这样每个 exe 的链接面被裁剪到最小，且依赖方向被链接器强制（偷偷反向依赖会
+#   立刻 undefined-reference），符合 ARCH_ASSESSMENT.md §4 阶段2 的验收目标。
+# ---------------------------------------------------------------------------
+function(nm_link_tool tgt)
+    if(MSVC)
+        target_link_libraries(${tgt} PRIVATE
+            ${ARGN}
+            navmap_pbf navmap_geo navmap_strpool navmap_plat navmap_mem
+            ${ZLIB_LIBRARIES} ${SQLITE3_LIBRARIES} ${PROTOC_LIB} ${NM_LEAF_SYS_LIBS})
+    else()
+        target_link_libraries(${tgt} PRIVATE
+            -Wl,--start-group
+            ${ARGN}
+            navmap_pbf navmap_geo navmap_strpool navmap_plat navmap_mem
+            ${ZLIB_LIBRARIES} ${SQLITE3_LIBRARIES} ${PROTOC_LIB} ${NM_LEAF_SYS_LIBS}
+            -Wl,--end-group)
+    endif()
+endfunction()
+
+# ---------------------------------------------------------------------------
 # 命令行工具（GUI 无法无头验证，逻辑一律做成可断言的 CLI）
 # ---------------------------------------------------------------------------
 add_executable(pbf_info tools/pbf_info.c)
-target_link_libraries(pbf_info PRIVATE navimap_core)
+nm_link_tool(pbf_info)
 
 
 # PBF 按需解码显示层的等价性校验（"只留 PBF"方案的门禁）
 add_executable(pbfmap_check tools/pbfmap_check.c)
-target_link_libraries(pbfmap_check PRIVATE navimap_core)
+nm_link_tool(pbfmap_check navmap_map navmap_route navmap_search navmap_render navmap_ui)
 
 # via=way 转向限制形态探针（调研用）
 add_executable(restr_probe tools/restr_probe.c)
-target_link_libraries(restr_probe PRIVATE navimap_core)
+nm_link_tool(restr_probe)
 
 add_executable(graph_extract tools/graph_extract.c)
-target_link_libraries(graph_extract PRIVATE navimap_core)
+nm_link_tool(graph_extract navmap_map navmap_route navmap_search navmap_render navmap_ui)
 
 add_executable(graph_check tools/graph_check.c)
-target_link_libraries(graph_check PRIVATE navimap_core)
+nm_link_tool(graph_check navmap_map navmap_route navmap_search navmap_render navmap_ui)
 
 add_executable(tag_stats tools/tag_stats.c)
-target_link_libraries(tag_stats PRIVATE navimap_core)
+nm_link_tool(tag_stats)
 
 # ---------------------------------------------------------------------------
 # SDL 适配层：唯一直接依赖 SDL 的库。只有 SDL 窗口版（navmap）链它。
@@ -427,7 +456,13 @@ target_include_directories(navmap_sdl PUBLIC
     ${CMAKE_SOURCE_DIR}/src
     ${SDL2_INCLUDE_DIRS})
 target_link_directories(navmap_sdl PUBLIC ${SDL2_LIBRARY_DIRS})
-target_link_libraries(navmap_sdl PUBLIC navimap_core ${SDL2_LIBRARIES} Threads::Threads)
+target_link_libraries(navmap_sdl PUBLIC
+    -Wl,--start-group
+    navmap_map navmap_route navmap_search navmap_render navmap_ui
+    navmap_pbf navmap_geo navmap_strpool navmap_plat navmap_mem
+    ${ZLIB_LIBRARIES} ${SQLITE3_LIBRARIES} ${PROTOC_LIB} ${NAVIMAP_CORE_SYS_LIBS}
+    -Wl,--end-group
+    ${SDL2_LIBRARIES} Threads::Threads)
 
 # 主程序（GUI）
 add_executable(navmap src/main.c)
@@ -464,87 +499,90 @@ endif()
 add_executable(map_shot tools/map_shot.c)
 target_include_directories(map_shot PRIVATE ${SDL2_INCLUDE_DIRS})
 target_link_directories(map_shot PRIVATE ${SDL2_LIBRARY_DIRS})
-target_link_libraries(map_shot PRIVATE navimap_core ${SDL2_LIBRARIES} Threads::Threads)
+nm_link_tool(map_shot navmap_map navmap_route navmap_search navmap_render navmap_ui)
+target_link_libraries(map_shot PRIVATE ${SDL2_LIBRARIES} Threads::Threads)
 
 # 光栅 alpha 混色与 SDL 软渲染器的逐像素等价性（去 SDL 化的门禁）。
 add_executable(blend_equiv tools/blend_equiv.c)
 target_include_directories(blend_equiv PRIVATE ${SDL2_INCLUDE_DIRS})
 target_link_directories(blend_equiv PRIVATE ${SDL2_LIBRARY_DIRS})
-target_link_libraries(blend_equiv PRIVATE navimap_core ${SDL2_LIBRARIES} Threads::Threads)
+nm_link_tool(blend_equiv navmap_map navmap_route navmap_search navmap_render navmap_ui)
+target_link_libraries(blend_equiv PRIVATE ${SDL2_LIBRARIES} Threads::Threads)
 
 # 线段裁剪与 SDL_IntersectRectAndLine 的等价性（去 SDL 化的门禁）。
 add_executable(clip_equiv tools/clip_equiv.c)
 target_include_directories(clip_equiv PRIVATE ${SDL2_INCLUDE_DIRS})
 target_link_directories(clip_equiv PRIVATE ${SDL2_LIBRARY_DIRS})
-target_link_libraries(clip_equiv PRIVATE navimap_core ${SDL2_LIBRARIES} Threads::Threads)
+nm_link_tool(clip_equiv navmap_map navmap_route navmap_search navmap_render navmap_ui)
+target_link_libraries(clip_equiv PRIVATE ${SDL2_LIBRARIES} Threads::Threads)
 
 # 架构门禁：核心与 Qt 前端零 SDL 符号（正反双向）。
 add_executable(core_no_sdl tools/core_no_sdl.c)
-target_link_libraries(core_no_sdl PRIVATE navimap_core)
+nm_link_tool(core_no_sdl)
 
 # 跨省接边验证（阶段 8 坐标键路由的前提）
 add_executable(tile_xcheck tools/tile_xcheck.c)
-target_link_libraries(tile_xcheck PRIVATE navimap_core)
+nm_link_tool(tile_xcheck navmap_map navmap_route navmap_search navmap_render navmap_ui)
 
 # 瓦片下标 查表版 vs 精确版 的逐点等价性验收
 add_executable(tile_selftest tools/tile_selftest.c)
-target_link_libraries(tile_selftest PRIVATE navimap_core)
+nm_link_tool(tile_selftest navmap_map navmap_route navmap_search navmap_render navmap_ui)
 
 # 优先队列自验收（--expect-fail 是负向对照）
 add_executable(heap_selftest tools/heap_selftest.c)
-target_link_libraries(heap_selftest PRIVATE navimap_core)
+nm_link_tool(heap_selftest navmap_route)
 
 # 路线计算（跨省 A*，坐标键接边）
 add_executable(route_cli tools/route_cli.c)
-target_link_libraries(route_cli PRIVATE navimap_core)
+nm_link_tool(route_cli navmap_map navmap_route navmap_search navmap_render navmap_ui)
 
 # 地标距离：一对多 Dijkstra（PLAN.md §48）
 add_executable(lmdist_cli tools/lmdist_cli.c)
-target_link_libraries(lmdist_cli PRIVATE navimap_core)
+nm_link_tool(lmdist_cli navmap_map navmap_route navmap_search navmap_render navmap_ui)
 
 # 地标下界表 lm.bin 的构建（网格聚合，PLAN.md §49.6）
 add_executable(lmbuild_cli tools/lmbuild_cli.c)
-target_link_libraries(lmbuild_cli PRIVATE navimap_core)
+nm_link_tool(lmbuild_cli navmap_map navmap_route navmap_search navmap_render navmap_ui)
 
 # 反向入边索引 rev.bin 的生成与逐元素自验收（--verify）
 add_executable(revbuild_cli tools/revbuild_cli.c)
-target_link_libraries(revbuild_cli PRIVATE navimap_core)
+nm_link_tool(revbuild_cli navmap_map navmap_route navmap_search navmap_render navmap_ui)
 
 # 模拟定位 / 偏航 / 剩余 ETA 的无头验收（阶段 9 导航层）
 add_executable(navsim_cli tools/navsim_cli.c)
-target_link_libraries(navsim_cli PRIVATE navimap_core)
+nm_link_tool(navsim_cli navmap_map navmap_route navmap_search navmap_render navmap_ui)
 
 # via=way 两段转向限制的 A/B 对照验收（阶段 8 补）
 add_executable(restr_ab tools/restr_ab.c)
-target_link_libraries(restr_ab PRIVATE navimap_core)
+nm_link_tool(restr_ab navmap_map navmap_route navmap_search navmap_render navmap_ui)
 
 # 地名 / POI 搜索的无头验收（阶段 7）
 add_executable(search_cli tools/search_cli.c)
-target_link_libraries(search_cli PRIVATE navimap_core)
+nm_link_tool(search_cli navmap_search)
 
 # 地名 / POI 库生成器（2026-09-23 补）
 add_executable(places_build tools/places_build.c)
-target_link_libraries(places_build PRIVATE navimap_core)
+nm_link_tool(places_build navmap_search)
 
 # 无地图区域检测（GUI 提示条的无头验收）
 add_executable(coverage_cli tools/coverage_cli.c)
-target_link_libraries(coverage_cli PRIVATE navimap_core)
+nm_link_tool(coverage_cli navmap_map navmap_route navmap_search navmap_render navmap_ui)
 
 # 平台抽象层（utils/plat.h）的全接口自验收（正反双向）。
 add_executable(plat_selftest tools/plat_selftest.c)
-target_link_libraries(plat_selftest PRIVATE navimap_core)
+nm_link_tool(plat_selftest)
 
 # 字体契约验收：内置 Noto 字体集是否真能加载并出字形。
 add_executable(font_selftest tools/font_selftest.c)
-target_link_libraries(font_selftest PRIVATE navimap_core)
+nm_link_tool(font_selftest navmap_map navmap_route navmap_search navmap_render navmap_ui)
 
 # 字体诊断探针：中文变方框（tofu）时定位是"没有字形"还是"有字形但画不出"。
 add_executable(font_probe tools/font_probe.c)
-target_link_libraries(font_probe PRIVATE navimap_core)
+nm_link_tool(font_probe navmap_map navmap_route navmap_search navmap_render navmap_ui)
 
 # 字体链的中文覆盖断言：地图文字（stb_truetype）与 Qt 控件文字共用这条候选链。
 add_executable(font_cjk_check tools/font_cjk_check.c)
-target_link_libraries(font_cjk_check PRIVATE navimap_core)
+nm_link_tool(font_cjk_check navmap_map navmap_route navmap_search navmap_render navmap_ui)
 
 # ---------------------------------------------------------------------------
 # Windows(MSYS2)：给所有目标挂编译启动器。
