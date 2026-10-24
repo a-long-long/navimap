@@ -26,6 +26,7 @@ extern "C" {
 }
 
 #include "main_window.h"
+#include "qt_font.h"
 
 int main(int argc, char **argv)
 {
@@ -38,6 +39,8 @@ int main(int argc, char **argv)
     int pbf_lru = 3;
     const char *shot = NULL;          /* --shot=path：出一张图就退出 */
     int grid = 0;                     /* --grid：开局打开坐标网叠加层 */
+    int ui_test = 0;                  /* --ui-test：跑无头 UI 自检后退出 */
+    int shot_search = 0;              /* --shot-search：截图前先展开搜索框 */
 
     AutoBuildOpt ab;
     memset(&ab, 0, sizeof(ab));
@@ -55,6 +58,8 @@ int main(int argc, char **argv)
         else if (strncmp(argv[i], "--sources=", 10) == 0) ab.src_dir = argv[i] + 10;
         else if (strncmp(argv[i], "--shot=", 7) == 0) shot = argv[i] + 7;
         else if (strcmp(argv[i], "--grid") == 0) grid = 1;
+        else if (strcmp(argv[i], "--ui-test") == 0) ui_test = 1;
+        else if (strcmp(argv[i], "--shot-search") == 0) shot_search = 1;
         else if (strncmp(argv[i], "--pbf-display=", 14) == 0) {
             pbf_display = argv[i] + 14;
             const char *colon = strrchr(pbf_display, ':');
@@ -75,17 +80,24 @@ int main(int argc, char **argv)
     QApplication app(argc, argv);
     app.setApplicationName(QStringLiteral("NavMap"));
 
-    /* ★ 先于 app_init 自行初始化 SDL，并带 NOPARACHUTE：SDL_Init 默认会给
-     * SIGINT/SIGTERM 装处理器（parachute），其机制是把"退出请求"塞进事件
-     * 队列等 SDL_PollEvent 消费——Qt 应用不轮询 SDL 事件，信号就被整个吞掉
-     * （实测：timeout 8 发 TERM 进程纹丝不动，只能 SIGKILL）。
-     * 我们只需要 SDL 的线程/互斥量/surface，窗口归 Qt，所以不要它的信号伞。 */
-    SDL_SetHint(SDL_HINT_NO_SIGNAL_HANDLERS, "1");
-    SDL_Init(SDL_INIT_VIDEO | SDL_INIT_NOPARACHUTE);
+    /* ★ Qt 控件的中文字体：Qt 自己画控件文字，走 Qt 的字体系统；地图上的文字
+     *   是 C 侧 stb_truetype 画的（两套互不相干）。不显式给 Qt 中文字体的话，
+     *   没装中文字体的机器上控件文字全是方框（tofu），而地图文字却正常。
+     *   这里把 C 侧自带的字体（含 DroidSansFallback = CJK）注册进 Qt 字体库，
+     *   并设成"中英回退链"。详见 qt_font.cpp。 */
+    qt_setup_fonts(font_size > 0 ? font_size : 0);
+
+    /* ★ Qt 前端**不初始化也不链接 SDL**：画布缓冲自己管（见 map_canvas.cpp），
+     * 窗口/事件全是 Qt 的。
+     * 以前这里必须 SDL_Init(SDL_INIT_VIDEO|SDL_INIT_NOPARACHUTE) 并设
+     * SDL_HINT_NO_SIGNAL_HANDLERS——因为 SDL 默认会给 SIGINT/SIGTERM 装
+     * "parachute"处理器，把退出请求塞进 SDL 事件队列等 SDL_PollEvent 消费，
+     * 而 Qt 应用不轮询 SDL 事件，信号就被整个吞掉（实测 timeout 8 发 TERM
+     * 进程纹丝不动，只能 SIGKILL）。现在不碰 SDL，这个坑整个消失：
+     * Qt 的信号处理是 Qt 自己的，与 SDL 无关。 */
 
     /* C 核心生命周期：app_init 装图集/字体/搜索库；qt_ui=1 让 paint_frame
-     * 跳过 SDL 自绘 chrome（由 Qt 控件承担）。app_init 里看到 SDL 已初始化
-     * 就不会再碰它（window.c: SDL_WasInit 判断）。 */
+     * 跳过自绘 chrome（由 Qt 控件承担）。 */
     App a;
     if (app_init(&a, graph, w, h, font, font_size, &ab) != 0) return 1;
     a.qt_ui = 1;
@@ -119,13 +131,29 @@ int main(int argc, char **argv)
 
     MainWindow win(&a);
 
+    if (ui_test) {
+        /* 无头 UI 自检：断言"搜索按钮 → 点击 → 输入框出现 → Esc 收起"
+           这条交互链，以及所有按钮都有悬停提示。
+           ★ 必须先把窗口 show() 出来：控件的 isVisible() 依赖祖先可见，
+             否则"初始可见 / 点击后可见"这两条都测不准。 */
+        win.resize(w, h);
+        win.show();
+        QApplication::processEvents();
+        int rc = win.runUiSelfTest();
+        app_shutdown(&a);
+        return rc;
+    }
+
     if (shot) {
         /* 无人值守：渲染一帧抓全窗口（含 chrome 控件）存 PNG */
         if (grid) win.setShowGrid(true);
+        if (shot_search) win.expandSearchForShot();   /* 展开搜索框，便于看展开态 */
         win.resize(w, h);
         win.show();
         QApplication::processEvents();   /* 让布局/首帧完成 */
         for (int i = 0; i < 3; i++) QApplication::processEvents();
+        /* 画布右下角坐标框 / 左下角路线信息都由 paintEvent 自动绘制，
+           不再需要像原先那样显式刷新状态栏（--shot 不启动主循环 ⇒ 状态栏空白）。 */
         QImage img = win.grab().toImage();
         if (!img.save(QString::fromUtf8(shot))) {
             fprintf(stderr, "保存截图失败: %s\n", shot);

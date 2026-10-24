@@ -167,6 +167,71 @@ fi
 run plat_selftest     "ASSERT-OK" "$BUILD/plat_selftest"
 run plat_selftest_neg "ASSERT-OK" "$BUILD/plat_selftest" --negative
 
+# ---- 去 SDL 化的三条门禁（方案2）----
+#
+# 背景：navimap_core 已做到"零 SDL"，Qt 前端（navmap_qt）一行 SDL 都不链，
+# SDL 只存在于两个适配层（navimap_sdl / map_shot）。这条边界一旦被悄悄放宽，
+# 编译照样过、运行照样正常，只是 Qt 前端又背上了 SDL2.dll 依赖 —— 直到某天
+# 在没装 SDL 的机器上构建才炸。所以必须把边界**钉成可断言的判据**。
+#
+# ① 光栅 alpha 混色与 SDL 软渲染器逐像素等价：
+#    自写 raster_px_rgba 与 SDL 的混色公式差 1 级（SDL 是两项分别除 255 再相加，
+#    我们原先是一次除），13.9% 的色值对不上 ⇒ 画面上"同一块面板深浅略不同"。
+#    肉眼看不出，但逐像素比对会报差异 —— 这正是它该被门禁住的原因。
+run blend_equiv "BLEND-EQUIV-OK" "$BUILD/blend_equiv"
+
+# ② 线段裁剪与 SDL_IntersectRectAndLine 等价：
+#    手写 Cohen-Sutherland 与 SDL 的实现在 34.3% 的越界线段上差 1 像素，
+#    症状是"画布边缘的路多/少一像素"。已按 SDL 的 SDL_rect_impl.h 逐字重写。
+run clip_equiv "CLIP-EQUIV-OK" "$BUILD/clip_equiv"
+
+# ③ 架构边界：核心与 Qt 前端零 SDL 符号；SDL 适配层**必须**有（负向对照，
+#    证明检查器不是"永远绿"的空壳）。
+#   产物名要补后缀：Windows 上是 navimap.exe，Linux 上是 navimap。
+if [ -x "$BUILD/core_no_sdl" ]; then
+    exefile() { if [ -x "$1.exe" ]; then echo "$1.exe"; else echo "$1"; fi; }
+    run core_no_sdl "CORE-NO-SDL-OK" "$BUILD/core_no_sdl" \
+        "$(exefile "$BUILD/navmap_qt")" "$BUILD/libnavimap_core.a"
+    run core_no_sdl_sdl "CORE-NO-SDL-OK" "$BUILD/core_no_sdl" --expect-sdl \
+        "$(exefile "$BUILD/navimap")"
+fi
+
+# ---- 字体链的中文覆盖（中文变方框的根因门禁）----
+#
+# 地图上的文字（C 侧 stb_truetype）和 Qt 控件上的文字（Qt 自己的字体系统）
+# **共用同一条候选链**（plat.c 的 nm_font_candidates）。链里没有能画中文的
+# 字体 ⇒ 两边都变方框（tofu）。
+#
+# 为什么单列一条：字体链的失效是**静默**的 —— 编译过、运行正常、地图照画，
+# 只是字变成了方框，很容易被当成"渲染 bug"去查错方向。
+#
+# 判据是查字体文件**本身**的 cmap（stb_truetype 的 FindGlyphIndex）
+# 且要求光栅化后非零像素 > 0 —— 只看 index 会漏掉"有字形但画不出"的情况。
+run font_cjk "FONT-CJK-OK" "$BUILD/font_cjk_check"
+
+# ★ 负向对照：--negative 断言**检测逻辑本身**正反两侧都对 ——
+#   无中文字体必须被判成"无中文"，有中文字体必须被判成"有中文"。
+#   （不要用"把字体藏起来"那种对照：藏起自带字体后系统字体还在，
+#     判据照样通过 ⇒ 那种对照是假的，测不出检查器有没有在干活。）
+run font_cjk_neg "FONT-CJK-OK" "$BUILD/font_cjk_check" --negative
+
+# ---- Qt 前端的 UI 交互自检 ----
+#
+# "搜索栏改成按钮、点击才出现" 这类交互，**截图只能证明静态样子对**，
+# 证明不了"点了真的会出现、Esc 真的会收起"。这类"注释写了 ≠ 路径落实"的洞，
+# 本项目踩过好几次（窗口最小化/最大化按钮、font_drop_textures）。
+#
+# --ui-test 断言：初始按钮可见/输入框隐藏 → 点按钮输入框出现并聚焦 →
+# 输入触发查询 → Esc 收起输入框 → 所有自有按钮都有悬停提示 →
+# 右栏按钮浮在画布上。
+#
+# ★ 负向对照已实测：把 eventFilter 里的 hideSearch() 去掉 ⇒ 立刻报 2 项 FAIL。
+if [ -x "$BUILD/navmap_qt" ] || [ -x "$BUILD/navmap_qt.exe" ]; then
+    exefile2() { if [ -x "$1.exe" ]; then echo "$1.exe"; else echo "$1"; fi; }
+    run qt_ui_test "QT-UI-OK" env QT_QPA_PLATFORM=offscreen \
+        "$(exefile2 "$BUILD/navmap_qt")" --ui-test --w=900 --h=600
+fi
+
 # ---- 优先队列：每次 pop 必须是当前最小值（PLAN.md §37）----
 # 堆坏了不会崩，只会让 A* 悄悄弹出非最小节点、路线变长。所以要有专门判据：
 # 20 万次随机操作，每次 pop 与**独立参考实现**对拍 + 多重集比对 + 堆不变式。

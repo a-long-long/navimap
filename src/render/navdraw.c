@@ -6,6 +6,7 @@
 #include <math.h>
 
 #include "render/paint.h"
+#include "render/raster.h"
 #include "route/maneuver.h"
 
 #include "map/coverage.h"
@@ -13,11 +14,11 @@
 /* 段的两端点 + 颜色。0 = 未走（蓝），1 = 已走过（灰） */
 typedef struct { int x0, y0, x1, y1, done; } RSeg;
 
-int paint_route(SDL_Renderer *r, const MapView *v,
+int paint_route(Raster *rs, const MapView *v,
                 const int32_t *lat_e7, const int32_t *lon_e7, uint32_t n,
                 int width, int done_seg, double done_t)
 {
-    if (!r || !v || n < 2) return 0;
+    if (!rs || !v || n < 2) return 0;
     if (width <= 0) width = v->zoom >= 13.0 ? 6 : (v->zoom >= 11.0 ? 4 : 3);
 
     /* 投影一次，两遍复用（白描边 + 彩芯）。逐段重复投影会把三角函数
@@ -65,6 +66,7 @@ int paint_route(SDL_Renderer *r, const MapView *v,
 
     for (int pass = 0; pass < 2; pass++) {
         int w = pass == 0 ? width + 4 : width;
+        uint32_t col;
         for (uint32_t i = 0; i < ns; i++) {
             int x0 = sg[i].x0, y0 = sg[i].y0, x1 = sg[i].x1, y1 = sg[i].y1;
             if ((x0 < -margin && x1 < -margin) ||
@@ -73,15 +75,13 @@ int paint_route(SDL_Renderer *r, const MapView *v,
                 (y0 > H + margin && y1 > H + margin))
                 continue;
             if (pass == 0) {
-                SDL_SetRenderDrawColor(r, 255, 255, 255, 255);
+                col = raster_rgb(rs, 255, 255, 255);
             } else if (sg[i].done) {
-                /* 已走过：压暗成灰蓝，和前方未走的蓝一眼能分开 */
-                SDL_SetRenderDrawColor(r, 130, 138, 150, 255);
+                col = raster_rgb(rs, 130, 138, 150);
             } else {
-                SDL_SetRenderDrawColor(r, NAV_ROUTE_R, NAV_ROUTE_G,
-                                       NAV_ROUTE_B, 255);
+                col = raster_rgb(rs, NAV_ROUTE_R, NAV_ROUTE_G, NAV_ROUTE_B);
             }
-            paint_thick_line(r, x0, y0, x1, y1, w);
+            paint_thick_line(rs, x0, y0, x1, y1, w, col);
             if (pass == 1 && !sg[i].done) drawn++;
         }
     }
@@ -90,10 +90,10 @@ int paint_route(SDL_Renderer *r, const MapView *v,
     return drawn;
 }
 
-/* 三角形填充：SDL 没有多边形填充，软件渲染下直接按重心坐标逐点画。
-   车头只有 30×30 像素，这点循环比引一套多边形光栅化划算。 */
-static void fill_triangle(SDL_Renderer *r, int x0, int y0, int x1, int y1,
-                          int x2, int y2)
+/* 三角形填充：直接按重心坐标逐点画（车头只有 30×30 像素，这点循环比引一套
+   多边形光栅化划算）。color 为已打包的 32 位像素值。 */
+static void fill_triangle(Raster *rs, int x0, int y0, int x1, int y1,
+                          int x2, int y2, uint32_t color)
 {
     int mnx = x0, mxx = x0, mny = y0, mxy = y0;
     int xs[3] = { x0, x1, x2 }, ys[3] = { y0, y1, y2 };
@@ -111,12 +111,12 @@ static void fill_triangle(SDL_Renderer *r, int x0, int y0, int x1, int y1,
             double w1 = ((x2 - x) * (y0 - y) - (x0 - x) * (y2 - y)) / area;
             double w2 = 1.0 - w0 - w1;
             if (w0 >= -0.001 && w1 >= -0.001 && w2 >= -0.001)
-                SDL_RenderDrawPoint(r, x, y);
+                raster_point(rs, x, y, color);
         }
     }
 }
 
-void paint_nav_car(SDL_Renderer *r, const MapView *v,
+void paint_nav_car(Raster *rs, const MapView *v,
                    double lat, double lon, double heading_deg)
 {
     int x, y;
@@ -141,13 +141,11 @@ void paint_nav_car(SDL_Renderer *r, const MapView *v,
     int w2x = (int)llround(b2x + (b2x - gcx) * 0.28);
     int w2y = (int)llround(b2y + (b2y - gcy) * 0.28);
 
-    SDL_SetRenderDrawColor(r, 255, 255, 255, 255);
-    fill_triangle(r, wtx, wty, w1x, w1y, w2x, w2y);
-    SDL_SetRenderDrawColor(r, 20, 90, 210, 255);
-    fill_triangle(r, tipx, tipy, b1x, b1y, b2x, b2y);
+    fill_triangle(rs, wtx, wty, w1x, w1y, w2x, w2y, raster_rgb(rs, 255, 255, 255));
+    fill_triangle(rs, tipx, tipy, b1x, b1y, b2x, b2y, raster_rgb(rs, 20, 90, 210));
 }
 
-void paint_nav_marker(SDL_Renderer *r, const MapView *v,
+void paint_nav_marker(Raster *rs, const MapView *v,
                       double lat, double lon, int is_start, Font *f)
 {
     int x, y;
@@ -155,31 +153,22 @@ void paint_nav_marker(SDL_Renderer *r, const MapView *v,
     if (x < -50 || y < -50 || x > v->w + 50 || y > v->h + 50) return;
 
     /* 白底方块 + 彩色芯：不管压在什么颜色的路/建筑上都看得见 */
-    SDL_SetRenderDrawColor(r, 255, 255, 255, 255);
-    SDL_Rect out = { x - 8, y - 8, 17, 17 };
-    SDL_RenderFillRect(r, &out);
-    SDL_SetRenderDrawColor(r, 40, 40, 40, 255);
-    SDL_RenderDrawRect(r, &out);
-
-    SDL_SetRenderDrawColor(r, is_start ? 40 : 226, is_start ? 170 : 52,
-                           is_start ? 90 : 52, 255);
-    SDL_Rect in = { x - 5, y - 5, 11, 11 };
-    SDL_RenderFillRect(r, &in);
+    raster_fill_rect(rs, x - 8, y - 8, 17, 17, 255, 255, 255, 255);
+    raster_rect(rs, x - 8, y - 8, 17, 17, 40, 40, 40, 255);
+    raster_fill_rect(rs, x - 5, y - 5, 11, 11,
+                     is_start ? 40 : 226, is_start ? 170 : 52, is_start ? 90 : 52, 255);
 
     if (f) {
-        int tw = font_text_w(f, is_start ? "起点" : "终点");
-        font_draw(f, r, x + 12, y - 7, is_start ? "起点" : "终点",
-                  30, 30, 40, 1);
-        (void)tw;
+        font_draw(f, rs, x + 12, y - 7, is_start ? "起点" : "终点", 30, 30, 40, 1);
     }
 }
 
 /* 底部导航条：左边大字号转向 + 小字号"多远/进哪条路"，右边剩余里程与 ETA。
    高度固定，宽度按内容取（上限 760），屏幕窄时自动收窄。 */
-void paint_nav_banner(SDL_Renderer *r, const MapView *v, Font *f, Font *fbig,
+void paint_nav_banner(Raster *rs, const MapView *v, Font *f, Font *fbig,
                       int line_h, int line_h_big, const NavBanner *b)
 {
-    if (!r || !f || !b) return;
+    if (!rs || !f || !b) return;
     const char *turn = b->turn ? b->turn : "";
     const char *dist = b->dist ? b->dist : "";
     const char *road = b->road ? b->road : "";
@@ -210,29 +199,24 @@ void paint_nav_banner(SDL_Renderer *r, const MapView *v, Font *f, Font *fbig,
     int bx = (v->w - bw) / 2;
     int by = v->h - bh - 16;
 
-    SDL_SetRenderDrawBlendMode(r, SDL_BLENDMODE_BLEND);
-    SDL_SetRenderDrawColor(r, 18, 26, 42, 232);
-    SDL_Rect box = { bx, by, bw, bh };
-    SDL_RenderFillRect(r, &box);
-    SDL_SetRenderDrawColor(r, 90, 160, 255, 255);
-    SDL_RenderDrawRect(r, &box);
-    SDL_SetRenderDrawBlendMode(r, SDL_BLENDMODE_NONE);
+    raster_fill_rect(rs, bx, by, bw, bh, 18, 26, 42, 232);
+    raster_rect(rs, bx, by, bw, bh, 90, 160, 255, 255);
 
     int ty = by + 10;
-    font_draw(fb, r, bx + 20, ty, turn, 255, 255, 255, 0);
-    font_draw(f,  r, bx + 20, ty + lhb + 4, sub, 198, 210, 228, 0);
+    font_draw(fb, rs, bx + 20, ty, turn, 255, 255, 255, 0);
+    font_draw(f,  rs, bx + 20, ty + lhb + 4, sub, 198, 210, 228, 0);
 
     int rx = bx + bw - 20;
-    if (*rem) font_draw(f, r, rx - w_rem, ty + 2, rem, 150, 220, 160, 0);
-    if (*eta) font_draw(f, r, rx - w_eta, ty + 2 + line_h + 2, eta, 150, 220, 160, 0);
+    if (*rem) font_draw(f, rs, rx - w_rem, ty + 2, rem, 150, 220, 160, 0);
+    if (*eta) font_draw(f, rs, rx - w_eta, ty + 2 + line_h + 2, eta, 150, 220, 160, 0);
 }
 
 /* 搜索框：顶栏居中。输入框一行（大字号）+ 结果列表。
    宽度按最长的一行结果收，上限 560，屏幕窄时自动让位。 */
-void paint_search_box(SDL_Renderer *r, const MapView *v, Font *f, Font *fbig,
+void paint_search_box(Raster *rs, const MapView *v, Font *f, Font *fbig,
                       int line_h, int line_h_big, const SearchBoxView *sb)
 {
-    if (!r || !f || !sb || !sb->active) return;
+    if (!rs || !f || !sb || !sb->active) return;
     const char *text    = sb->text    ? sb->text    : "";
     const char *editing = sb->editing ? sb->editing : "";
     int show = sb->n_hits;
@@ -272,54 +256,37 @@ void paint_search_box(SDL_Renderer *r, const MapView *v, Font *f, Font *fbig,
     int bx = (v->w - bw) / 2, by = 12;
     int bh = box_h + show * row_h + 8;
 
-    SDL_SetRenderDrawBlendMode(r, SDL_BLENDMODE_BLEND);
-    SDL_SetRenderDrawColor(r, 20, 28, 44, 236);
-    SDL_Rect box = { bx, by, bw, bh };
-    SDL_RenderFillRect(r, &box);
-    SDL_SetRenderDrawColor(r, 110, 170, 255, 255);
-    SDL_RenderDrawRect(r, &box);
-    SDL_SetRenderDrawBlendMode(r, SDL_BLENDMODE_NONE);
+    raster_fill_rect(rs, bx, by, bw, bh, 20, 28, 44, 236);
+    raster_rect(rs, bx, by, bw, bh, 110, 170, 255, 255);
 
     /* 输入框：白底 + 已提交文本（黑）+ 组合中文本（灰，带下划线感） */
-    SDL_SetRenderDrawColor(r, 250, 250, 250, 255);
-    SDL_Rect ib = { bx + 12, by + 8, bw - 24, lhb + 6 };
-    SDL_RenderFillRect(r, &ib);
+    raster_fill_rect(rs, bx + 12, by + 8, bw - 24, lhb + 6, 250, 250, 250, 255);
     int tw = font_text_w(fb, text);
-    font_draw(fb, r, ib.x + 6, ib.y + 3, text, 20, 24, 34, 0);
+    font_draw(fb, rs, bx + 18, by + 11, text, 20, 24, 34, 0);
     if (*editing)
-        font_draw(fb, r, ib.x + 6 + tw, ib.y + 3, editing, 90, 120, 190, 0);
+        font_draw(fb, rs, bx + 18 + tw, by + 11, editing, 90, 120, 190, 0);
     /* 光标 */
-    SDL_SetRenderDrawColor(r, 40, 90, 190, 255);
-    SDL_Rect cur = { ib.x + 6 + tw + font_text_w(fb, editing) + 1, ib.y + 4,
-                     2, lhb };
-    SDL_RenderFillRect(r, &cur);
+    raster_fill_rect(rs, bx + 18 + tw + font_text_w(fb, editing) + 1, by + 12,
+                     2, lhb, 40, 90, 190, 255);
 
     for (int i = 0; i < show; i++) {
         int ry = by + box_h + i * row_h;
-        if (i == sb->sel) {
-            SDL_SetRenderDrawBlendMode(r, SDL_BLENDMODE_BLEND);
-            SDL_SetRenderDrawColor(r, 44, 92, 190, 235);
-            SDL_Rect hr = { bx + 6, ry - 2, bw - 12, row_h };
-            SDL_RenderFillRect(r, &hr);
-            SDL_SetRenderDrawBlendMode(r, SDL_BLENDMODE_NONE);
-        }
-        int fg_r = 236, fg_g = 240, fg_b = 248;
-        font_draw(f, r, bx + 20, ry, rows[i], (uint8_t)fg_r, (uint8_t)fg_g,
-                  (uint8_t)fg_b, 0);
+        if (i == sb->sel)
+            raster_fill_rect(rs, bx + 6, ry - 2, bw - 12, row_h, 44, 92, 190, 235);
+        font_draw(f, rs, bx + 20, ry, rows[i], 236, 240, 248, 0);
         if (dists[i][0]) {
             int wd = font_text_w(f, dists[i]);
-            font_draw(f, r, bx + bw - 16 - wd, ry, dists[i], 160, 200, 255, 0);
+            font_draw(f, rs, bx + bw - 16 - wd, ry, dists[i], 160, 200, 255, 0);
         }
     }
     if (sb->n_hits > show) {
         char more[48];
         snprintf(more, sizeof(more), "…还有 %d 条", sb->n_hits - show);
-        font_draw(f, r, bx + 20, by + box_h + show * row_h, more,
-                  150, 165, 190, 0);
+        font_draw(f, rs, bx + 20, by + box_h + show * row_h, more, 150, 165, 190, 0);
     }
 }
 
-void paint_search_pin(SDL_Renderer *r, const MapView *v,
+void paint_search_pin(Raster *rs, const MapView *v,
                       double lat, double lon, int selected, Font *f,
                       const char *label)
 {
@@ -327,17 +294,13 @@ void paint_search_pin(SDL_Renderer *r, const MapView *v,
     mv_project(v, lat, lon, &x, &y);
     if (x < -60 || y < -60 || x > v->w + 60 || y > v->h + 60) return;
 
-    SDL_SetRenderDrawColor(r, 255, 255, 255, 255);
-    SDL_Rect out = { x - 7, y - 7, 15, 15 };
-    SDL_RenderFillRect(r, &out);
-    SDL_SetRenderDrawColor(r, 40, 44, 56, 255);
-    SDL_RenderDrawRect(r, &out);
-    SDL_SetRenderDrawColor(r, selected ? 30 : 150, selected ? 110 : 158,
-                           selected ? 235 : 175, 255);
-    SDL_Rect in = { x - 4, y - 4, 9, 9 };
-    SDL_RenderFillRect(r, &in);
+    raster_fill_rect(rs, x - 7, y - 7, 15, 15, 255, 255, 255, 255);
+    raster_rect(rs, x - 7, y - 7, 15, 15, 40, 44, 56, 255);
+    raster_fill_rect(rs, x - 4, y - 4, 9, 9,
+                     selected ? 30 : 150, selected ? 110 : 158,
+                     selected ? 235 : 175, 255);
     if (f && label && *label)
-        font_draw(f, r, x + 11, y - 7, label, 30, 34, 48, 1);
+        font_draw(f, rs, x + 11, y - 7, label, 30, 34, 48, 1);
 }
 
 /* 缩放按钮：右下角竖排两个方块。Z+ 在上、Z- 在下。
@@ -345,55 +308,50 @@ void paint_search_pin(SDL_Renderer *r, const MapView *v,
 #define ZB_SIZE 36
 #define ZB_MARGIN 14
 
-static void zoom_button_rects(const MapView *v, SDL_Rect *in, SDL_Rect *out)
+static void zoom_button_rects(const MapView *v, RectI *in, RectI *out)
 {
     int x = v->w - ZB_MARGIN - ZB_SIZE;
     int yb = v->h - ZB_MARGIN - ZB_SIZE;         /* 下面那个（缩小） */
     int yt = yb - ZB_SIZE - 8;                   /* 上面那个（放大） */
-    if (in)  *in  = (SDL_Rect){ x, yt, ZB_SIZE, ZB_SIZE };
-    if (out) *out = (SDL_Rect){ x, yb, ZB_SIZE, ZB_SIZE };
+    if (in)  *in  = (RectI){ x, yt, ZB_SIZE, ZB_SIZE };
+    if (out) *out = (RectI){ x, yb, ZB_SIZE, ZB_SIZE };
 }
 
-void paint_zoom_buttons(SDL_Renderer *r, const MapView *v, Font *f)
+void paint_zoom_buttons(Raster *rs, const MapView *v, Font *f)
 {
-    if (!r) return;
-    SDL_Rect ri, ro;
+    if (!rs) return;
+    RectI ri, ro;
     zoom_button_rects(v, &ri, &ro);
 
-    SDL_SetRenderDrawBlendMode(r, SDL_BLENDMODE_BLEND);
-    SDL_Rect *rs[2] = { &ri, &ro };
+    RectI *rects[2] = { &ri, &ro };
     for (int i = 0; i < 2; i++) {
-        SDL_SetRenderDrawColor(r, 250, 250, 250, 235);
-        SDL_RenderFillRect(r, rs[i]);
-        SDL_SetRenderDrawColor(r, 60, 70, 90, 255);
-        SDL_RenderDrawRect(r, rs[i]);
+        raster_fill_rect(rs, rects[i]->x, rects[i]->y, rects[i]->w, rects[i]->h,
+                        250, 250, 250, 235);
+        raster_rect(rs, rects[i]->x, rects[i]->y, rects[i]->w, rects[i]->h,
+                   60, 70, 90, 255);
     }
-    SDL_SetRenderDrawBlendMode(r, SDL_BLENDMODE_NONE);
 
     if (f) {
         int w1 = font_text_w(f, "+"), w2 = font_text_w(f, "-");
-        font_draw(f, r, ri.x + (ZB_SIZE - w1) / 2, ri.y + 6, "+", 30, 40, 60, 0);
-        font_draw(f, r, ro.x + (ZB_SIZE - w2) / 2, ro.y + 6, "-", 30, 40, 60, 0);
+        font_draw(f, rs, ri.x + (ZB_SIZE - w1) / 2, ri.y + 6, "+", 30, 40, 60, 0);
+        font_draw(f, rs, ro.x + (ZB_SIZE - w2) / 2, ro.y + 6, "-", 30, 40, 60, 0);
     }
 }
 
 int zoom_button_hit(const MapView *v, int px, int py)
 {
-    SDL_Rect ri, ro;
+    RectI ri, ro;
     zoom_button_rects(v, &ri, &ro);
     if (px >= ri.x && px <= ri.x + ri.w && py >= ri.y && py <= ri.y + ri.h) return 1;
     if (px >= ro.x && px <= ro.x + ro.w && py >= ro.y && py <= ro.y + ro.h) return -1;
     return 0;
 }
 
-/* 面板底色用的是半透明深蓝：必须先开 BLENDMODE_BLEND，画完一定要关回去，
-   否则后面画的路面/标注会带着 alpha，颜色全变（软件渲染器不吃 alpha
-   叠加之外的任何"半透明"暗示）。 */
-void paint_nav_panel(SDL_Renderer *r, const RouteResult *rr,
+void paint_nav_panel(Raster *rs, const RouteResult *rr,
                      const ManeuverList *ml, Font *f, int line_h,
                      int x, int y, int max_lines, const char *status)
 {
-    if (!r || !f) return;
+    if (!rs || !f) return;
     if (max_lines < 1) max_lines = 1;
     if (max_lines > 12) max_lines = 12;
 
@@ -435,26 +393,21 @@ void paint_nav_panel(SDL_Renderer *r, const RouteResult *rr,
     int bw = wmax + 20, bh = n_lines * (line_h + 4) + 12;
     if (bw > 520) bw = 520;
 
-    SDL_SetRenderDrawBlendMode(r, SDL_BLENDMODE_BLEND);
-    SDL_SetRenderDrawColor(r, 24, 32, 48, 225);
-    SDL_Rect box = { x, y, bw, bh };
-    SDL_RenderFillRect(r, &box);
-    SDL_SetRenderDrawColor(r, 235, 200, 90, 255);
-    SDL_RenderDrawRect(r, &box);
-    SDL_SetRenderDrawBlendMode(r, SDL_BLENDMODE_NONE);
+    raster_fill_rect(rs, x, y, bw, bh, 24, 32, 48, 225);
+    raster_rect(rs, x, y, bw, bh, 235, 200, 90, 255);
 
     for (int i = 0; i < n_lines; i++) {
         int ly = y + 6 + i * (line_h + 4);
-        if (i == 0) font_draw(f, r, x + 10, ly, lines[i], 255, 214, 102, 0);
-        else        font_draw(f, r, x + 10, ly, lines[i], 238, 240, 245, 0);
+        if (i == 0) font_draw(f, rs, x + 10, ly, lines[i], 255, 214, 102, 0);
+        else        font_draw(f, rs, x + 10, ly, lines[i], 238, 240, 245, 0);
     }
     (void)rr;
 }
 
-void paint_nomap_banner(SDL_Renderer *r, const MapView *v, Font *f, int line_h,
+void paint_nomap_banner(Raster *rs, const MapView *v, Font *f, int line_h,
                         int cov_state)
 {
-    if (!r || !v) return;
+    if (!rs || !v) return;
     if (cov_state != COV_NONE && cov_state != COV_BBOX_ONLY) return;
 
     const char *lines[3];
@@ -483,18 +436,13 @@ void paint_nomap_banner(SDL_Renderer *r, const MapView *v, Font *f, int line_h,
     int bx = (v->w - bw) / 2;
     int by = 12;
 
-    SDL_SetRenderDrawBlendMode(r, SDL_BLENDMODE_BLEND);
-    SDL_SetRenderDrawColor(r, 48, 34, 8, 232);
-    SDL_Rect box = { bx, by, bw, bh };
-    SDL_RenderFillRect(r, &box);
-    SDL_SetRenderDrawColor(r, 255, 186, 64, 255);
-    SDL_RenderDrawRect(r, &box);
-    SDL_SetRenderDrawBlendMode(r, SDL_BLENDMODE_NONE);
+    raster_fill_rect(rs, bx, by, bw, bh, 48, 34, 8, 232);
+    raster_rect(rs, bx, by, bw, bh, 255, 186, 64, 255);
 
     if (!f) return;
     for (int i = 0; i < n; i++) {
         int ly = by + 7 + i * (line_h + 4);
-        if (i == 0) font_draw(f, r, bx + 12, ly, lines[0], 255, 208, 96, 0);
-        else        font_draw(f, r, bx + 12, ly, lines[i], 238, 240, 245, 0);
+        if (i == 0) font_draw(f, rs, bx + 12, ly, lines[0], 255, 208, 96, 0);
+        else        font_draw(f, rs, bx + 12, ly, lines[i], 238, 240, 245, 0);
     }
 }

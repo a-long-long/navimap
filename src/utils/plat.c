@@ -37,6 +37,7 @@
 #  include <sys/wait.h>
 #  include <time.h>
 #  include <unistd.h>
+#  include <pthread.h>
 #endif
 
 #ifdef __APPLE__
@@ -681,7 +682,7 @@ int nm_chmod_x(const char *path)
 #endif
 }
 
-/* ---- 字体候选链：宋体优先，理由见 render/font.c ---- */
+/* ---- 字体候选链：内置 Noto 系列优先（与 OsmAnd 同源），系统字体兜底 ---- */
 
 #if !defined(_WIN32) && !defined(__APPLE__)
 static const char *kLinuxFonts[] = {
@@ -730,17 +731,202 @@ static const char *kMacFonts[] = {
 };
 #endif
 
+/* 内置 Noto 字体集（相对字体目录的文件名，按 per-glyph 回退顺序）：
+ *   Latin/西里尔/希腊   → NotoSans-Regular（同时覆盖大量符号）
+ *   粗体                → NotoSans-Bold
+ *   CJK 中文/日文/韩文  → DroidSansFallback（TrueType；覆盖最广的 CJK 兜底）
+ *   各文字系统          → NotoSans{SouthAsian,SoutheastAsian,Tibetan,NastaliqUrdu}
+ *   阿拉伯/波斯         → Estedad
+ *   兜底（覆盖最广）    → DroidSansFallback
+ * 注：stb_truetype 只支持 glyf(TrueType) 轮廓，不支持 CFF(.otf/OTTO)，故原先的
+ *   notocjk.otf(CFF) 不可用，CJK 改走 DroidSansFallback.ttf（也是 TrueType）。
+ * font.c 打开时会逐个试这些文件组成字体集合；渲染时按码点选第一个含该字形的。
+ * 顺序即优先级：拉丁先走 NotoSans（与 OsmAnd 一致），其余脚本走对应 Noto，
+ * 最后 DroidSansFallback 接住任何漏网字形。 */
+static const char *kBundledNoto[] = {
+    "NotoSans-Regular.ttf",
+    "NotoSans-Bold.ttf",
+    "DroidSansFallback.ttf",
+    "NotoSansSouthAsian-Regular.ttf",
+    "NotoSansSoutheastAsian-Regular.ttf",
+    "NotoSansTibetan-Regular.ttf",
+    "NotoSansNastaliqUrdu-Regular.ttf",
+    "Estedad-Regular.ttf",
+    "DroidSansFallback.ttf",
+};
+
+/* 解析内置字体目录：env NAVMAP_FONT_DIR 优先；否则取 exe 所在目录下的
+ * fonts/ 或 ../fonts/（与可执行文件同发，便于跨机器部署）。失败返回 -1。 */
+static int get_font_dir(char *out, size_t cap)
+{
+    const char *e = getenv("NAVMAP_FONT_DIR");
+    if (e && *e) { snprintf(out, cap, "%s", e); return 0; }
+    char exep[1024];
+    if (nm_exe_path(exep, sizeof(exep)) == 0) {
+        char *end = exep + strlen(exep);
+        while (end > exep && end[-1] != '/' && end[-1] != '\\') end--;
+        if (end > exep) {
+            *end = '\0';                       /* 剥到目录 */
+            char tmp[1200];
+            snprintf(tmp, sizeof(tmp), "%s/fonts", exep);
+            NmDir *d = nm_dir_open(tmp);
+            if (d) { nm_dir_close(d); snprintf(out, cap, "%s", tmp); return 0; }
+            snprintf(tmp, sizeof(tmp), "%s/../fonts", exep);
+            d = nm_dir_open(tmp);
+            if (d) { nm_dir_close(d); snprintf(out, cap, "%s", tmp); return 0; }
+        }
+    }
+    return -1;
+}
+
+/* 合并候选链：先内置 Noto（存在才加入），后系统字体兜底。首次调用缓存。 */
+#define SYS_MAX 64
+static char        s_cand_buf[SYS_MAX][1024];
+static const char *s_cand_ptr[SYS_MAX];
+static size_t      s_cand_n = 0;
+static int         s_cand_init = 0;
+
 const char *const *nm_font_candidates(size_t *n)
 {
+    if (!s_cand_init) {
+        s_cand_init = 1;
+        size_t k = 0;
+        char fdir[1024];
+        if (get_font_dir(fdir, sizeof(fdir)) == 0) {
+            for (size_t i = 0; i < sizeof(kBundledNoto) / sizeof(kBundledNoto[0]) && k < SYS_MAX; i++) {
+                snprintf(s_cand_buf[k], sizeof(s_cand_buf[k]), "%s/%s", fdir, kBundledNoto[i]);
+                FILE *fp = fopen(s_cand_buf[k], "rb");
+                if (fp) { fclose(fp); s_cand_ptr[k] = s_cand_buf[k]; k++; }
+            }
+        }
+        /* 系统字体兜底（原平台列表） */
+        const char *const *sys = NULL;
+        size_t sysn = 0;
 #if defined(_WIN32)
-    if (!win_fonts_init()) { if (n) *n = 0; return NULL; }
-    if (n) *n = sizeof(s_winptrs) / sizeof(s_winptrs[0]);
-    return s_winptrs;
+        if (win_fonts_init()) { sys = s_winptrs; sysn = sizeof(s_winptrs) / sizeof(s_winptrs[0]); }
 #elif defined(__APPLE__)
-    if (n) *n = sizeof(kMacFonts) / sizeof(kMacFonts[0]);
-    return kMacFonts;
+        sys = kMacFonts; sysn = sizeof(kMacFonts) / sizeof(kMacFonts[0]);
 #else
-    if (n) *n = sizeof(kLinuxFonts) / sizeof(kLinuxFonts[0]);
-    return kLinuxFonts;
+        sys = kLinuxFonts; sysn = sizeof(kLinuxFonts) / sizeof(kLinuxFonts[0]);
 #endif
+        for (size_t i = 0; i < sysn && k < SYS_MAX; i++)
+            s_cand_ptr[k++] = sys[i];
+        s_cand_n = k;
+    }
+    if (n) *n = s_cand_n;
+    return s_cand_ptr;
 }
+
+/* ============================ 并发 ============================ */
+
+#if defined(_WIN32)
+
+struct NmMutex { HANDLE h; };
+
+NmMutex *nm_mutex_create(void)
+{
+    HANDLE h = CreateMutexA(NULL, FALSE, NULL);
+    if (!h) return NULL;
+    NmMutex *m = (NmMutex *)malloc(sizeof *m);
+    if (!m) { CloseHandle(h); return NULL; }
+    m->h = h;
+    return m;
+}
+
+void nm_mutex_destroy(NmMutex *m)
+{
+    if (!m) return;
+    CloseHandle(m->h);
+    free(m);
+}
+
+void nm_mutex_lock(NmMutex *m)
+{
+    if (!m) return;
+    WaitForSingleObject(m->h, INFINITE);
+}
+
+void nm_mutex_unlock(NmMutex *m)
+{
+    if (!m) return;
+    ReleaseMutex(m->h);
+}
+
+struct NmThreadArg { void (*f)(void *); void *arg; };
+
+static DWORD WINAPI nm_thread_tramp(LPVOID p)
+{
+    struct NmThreadArg *a = (struct NmThreadArg *)p;
+    void (*f)(void *) = a->f;
+    void *arg = a->arg;
+    free(a);
+    f(arg);
+    return 0;
+}
+
+int nm_thread_spawn(void (*f)(void *), void *arg)
+{
+    struct NmThreadArg *a = (struct NmThreadArg *)malloc(sizeof *a);
+    if (!a) return -1;
+    a->f = f; a->arg = arg;
+    HANDLE h = CreateThread(NULL, 0, nm_thread_tramp, a, 0, NULL);
+    if (!h) { free(a); return -1; }
+    CloseHandle(h);          /* 线程自己会跑完，句柄不必留着 */
+    return 0;
+}
+
+#else /* POSIX */
+
+struct NmMutex { pthread_mutex_t m; };
+
+NmMutex *nm_mutex_create(void)
+{
+    NmMutex *m = (NmMutex *)malloc(sizeof *m);
+    if (!m) return NULL;
+    if (pthread_mutex_init(&m->m, NULL) != 0) { free(m); return NULL; }
+    return m;
+}
+
+void nm_mutex_destroy(NmMutex *m)
+{
+    if (!m) return;
+    pthread_mutex_destroy(&m->m);
+    free(m);
+}
+
+void nm_mutex_lock(NmMutex *m)
+{
+    if (!m) return;
+    pthread_mutex_lock(&m->m);
+}
+
+void nm_mutex_unlock(NmMutex *m)
+{
+    if (!m) return;
+    pthread_mutex_unlock(&m->m);
+}
+
+struct NmThreadArg { void (*f)(void *); void *arg; };
+
+static void *nm_thread_tramp(void *p)
+{
+    struct NmThreadArg *a = (struct NmThreadArg *)p;
+    void (*f)(void *) = a->f;
+    void *arg = a->arg;
+    free(a);
+    f(arg);
+    return NULL;
+}
+
+int nm_thread_spawn(void (*f)(void *), void *arg)
+{
+    struct NmThreadArg *a = (struct NmThreadArg *)malloc(sizeof *a);
+    if (!a) return -1;
+    a->f = f; a->arg = arg;
+    pthread_t t;
+    if (pthread_create(&t, NULL, nm_thread_tramp, a) != 0) { free(a); return -1; }
+    pthread_detach(t);
+    return 0;
+}
+
+#endif

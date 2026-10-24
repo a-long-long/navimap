@@ -160,7 +160,7 @@ static void grid_for_font(Font *font)
     g_grid_h = (int)(cw * 2.4); if (g_grid_h < 22) g_grid_h = 22;
 }
 
-void paint_place_labels(SDL_Renderer *r, const MapView *v,
+void paint_place_labels(Raster *rs, const MapView *v,
                         LabelCache *lc, Font *font, PaintStats *st)
 {
     if (!lc || !font) return;
@@ -189,7 +189,7 @@ void paint_place_labels(SDL_Renderer *r, const MapView *v,
         g_grid[gy * GRID_COLS + gx] = 1;
 
         int tw = font_text_w(font, it->name);
-        font_draw(font, r, x - tw / 2, y - 8, it->name, 60, 60, 65, 1);
+        font_draw(font, rs, x - tw / 2, y - 8, it->name, 60, 60, 65, 1);
         drawn++;
     }
     if (st) st->labels_drawn = drawn;
@@ -199,7 +199,7 @@ void paint_place_labels(SDL_Renderer *r, const MapView *v,
 /* 路名标注：消费 paint_roads 收集的屏幕内有名边                          */
 /* ------------------------------------------------------------------ */
 
-void paint_road_labels(SDL_Renderer *r, const MapView *v, Font *font,
+void paint_road_labels(Raster *rs, const MapView *v, Font *font,
                        PaintStats *st)
 {
     if (!font || v->zoom < 15.0) return;
@@ -239,7 +239,7 @@ void paint_road_labels(SDL_Renderer *r, const MapView *v, Font *font,
         seen[byte] |= mask;
 
         /* 路名用深蓝灰，与地名黑灰区分 */
-        font_draw(font, r, x, y, s, 70, 80, 110, 1);
+        font_draw(font, rs, x, y, s, 70, 80, 110, 1);
         drawn++;
     }
     if (st) st->road_labels_drawn = drawn;

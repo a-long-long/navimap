@@ -6,6 +6,8 @@
 #include <QKeyEvent>
 #include <QDateTime>
 #include <cmath>
+#include <cstdio>
+#include <cstring>
 
 #include "main_window.h"
 
@@ -29,24 +31,22 @@ MapCanvas::MapCanvas(App *a, MainWindow *mw, QWidget *parent)
 
 MapCanvas::~MapCanvas()
 {
-    if (m_surf) SDL_FreeSurface(m_surf);
-    /* 字形纹理挂在每帧的临时软件渲染器上，app_render_to_surface
-       出口已经 drop 过；这里没有常驻 renderer 需要清理。 */
+    delete[] m_px;
+    m_px = nullptr;
 }
 
-void MapCanvas::ensureSurface(int w, int h)
+/* 自持像素缓冲：格式 0x00RRGGBB（与 QImage::Format_RGB32 内存布局一致）。
+   ★ 不用 SDL：Qt 前端不链 SDL，缓冲自己管。 */
+void MapCanvas::ensureBuffer(int w, int h)
 {
-    if (m_surf) SDL_FreeSurface(m_surf);
-    m_surf = SDL_CreateRGBSurface(0, w, h, 32, 0, 0, 0, 0);
+    if (m_px && m_px_w == w && m_px_h == h) return;
+    delete[] m_px;
+    m_px = new uint32_t[(size_t)w * (size_t)h]();
+    m_px_w = w;
+    m_px_h = h;
     m_valid = false;
-    if (m_surf)
-        /* 实测定版：SDL_CreateRGBSurface(…,32,0,0,0,0) 默认给 ARGB8888
-         * （小端机内存字节序 B,G,R,A）。QImage 对应 Format_RGB32——
-         * 同布局且忽略第 4 字节（C 管线直写像素不保证 alpha=255）。
-         * 前两次踩坑记录：RGBA8888 ⇒ 整帧黑屏（alpha=0 全透明）；
-         * RGBX8888 ⇒ 红蓝互换（字节序想当然）。 */
-        m_img = QImage((uchar *)m_surf->pixels, m_surf->w, m_surf->h,
-                       (int)m_surf->pitch, QImage::Format_RGB32);
+    /* QImage 包住 m_px（不拥有它），stride = w 个 uint32 */
+    m_img = QImage((uchar *)m_px, w, h, (int)(w * 4), QImage::Format_RGB32);
 }
 
 void MapCanvas::renderNow()
@@ -54,13 +54,16 @@ void MapCanvas::renderNow()
     int w = m_a->view.w > 0 ? m_a->view.w : width();
     int h = m_a->view.h > 0 ? m_a->view.h : height();
     if (w <= 0 || h <= 0) return;
-    if (!m_surf || m_surf->w != w || m_surf->h != h) ensureSurface(w, h);
-    if (!m_surf) return;
+    ensureBuffer(w, h);
+    if (!m_px) return;
 
     m_a->view.w = w;
     m_a->view.h = h;
     memset(&m_st, 0, sizeof(m_st));
-    if (app_render_to_surface(m_a, m_surf, &m_st) == 0) {
+    /* 0x00RRGGBB，alpha 位给 0（无 alpha 通道） */
+    if (app_render_to_buf(m_a, m_px, w, h, (size_t)w,
+                          0x00FF0000u, 0x0000FF00u, 0x000000FFu, 0x00000000u,
+                          &m_st) == 0) {
         m_valid = true;
         m_frame_ms = m_st.ms_bg + m_st.ms_areas + m_st.ms_roads +
                      m_st.ms_lines + m_st.ms_labels;
@@ -121,6 +124,8 @@ void MapCanvas::paintEvent(QPaintEvent *)
     }
     drawScaleBar(p);
     drawCompass(p);
+    drawCursorCoords(p);
+    drawRouteInfo(p);
     if (m_showGrid) drawGraticule(p);
 }
 
@@ -204,6 +209,106 @@ void MapCanvas::drawScaleBar(QPainter &p)
     p.drawText(x, y - 8, QString::fromUtf8(buf));
 }
 
+/* ---- 右下角：光标处经纬度（没鼠标时显示视口中心）----
+ *
+ * 为什么放在这里而不是状态栏：状态栏在**左侧**放的是视图中心坐标，
+ * 而"鼠标指哪"是另一个信息 —— 主流地图软件（OsmAnd / Google Maps /
+ * 高德）都把光标经纬度单独放在右下角，方便用户抄坐标。
+ *
+ * ★ 不依赖字体符号：只画数字/小数点/度数符号（° 在任何字体链里都有）。
+ *   经纬度的数字用 QString::asprintf 直接格式化，避免 QString::number
+ *   的 locale 影响。
+ */
+void MapCanvas::drawCursorCoords(QPainter &p)
+{
+    double la, lo;
+    const bool has_cursor = m_cursor_in;
+    if (has_cursor) {
+        mv_unproject(&m_a->view, m_cursor_x, m_cursor_y, &la, &lo);
+    } else {
+        la = m_a->view.lat;
+        lo = m_a->view.lon;
+    }
+    /* 前缀区分语义：光标处 vs 视口中心（状态栏里已经有中心坐标了）。
+       主流地图软件（OsmAnd / 高德）的做法也是鼠标一动就显示光标处坐标。 */
+    QString txt = QString::asprintf("%s %.5f°%c  %.5f°%c",
+                                    has_cursor ? "光标" : "中心",
+                                    fabs(la), la >= 0 ? 'N' : 'S',
+                                    fabs(lo), lo >= 0 ? 'E' : 'W');
+
+    QFont f = p.font();
+    f.setPointSize(8);
+    p.setFont(f);
+    QFontMetrics fm(f);
+    const int pad = 6;
+    int tw = fm.horizontalAdvance(txt);
+    const int th = fm.height();
+    const int margin = 10;
+    int x = width()  - margin - tw - pad * 2;
+    int y = height() - margin - th - pad * 2;
+    /* 画布太窄时收缩文字而不是溢出（与搜索框浮层的处理一致） */
+    if (x < margin) { x = margin; tw = qMax(40, width() - margin * 2 - pad * 2); }
+    if (y < margin) { y = margin; }
+
+    /* 半透明白底 + 细边框（与比例尺/指北针同一套视觉语言） */
+    QRect box(x, y, tw + pad * 2, th + pad * 2);
+    p.setRenderHint(QPainter::Antialiasing, true);
+    p.setPen(QPen(QColor(120, 130, 145, 160), 1.0));
+    p.setBrush(QColor(255, 255, 255, 225));
+    p.drawRoundedRect(box, 4, 4);
+    p.setPen(QColor(30, 36, 48));
+    p.drawText(box.adjusted(pad, pad, -pad, -pad),
+               Qt::AlignVCenter | Qt::AlignRight, txt);
+    p.setRenderHint(QPainter::Antialiasing, false);
+}
+
+/* ---- 左下角：路线里程 / 算路状态（替代被取消的底部状态栏）----
+ *
+ * ★ 只在信息**存在**时才画，否则不画（画面保持干净，正是取消状态栏的目的）：
+ *     · 后台正在算路（nav_busy）→ "计算中…"
+ *     · 有导航消息（nav_msg，如「无可行路线」「已到达目的地」）→ 显示该消息
+ *     · 模拟导航中 / 已规划路线 → 显示里程与时间（summaryText）
+ *   没有路线、也不在算路时，这里什么也不画。
+ *
+ * ★ 视觉语言与比例尺 / 坐标框一致：半透明白底 + 细边框 + 深色文字。
+ *   位置在左下角、比例尺上方，不与之重叠。 */
+void MapCanvas::drawRouteInfo(QPainter &p)
+{
+    QString txt;
+    if (m_a->nav_busy) {
+        txt = QStringLiteral("计算中…");
+    } else if (m_a->nav_msg[0]) {
+        txt = QString::fromUtf8(m_a->nav_msg);
+    } else {
+        txt = summaryText();
+    }
+    if (txt.isEmpty()) return;
+
+    QFont f = p.font();
+    f.setPointSize(9);
+    p.setFont(f);
+    QFontMetrics fm(f);
+    const int pad = 6;
+    int tw = fm.horizontalAdvance(txt);
+    const int th = fm.height();
+
+    /* 左下角，比例尺文字（baseline ≈ height-34）上方留间隙 */
+    const int margin = 10;
+    int x = margin;
+    int y = height() - 44 - th - pad * 2;
+    if (y < margin) y = margin;
+
+    QRect box(x, y, tw + pad * 2, th + pad * 2);
+    p.setRenderHint(QPainter::Antialiasing, true);
+    p.setPen(QPen(QColor(120, 130, 145, 160), 1.0));
+    p.setBrush(QColor(255, 255, 255, 225));
+    p.drawRoundedRect(box, 4, 4);
+    p.setPen(QColor(30, 36, 48));
+    p.drawText(box.adjusted(pad, pad, -pad, -pad),
+               Qt::AlignVCenter | Qt::AlignLeft, txt);
+    p.setRenderHint(QPainter::Antialiasing, false);
+}
+
 /* ---- 指北针：rot=0 时隐藏（正北朝上是默认态，nav-desktop 同款行为）---- */
 void MapCanvas::drawCompass(QPainter &p)
 {
@@ -265,6 +370,13 @@ void MapCanvas::mouseMoveEvent(QMouseEvent *e)
     const QPointF ep = e->pos();
 #endif
     int ex = (int)ep.x(), ey = (int)ep.y();
+    /* 记光标位置：右下角坐标显示用（不需要按键也会触发，见 setMouseTracking） */
+    if (m_cursor_x != ex || m_cursor_y != ey) {
+        m_cursor_x = ex;
+        m_cursor_y = ey;
+        if (!m_cursor_in) { m_cursor_in = true; update(); }
+        else update();
+    }
     if (m_rotating) {
         m_a->view.rot += (ex - m_lastx) * 0.3;
         if (m_a->view.rot > 180.0)  m_a->view.rot -= 360.0;
@@ -336,7 +448,7 @@ void MapCanvas::resizeEvent(QResizeEvent *e)
         (m_a->view.w != width() || m_a->view.h != height())) {
         m_a->view.w = width();
         m_a->view.h = height();
-        ensureSurface(width(), height());
+        ensureBuffer(width(), height());
         m_a->need_redraw = 1;
         renderNow();
     }

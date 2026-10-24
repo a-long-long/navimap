@@ -3,11 +3,29 @@
 
 /* Qt 前端主窗口：nav-desktop 同款界面元素，全部用真控件——
  *   菜单栏（QMenuBar）：搜索/清除路线/缩放到路线/跟随车头/昼夜/模拟导航/退出
- *   顶栏（QToolBar）：搜索框（QLineEdit 原生中文输入法）+ 浏览/导航页签 + 路线摘要
- *   右栏（QToolBar 竖排）：放大 / 缩小 / 定位 / 昼夜 / 坐标网 / 菜单
+ *   **浮在地图上的独立按钮**（不进任何工具栏）：
+ *       左上角：搜索按钮（点击才展开搜索框）
+ *       右上角：放大 / 缩小 / 定位 / 昼夜 / 坐标网 / 菜单
  *   左侧步骤面板（QDockWidget + QListWidget）：转向指令列表
- *   状态栏（QStatusBar）：经纬度/缩放/帧耗时/省与边数/导航信息
  * 地图画布（MapCanvas）作为 centralWidget，负责渲染与地图交互。
+ *
+ * ★ 没有底部状态栏：原先的 QStatusBar（经纬度/缩放/帧耗时/省与边数/导航
+ *   信息 + 路线摘要）已取消。坐标信息改由画布上的浮层承担——
+ *   右下角是光标/中心经纬度（drawCursorCoords），左下角是路线里程/算路
+ *   状态（drawRouteInfo），视觉与比例尺一致，且 UI 自检 ⑨⑩ 扫的正是画布。
+ *
+ * ★ 为什么**没有顶栏**（原先有一个 QToolBar 放搜索按钮和页签）：
+ *   地图 app 的惯例是"控件浮在地图上"，不占一条独立的横栏。
+ *   一条常驻工具栏会挤掉地图的垂直空间，也让界面显得像桌面软件而不是导航 app。
+ *   现在只有：菜单栏（操作系统惯例）+ 地图（浮着按钮）。底部状态栏已取消。
+ *
+ * ★ 两个浮层都挂在 MapCanvas 上（parent=m_canvas），随画布尺寸变化重新定位
+ *   （靠 MainWindow::eventFilter 监听画布的 Resize）：
+ *       m_searchOverlay —— 左上角的搜索按钮/搜索框
+ *       m_rightOverlay —— 右上角的地图操作按钮
+ *
+ * ★ 浮层**不占布局空间**，所以"展开搜索框"既不会改变画布尺寸，也不会让
+ *   右上角的按钮挪位（这两条都有 UI 自检断言）。
  */
 #include <QMainWindow>
 #include <QMenu>
@@ -21,6 +39,7 @@ class QListWidget;
 class QLabel;
 class QTimer;
 class QToolButton;
+class QWidget;
 class MapCanvas;
 
 class MainWindow : public QMainWindow {
@@ -37,32 +56,49 @@ public:
     /* MapCanvas 键盘事件转发到这里（焦点在画布上） */
     void handleKey(int key);
 
+    /* 无头 UI 自检（--ui-test 用）：断言"搜索按钮→点击→输入框出现→Esc 收起"
+     * 这条交互链，以及每个按钮都有悬停提示。
+     * 全部通过返回 0，任一条不符返回非 0（并在 stderr 打印失败项）。
+     * ★ 为什么要有：截图只能证明**静态**样子对，证明不了"点了真的会出现" ——
+     *   这类"注释写了 ≠ 路径落实"的洞本项目踩过好几次（窗口最小化按钮）。 */
+    int runUiSelfTest();
+
+    /* 展开搜索框（--shot-search 用）：截图前调它，能看到输入框展开态的样子。
+     * 不走点击事件，直接调内部方法 —— 截图要的是**确定的**展开态，
+     * 而不是"点一下之后希望它恰好展开了"。 */
+    void expandSearchForShot();
+
+protected:
+    /* 监听画布 Resize（右栏浮层重新定位）+ 搜索框的 Esc（收起搜索框） */
+    bool eventFilter(QObject *obj, QEvent *ev) override;
+
 private:
     void buildMenus();
-    void buildTopBar();
+    void buildSearchOverlay();            /* 左上角：搜索按钮 + 搜索框浮层 */
     void buildRightCol();
     void buildStepsDock();
-    void buildStatusBar();
 
+    void showSearch();                   /* 点搜索按钮 → 展开输入框并聚焦 */
+    void hideSearch();                   /* 收起输入框 → 回到按钮态 */
     void doSearch(const QString &text);  /* 文本变化 → 查询 → 弹结果列表 */
     void commitHit(int idx);             /* 选中某条结果：跳过去 */
     void closeSearch();
     void tick();                         /* 主循环一拍：画布 tick + UI 刷新 */
     void refreshSteps();
-    void updateStatus();
     void locate();                       /* 定位按钮：回到关注点 */
+    void layoutOverlays();               /* 两个浮层贴到画布上（画布尺寸变了要重贴） */
 
     App          *m_a;
     MapCanvas    *m_canvas;
-    QLineEdit    *m_search = nullptr;
+    QWidget      *m_searchOverlay = nullptr; /* 左上角浮层容器（挂在画布上） */
+    QToolButton  *m_searchBtn = nullptr; /* 「搜索」按钮（点它才出输入框） */
+    QLineEdit    *m_search = nullptr;    /* 搜索输入框（默认隐藏） */
     QListWidget  *m_hits   = nullptr;    /* 搜索结果浮层 */
     QListWidget  *m_steps  = nullptr;
-    QLabel       *m_summary = nullptr;   /* 顶栏右侧：路线 里程/时间 */
-    QLabel       *m_status  = nullptr;   /* 状态栏 */
     QTimer       *m_timer  = nullptr;
-    QToolButton  *m_browse = nullptr;
-    QToolButton  *m_nav    = nullptr;
     QMenu        *m_menuMain = nullptr;  /* 右栏「菜单」按钮弹出的主菜单（同时挂在菜单栏） */
+    QWidget      *m_rightOverlay = nullptr; /* 右上角浮层容器（挂在画布上） */
+    QString       m_lastPick;            /* 最近一次选中的地点（按钮提示用） */
     int           m_step_count = -1;     /* 步骤面板增量刷新哨兵 */
 };
 

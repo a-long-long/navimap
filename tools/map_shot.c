@@ -97,6 +97,25 @@ static long count_color_pixels(SDL_Surface *s, int cr, int cg, int cb)
     return n;
 }
 
+/* 把一帧渲进调用方的 SDL_Surface。
+ *
+ * ★ 像素格式全部从 surface 自己的 format 里读（Rmask/Gmask/Bmask/Amask），
+ *   不写死：写死就会在"某台机器上红蓝互换"，而这种 bug 只在别人机器上复现。
+ *   stride 以像素计（pitch 是字节，32bpp 时 pitch/4 == w）。
+ *   注意没有 SDL_MUSTLOCK 的检查：这里只用软件 surface（可写内存），硬件
+ *   surface 走不到这条路。 */
+static int render_surface(App *a, SDL_Surface *surf, PaintStats *st)
+{
+    if (!surf || !surf->pixels) return -1;
+    if (surf->format->BitsPerPixel != 32 || surf->format->BytesPerPixel != 4)
+        return -1;
+    if (surf->pitch % 4) return -1;
+    return app_render_to_buf(a, surf->pixels, surf->w, surf->h,
+                              (size_t)(surf->pitch / 4),
+                              surf->format->Rmask, surf->format->Gmask,
+                              surf->format->Bmask, surf->format->Amask, st);
+}
+
 /* 极简 GeoJSON LineString 读取：只认 "coordinates" 后面的 [[lon,lat],...]。
  * 用途是把 route_cli 算出的路线叠到地图上做视觉验收，不值得引第三方 JSON 库。 */
 static double *read_geojson_line(const char *path, size_t *out_n)
@@ -376,7 +395,7 @@ int main(int argc, char **argv)
 
     PaintStats st;
     clock_t t0 = clock();
-    if (app_render_to_surface(&a, surf, &st) != 0) {
+    if (render_surface(&a, surf, &st) != 0) {
         fprintf(stderr, "渲染失败\n");
         return 1;
     }
@@ -387,7 +406,7 @@ int main(int argc, char **argv)
         if (got != resize_font) { printf("ASSERT-FAIL    运行期改字号失败\n"); return 1; }
     }
     clock_t t1 = clock();
-    app_render_to_surface(&a, surf, &st);
+    render_surface(&a, surf, &st);
     double warm_ms = (double)(clock() - t1) / CLOCKS_PER_SEC * 1000;
 
     /* 路线叠加：把 route_cli 算出的路径画成红线，一眼看出路线贴不贴路网 */

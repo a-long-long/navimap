@@ -1,8 +1,8 @@
 #ifndef NAVIMAP_CHROME_H
 #define NAVIMAP_CHROME_H
 
-#include <SDL.h>
 #include "ui/window.h"
+#include "render/raster.h"
 
 /* 自绘标题栏高度（window.c 与 chrome.c 共用，改了要同步） */
 #define CHROME_TITLE_H 30
@@ -41,7 +41,7 @@ typedef enum {
 } ChromeID;
 
 /* 画全部 chrome（在地图画完之后调用） */
-void paint_chrome(SDL_Renderer *r, App *a);
+void paint_chrome(Raster *rs, App *a);
 
 /* (x,y) 命中了哪个元素；若是菜单项，把项下标写进 a->chrome_menu_item */
 int  chrome_hit(App *a, int x, int y);
@@ -55,6 +55,6 @@ int         chrome_menu_count(void);
 const char *chrome_menu_label(int i);
 
 /* 夜间半透明蒙版：在地图画完后、面板/文字之前调用，只压暗地图、不压 chrome */
-void paint_night_tint(SDL_Renderer *r, int w, int h);
+void paint_night_tint(Raster *rs, int w, int h);
 
 #endif

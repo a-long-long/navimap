@@ -1,13 +1,13 @@
 #ifndef NAVIMAP_NAVDRAW_H
 #define NAVIMAP_NAVDRAW_H
 
-#include <SDL.h>
 #include <stdint.h>
 #include "map/map_view.h"
 #include "route/route.h"
 #include "route/maneuver.h"
 #include "search/search.h"
 #include "render/font.h"
+#include "render/raster.h"
 
 /* ---------------------------------------------------------------------------
  * 导航叠加层（阶段 9）
@@ -27,12 +27,12 @@
  *   done_seg < 0  → 整条蓝色（还没开始 / 没有模拟）
  *   done_seg >= 0 → [0, done_seg) 画灰（已走过），done_seg 段按 done_t 切成
  *                   灰/蓝两截，其后全蓝。没有它的话开导航后看不出走到哪。 */
-int  paint_route(SDL_Renderer *r, const MapView *v,
+int  paint_route(Raster *rs, const MapView *v,
                  const int32_t *lat_e7, const int32_t *lon_e7, uint32_t n,
                  int width, int done_seg, double done_t);
 
 /* 车头：按航向旋转的三角箭头（蓝芯白边），压在路线上指示"我在哪、朝哪走"。 */
-void paint_nav_car(SDL_Renderer *r, const MapView *v,
+void paint_nav_car(Raster *rs, const MapView *v,
                    double lat, double lon, double heading_deg);
 
 /* 底部导航条（模拟导航时显示）。turn 用大字号，其余小字号。
@@ -45,18 +45,18 @@ typedef struct {
     const char *eta;      /* "约 18 分钟" */
 } NavBanner;
 
-void paint_nav_banner(SDL_Renderer *r, const MapView *v, Font *f, Font *fbig,
+void paint_nav_banner(Raster *rs, const MapView *v, Font *f, Font *fbig,
                       int line_h, int line_h_big, const NavBanner *b);
 
 /* 顶部横幅："这里没有地图数据" + 去哪下载、下载后怎么办。
  * cov_state 取自 mapset_coverage（COV_NONE / COV_BBOX_ONLY 才值得画）。
  * f 为 NULL 时（--font=none）只画色条，不画字——提示不能因为没字体就消失。 */
-void paint_nomap_banner(SDL_Renderer *r, const MapView *v, Font *f, int line_h,
+void paint_nomap_banner(Raster *rs, const MapView *v, Font *f, int line_h,
                         int cov_state);
 
 /* 右下角缩放按钮。返回 0/1 表示 (px,py) 是否落在按钮里，供窗口命中测试；
    画和判定用同一份坐标，避免"画在这、点在那"。 */
-void paint_zoom_buttons(SDL_Renderer *r, const MapView *v, Font *f);
+void paint_zoom_buttons(Raster *rs, const MapView *v, Font *f);
 int  zoom_button_hit(const MapView *v, int px, int py);   /* 1=放大 -1=缩小 0=没点中 */
 
 /* ---- 搜索框（阶段 7）----
@@ -74,23 +74,23 @@ typedef struct {
     int      elapsed_ms;  /* 仅显示 */
 } SearchBoxView;
 
-void paint_search_box(SDL_Renderer *r, const MapView *v, Font *f, Font *fbig,
+void paint_search_box(Raster *rs, const MapView *v, Font *f, Font *fbig,
                       int line_h, int line_h_big, const SearchBoxView *sb);
 
 /* 搜索结果在图上的钉子：白底方块 + 蓝芯（选中）或灰芯（未选中） */
-void paint_search_pin(SDL_Renderer *r, const MapView *v,
+void paint_search_pin(Raster *rs, const MapView *v,
                       double lat, double lon, int selected, Font *f,
                       const char *label);
 
 /* 起点/终点标记：白底方块 + 彩色芯 + 右侧文字（有字体时）。
    is_start = 1 绿（起点），0 红（终点）。 */
-void paint_nav_marker(SDL_Renderer *r, const MapView *v,
+void paint_nav_marker(Raster *rs, const MapView *v,
                       double lat, double lon, int is_start, Font *f);
 
 /* 左上角导航面板：里程/预计时间 + 前几条转向指令。
    status 为顶行文案（"计算中…" / "无可行路线" 等，NULL 时用里程行）。
    line_h 由调用方给（字号 + 行距），因为 Font 不暴露字号。 */
-void paint_nav_panel(SDL_Renderer *r, const RouteResult *rr,
+void paint_nav_panel(Raster *rs, const RouteResult *rr,
                      const ManeuverList *ml, Font *f, int line_h,
                      int x, int y, int max_lines, const char *status);
 

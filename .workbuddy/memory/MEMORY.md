@@ -7,17 +7,55 @@
 - `sources/` 只放原始 `*.osm.pbf`；`products/` 全可删、`./scripts/sync_maps.sh` 确定性重建。
 - ★★ **实验参数不能只活在命令行上**（header 不存地标坐标）：30 地标在
   `lmbuild_cli.c` 的 `k_lm[]`，`--nlm=N` 取前 N。
-- 验收 `./scripts/regress.sh`（**47 项**）；编译**零警告**；改渲染补
-  `python3 scripts/bmpdiff.py 旧 新`（要素色→背景色=丢要素）。
+- 验收 `./scripts/regress.sh`（**54 项**：基线 47 + 去 SDL 化 4 + 字体 2 + UI 1）；编译**零警告**；
+  改渲染补 `python3 scripts/bmpdiff.py 旧 新`（要素色→背景色=丢要素）。
+  Windows 本机构建用 `./scripts/build_win.sh`（见下面的 gcc 静默失败条目）。
+  ★ Qt 前端 UI 交互自检：`navmap_qt --ui-test`（16 项：搜索按钮→点击→输入框出现→Esc 收起
+  + **展开搜索框后右栏按钮坐标/像素不变** + 按钮 tooltip + **无顶栏工具条**
+  + 搜索按钮浮在地图上 + 右栏浮层
+  + **右下角坐标显示有像素 & 鼠标移动后随之更新**），已进 regress.sh；
+  **负向对照必须能失败**。
+  ★★ **`--shot` 截图路径必须显式刷新状态栏**（主循环不启动 ⇒ 状态栏空白），
+  否则**截图在撒谎**（此前交付过的截图底部坐标一直是空的）。
+  ★★ **顶栏控件切换会改变顶栏高度 ⇒ 画布(centralWidget)整体移动 ⇒ 浮层跟着挪**：
+  搜索按钮 36px 换成 QLineEdit 24px 会让画布上移 12px。
+  ⇒ **根治办法：不要用顶栏**（2026-10-24 第三轮已取消顶栏 QToolBar），
+  搜索按钮也做成**浮在画布左上角的浮层**（与右上角的操作按钮对称）——
+  浮层是画布的子控件、不参与布局 ⇒ 画布尺寸恒定 ⇒ 坐标恒定。
 - ★ **平台差异只许出现在 `src/utils/plat.{h,c}`**：业务代码零 `#ifdef _WIN32`。
   字体链/临时目录/mmap/目录枚举/进程派生/时钟/rename 全走 nm_*。新平台分支先在
   `tools/plat_selftest` 补契约再动业务（回归 46/47，正反双向、有齿已实证）。
   ⚠️ 负向断言写"失败 Outcome 为真"，**别把成功断言取反**（踩过：8 项假 FAIL）。
   ⚠️ Win 映射句柄按基址登记、不随手关；`mallopt` 守卫不满足**整段消失不留空函数**
   （unused static ⇒ 零警告 FAIL）。本机无 mingw，Windows 分支未实机编译。
+- ★★ **SDL 只许出现在两个适配层**（方案2，2026-10-24 落地）：
+  `navimap_sdl`(window_sdl.c) 与 `map_shot`。`navimap_core` 与 `navmap_qt` **零 SDL**。
+  `App` 里不许出现 SDL 句柄，也不许放 `Raster ras`（帧缓冲归各前端自持）。
+  渲染入口统一 `app_render_to_buf(px,w,h,stride,r/g/b/amask)`，像素格式**从 surface 读、
+  不写死**。`core_no_sdl` 门禁钉住这条边界（含负向对照）。
+- ★★ **两套字体系统互不相干**（2026-10-24 踩过）：
+  地图文字 = C 侧 stb_truetype（`render/font.c`），Qt 控件文字 = Qt 自己的字体系统。
+  ⇒ Qt 前端必须 `src/ui_qt/qt_font.cpp` 把 `nm_font_candidates()` 的字体
+  **注册进 Qt**（`addApplicationFont`）+ `setFamilies` 设中英回退链，否则控件中文是方框。
+  ★ 判"字体能否画中文"**别用 Qt 的字体度量**（offscreen 插件下所有族宽度都一样，
+  会把每个族都判成"没有中文"）⇒ 查字体文件自己的 cmap（C 侧 `font_probe_glyph`）。
+  ★★ **同理：图标符号（＋ ◎ ☰ 🔍）也不能用字体字符** —— `inFont()` 全 false，
+  界面上是豆腐块 ⇒ 一律用 `src/ui_qt/qt_icons.cpp` 的 `QPainter` 自绘矢量。
+  ★★ `drawPixmap` 在 DPR≠1 下会把图标画到目标矩形**一角**（含显式给源矩形的重载）
+  ⇒ 直接在 `paintEvent` 里画路径，别经 QPixmap 中转。
+  门禁 `font_cjk` / `font_cjk_neg` / `qt_ui_test`。
+- ★★★ **Windows(MSYS2) 上 gcc 会静默失败**（退出码 1、stderr 零输出）：
+  ninja 走 cmd.exe ⇒ 拿到的是 MSYS 转换后的 Windows 形式 PATH；
+  且 Defender（MsMpEng）会扫描并**杀掉**新起的 cc1plus.exe。
+  ⇒ 构建一律用 `./scripts/build_win.sh`（受控 PATH + `build_launcher.bat` 绕开 cmd.exe
+  + `cc_retry.sh` 对空 stderr 重试）。★ `CMAKE_C_COMPILER_LAUNCHER` 是**初始化变量**，
+  对已有 build/ 不生效 ⇒ 必须用 target 属性 `C_COMPILER_LAUNCHER`。
+  ★ `.bat` 必须纯 ASCII（cmd.exe 会把中文注释当命令执行）。
 - ⚠️ 本机 `rm` 是 safe-delete 改名 ⇒ 真删 `/bin/rm`；别用 `mv` 搬
   `products/graph/<省>`（跨盘退化），用 `cp -p`→`diff -rq`→`/bin/rm -rf`。
 - 全量重编译：`LD_LIBRARY_PATH=/home/along/.local/usr/lib/aarch64-linux-gnu cmake --build build -j8`
+  （Windows 本机：`/d/msys64/ucrt64/bin/cmake.exe --build build -j8`，
+  gcc 16.2.0 在 `/d/msys64/ucrt64/bin/`，Qt6 6.11.2 在 `/d/Qt/6.11.2/mingw_64`）
 
 ## 判据纪律
 
@@ -60,6 +98,19 @@
   热路径严禁 `getenv`。拆函数改共享状态必须恢复。
 - ★ 销毁 renderer 前必须 `font_drop_textures()`（font+font_big），每条路径都要
   （修过：指针判据被地址复用击败）。**注释写了约定 ≠ 所有路径落实。**
+  ⚠️ 但 stb_truetype 后端 `font_drop_textures` 只清 CPU 字形缓存，
+  **不能再每帧调**（会毁掉 CJK 缓存）。
+- ★★★ **自写光栅必须与 SDL 软渲染器逐像素等价**（已实证 3 个真 bug）：
+  ① alpha 混色是 `(s*a)/255 + (d*(255-a))/255` **两次除法**（不是一次除）；
+  ② `raster_rect` 角点只能画一次（4 边重叠 ⇒ 混两次）；
+  ③ 裁剪要按 SDL `SDL_rect_impl.h` **逐字重写**（水平/垂直短路 + 早退 + 差值方向），
+     手写 Cohen-Sutherland 与 SDL 差 1 px 的比例达 34%。
+  门禁：`blend_equiv` / `clip_equiv`（regress.sh 内，负向对照已实证能失败）。
+- ★ **判"提取成功"要看退出码，不是看输出行数**（否则假绿）：
+  `nm -u <PE exe>` **不列 DLL 导入符号**（SDL_* 只在 `objdump -p` 导入表里）⇒
+  两个提取器取并集；`2>&1` 会让 stderr 混进 stdout 凑出行数 ⇒ 判定假绿，
+  必须 stderr 单独重定向 + 用 `pclose` 的退出码。
+  MinGW 的 `popen` 走 cmd.exe：带引号路径要加 `call`，`2>/dev/null` 是无效重定向。
 - 图集：`MapSrc.loaded`，**省份下标恒定绝不重排 srcs[]**；`const MapSet*` 传
   `mapset_ensure_loaded` 要强转（零警告门禁）。实测加载 3/卸载 5 省。
 - PBF 显示层 `--pbf-display=<dir>[:LRU]`：省粒度解码 + 内存 LRU，8 省逐字节 IDENTICAL；

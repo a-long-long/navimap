@@ -1,7 +1,7 @@
 #ifndef NAVIMAP_PAINT_H
 #define NAVIMAP_PAINT_H
 
-#include <SDL.h>
+#include <stdint.h>
 #include "map/map_view.h"
 #include "map/binfmt.h"
 #include "render/raster.h"
@@ -108,7 +108,7 @@ void road_labels_reset(void);
 void road_labels_add(const NamePool *np, uint32_t name_id, int x, int y);
 void road_labels_get(const RoadLabel **out, int *n);
 
-void paint_background(SDL_Renderer *r, int w, int h);
+void paint_background(Raster *rs, int w, int h);
 
 /* 画路网。max_class = 0..4，超过这个等级的路不画（LOD）。
  * 5-7（步行道/铁路/水系线）走 paint_lines，不在这里。
@@ -120,11 +120,11 @@ void paint_background(SDL_Renderer *r, int w, int h);
  * "这一格瓦片有几个省有数据"。≥2 个省才可能有跨省重复，才需要查去重表
  * （8 省 z9 一帧 55 万条里只有 3 万条落在多省格子里，其余 95% 的探表是白付的，
  * 实测门控后省 70 ms）。传 NULL/0 则退回"一律去重"的旧行为。 */
-/* ★ rs 是"直接写像素"的目标（见 raster.h）。面/路/线三条热点走它，
- * 文字与 UI 面板仍然用 SDL_Renderer —— 两者画在同一张 surface 上，可以混。
- * rs 为 NULL 时这几个函数什么都不画（调用方必须先 raster_bind 成功）。 */
+/* ★ rs 是"直接写像素"的目标（见 raster.h）—— 现在整条绘制管线都走它，
+ * 不再依赖 SDL_Renderer（SDL 只保留在 window_sdl.c 的窗口/事件层）。
+ * rs 为 NULL 时这几个函数什么都不画（调用方必须先 raster_bind_mem 成功）。 */
 void paint_roadpix_begin(void);
-void paint_roads(SDL_Renderer *r, Raster *rs, const MapView *v,
+void paint_roads(Raster *rs, const MapView *v,
                  const NMBinFile *nodes, const NMBinFile *edges,
                  const NMBinFile *tiles, const NMBinFile *edgelist,
                  const NamePool *np, DedupSet *dd,
@@ -134,7 +134,7 @@ void paint_roads(SDL_Renderer *r, Raster *rs, const MapView *v,
 /* 面要素（建筑/水面/绿地）。bbox_cache 是调用方持有的每面 bbox 缓存
  * （na*4 个 i32，e7 度），首次传 NULL 会就地分配并填充。
  * min_zoom_area/green 与建筑分开控制：建筑只在 zoom>=13 出现。 */
-int  paint_areas(SDL_Renderer *r, Raster *rs, const MapView *v,
+int  paint_areas(Raster *rs, const MapView *v,
                  const NMBinFile *nodes, const NMBinFile *areas,
                  const NMBinFile *polyrefs,
                  int32_t **bbox_cache, PaintStats *st);
@@ -146,17 +146,17 @@ int  paint_areas(SDL_Renderer *r, Raster *rs, const MapView *v,
  *   没有 bbox 预筛就得把每条线的**全部顶点**（上限 4096）都投影一遍才能判断
  *   它可不可见——实测 z14 一帧 248 ms 里的绝大部分就是这些白投影
  *   （占了整帧 331 ms 的 75%）。 */
-int  paint_lines(SDL_Renderer *r, Raster *rs, const MapView *v,
+int  paint_lines(Raster *rs, const MapView *v,
                  const NMBinFile *nodes, const NMBinFile *lines,
                  const NMBinFile *polyrefs,
                  int32_t **bbox_cache, PaintStats *st);
 
 /* 在屏幕上标一个点（当前位置/选点） */
-void paint_marker(SDL_Renderer *r, int x, int y, int radius,
+void paint_marker(Raster *rs, int x, int y, int radius,
                   uint8_t rr, uint8_t gg, uint8_t bb);
 
-/* 粗线：SDL_RenderDrawLine 只有 1 像素宽。竖向偏移画 n 条近似加粗，
+/* 粗线：raster 一次只画 1 像素宽。竖向偏移画 n 条近似加粗，
    近垂直的线再补横向偏移（否则斜线的粗细看着不对）。路网和路线叠加都用它。 */
-void paint_thick_line(SDL_Renderer *r, int x0, int y0, int x1, int y1, int width);
+void paint_thick_line(Raster *rs, int x0, int y0, int x1, int y1, int width, uint32_t col);
 
 #endif

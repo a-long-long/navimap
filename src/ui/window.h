@@ -1,7 +1,8 @@
 #ifndef NAVIMAP_WINDOW_H
 #define NAVIMAP_WINDOW_H
 
-#include <SDL.h>
+#include <stdint.h>
+#include "utils/plat.h"
 #include "map/map_view.h"
 #include "map/binfmt.h"
 #include "map/mapset.h"
@@ -54,12 +55,8 @@ typedef struct {
  * 运行期以实际为准"处理，不假设创建时请求的尺寸就是最终尺寸。
  */
 typedef struct {
-    SDL_Window   *win;
-    SDL_Renderer *win_ren;      /* 窗口渲染器：只负责把离屏画布贴上去 */
-    SDL_Texture  *tex;          /* 离屏画布的上传通道 */
-    SDL_Renderer *ren;          /* 离屏 surface 上的软渲染器（文字/UI 用它） */
-    SDL_Surface  *surf;         /* 离屏画布：光栅与 SDL 混画在同一张图上 */
-    Raster        ras;          /* 直写像素的目标（面/路/线） */
+    /* SDL 相关的窗口/画布/纹理由 window_sdl.c 持有（navimap_qt 不链 SDL，
+       它用自己的画布缓冲，二者都通过 app_render_to_buf 调同一套绘制）。 */
     MapView       view;
     MapSet        ms;                     /* 图集：单省或多省（阶段 4） */
     uint64_t      total_nodes, total_edges;
@@ -87,7 +84,7 @@ typedef struct {
     RouteResult   rr;
     int           have_rr;
     ManeuverList  man;
-    SDL_mutex    *nav_mu;
+    NmMutex      *nav_mu;
     int           nav_busy;      /* 后台在算（nav_mu 保护） */
     int           nav_pending;   /* 排队中的新请求（nav_mu 保护） */
     NavPick       req_a, req_b;
@@ -96,7 +93,7 @@ typedef struct {
     char          nav_msg[192];  /* 面板顶行："计算中…" / "无可行路线" 等 */
     int           show_panel;
     int           nav_stop;      /* 退出：后台线程干完手头这单就收工（nav_mu 保护） */
-    Uint32        nav_t0;        /* 本单开始时刻（标题栏显示"计算中 x.x s"） */
+    uint64_t      nav_t0;        /* 本单开始时刻（标题栏显示"计算中 x.x s"） */
 
     /* ---- 模拟导航（阶段 9 导航层）----
      * sim 只在主线程里动：每帧 advance + locate，结果就是"车头在哪、还剩多远"。
@@ -106,7 +103,7 @@ typedef struct {
     int           sim_paused;    /* 暂时不走（重算中 / 已到达） */
     int           sim_follow;    /* 视口跟着车头 */
     int           sim_speed_idx; /* 倍速档（SPEEDS[] 下标） */
-    Uint32        sim_tick;      /* 上一帧的时刻，用来算真实 dt */
+    uint64_t      sim_tick;      /* 上一帧的时刻，用来算真实 dt */
 
     /* ---- 无地图区域提示 ----
      * "关注点"（模拟导航中=车头位置，否则=视口中心）落到没有数据的地方时，
@@ -150,15 +147,27 @@ int  app_init(App *a, const char *graph_dir, int w, int h,
  * 无地图区域提示按它判断，无头验收的判据也必须按它——两处各写一遍的话，
  * 出现"视口有图、车头无图"这种混合情况时就会一边弹提示一边判失败。 */
 void app_focus_point(const App *a, double *lat, double *lon);
+
+/* 主循环。★ 实现在 window_sdl.c（**不在** navimap_core 里）：SDL 窗口版专用，
+   链 SDL 的目标（navmap / map_shot）才编入。Qt 前端有自己的主循环，不调它。 */
 void app_run(App *a);
 void app_shutdown(App *a);
+
+/* 状态栏文本（窗口标题栏用）。实现留在 window.c（Qt 前端也可用）。 */
+void update_status(App *a, double frame_ms);
 
 /* 运行期改字号（返回实际生效的字号）。字号是 TTF_Font 的属性，改它必须
  * 重建 Font —— 旧字形纹理全部作废，这里一并释放。字体被关闭时返回 0。 */
 int  app_set_font_size(App *a, int size);
 
-/* 无窗口渲染一帧到内存（供 map_shot 做无人值守验证） */
-int  app_render_to_surface(App *a, SDL_Surface *surf, PaintStats *st);
+/* 无窗口渲染：把一帧画进调用方持有的像素缓冲（供 map_shot 无人值守验证、
+   Qt 前端自持画布都走这条；SDL 窗口版在 window_sdl.c 内部也用它）。
+   px 为 w×h 的 32bpp 缓冲，stride 以"像素"计；rmask/gmask/bmask/amask 描述
+   打包格式（例如 QImage::Format_RGB32 在 x86 小端为 0x00FF0000/0x0000FF00/
+   0x000000FF/0xFF000000）。 */
+int  app_render_to_buf(App *a, void *px, int w, int h, size_t stride,
+                       uint32_t rmask, uint32_t gmask, uint32_t bmask,
+                       uint32_t amask, PaintStats *st);
 
 /* ---- 导航入口（阶段 9）----
  * 全部在主线程调用：只改状态、提交请求、收割结果。真正的 router_* 调用
@@ -180,8 +189,8 @@ void app_nav_sim_tick(App *a);        /* 主循环每帧调用：按真实 dt �
  * 查询本身是毫秒级（实测均值 1 ms），直接在主线程做，不必开线程。 */
 void app_search_open(App *a);                 /* / 或 s 键 */
 void app_search_close(App *a);
-void app_search_input(App *a, const char *utf8);   /* SDL_TEXTINPUT */
-void app_search_editing(App *a, const char *utf8); /* SDL_TEXTEDITING（只显示） */
+void app_search_input(App *a, const char *utf8);   /* IME 上屏文本 */
+void app_search_editing(App *a, const char *utf8); /* IME 组合串（只显示） */
 void app_search_backspace(App *a);
 void app_search_move(App *a, int dir);        /* ↑↓ 选择 */
 void app_search_commit(App *a);               /* Enter：定位 + 设为起/终点 */

@@ -1,5 +1,8 @@
 #include "render/paint.h"
 
+#include <stdlib.h>
+#include <string.h>
+
 #include "map/binfmt.h"
 #include "map/coordkey.h"
 #include "map/road_tags.h"
@@ -139,31 +142,17 @@ int dedup_seen(DedupSet *d, uint64_t hi, uint64_t lo)
     }
 }
 
-void paint_background(SDL_Renderer *r, int w, int h)
+void paint_background(Raster *rs, int w, int h)
 {
-    SDL_SetRenderDrawColor(r, 244, 241, 234, 255);
-    SDL_Rect rc = { 0, 0, w, h };
-    SDL_RenderFillRect(r, &rc);
+    raster_fill_rect(rs, 0, 0, w, h, 244, 241, 234, 255);
 }
 
-/* 粗线：SDL_RenderDrawLine 只有 1 像素宽，这里用竖向偏移画 n 条近似加粗。
+/* 粗线：raster 一次只画 1 像素宽，这里用竖向偏移画 n 条近似加粗。
    横向/近水平的线加粗效果差，但路网里绝大多数段是斜的，观感够用。
    路线叠加（navdraw.c）也用同一份，别在别处另写。 */
-void paint_thick_line(SDL_Renderer *r, int x0, int y0, int x1, int y1, int width)
+void paint_thick_line(Raster *rs, int x0, int y0, int x1, int y1, int width, uint32_t col)
 {
-    if (width <= 1) { SDL_RenderDrawLine(r, x0, y0, x1, y1); return; }
-    int half = width / 2;
-    for (int d = -half; d <= half; d++) {
-        if (width % 2 == 0 && d == half) continue;
-        SDL_RenderDrawLine(r, x0, y0 + d, x1, y1 + d);
-    }
-    /* 近垂直的线补横向偏移 */
-    if (abs(x1 - x0) < abs(y1 - y0)) {
-        for (int d = -half; d <= half; d++) {
-            if (width % 2 == 0 && d == half) continue;
-            SDL_RenderDrawLine(r, x0 + d, y0, x1 + d, y1);
-        }
-    }
+    raster_thick_line(rs, x0, y0, x1, y1, width, col);
 }
 
 /* ------------------------------------------------------------------ */
@@ -250,14 +239,13 @@ static void tile_dir(const NMBinFile *tiles, const TileRange *tr, int tx, int ty
 }
 
 /* tile 驱动路径：只遍历视口覆盖的 tile（±1 格 margin）。 */
-static void paint_roads_tiled(SDL_Renderer *r, Raster *rs, const MapView *v,
+static void paint_roads_tiled(Raster *rs, const MapView *v,
                               const NMBinFile *nodes, const NMBinFile *edges,
                               const NMBinFile *tiles, const NMBinFile *edgelist,
                               const NamePool *np, DedupSet *dd,
                               int max_class, PaintStats *st,
                               const NMBinFile *const *peer, int n_peer)
 {
-    (void)r;
     TileRange tr;
     if (!tile_range(tiles, v, &tr)) return;
 
@@ -440,7 +428,7 @@ static void paint_roads_tiled(SDL_Renderer *r, Raster *rs, const MapView *v,
     }
 }
 
-void paint_roads(SDL_Renderer *r, Raster *rs, const MapView *v,
+void paint_roads(Raster *rs, const MapView *v,
                  const NMBinFile *nodes, const NMBinFile *edges,
                  const NMBinFile *tiles, const NMBinFile *edgelist,
                  const NamePool *np, DedupSet *dd,
@@ -457,7 +445,7 @@ void paint_roads(SDL_Renderer *r, Raster *rs, const MapView *v,
     if (nn == 0 || ne == 0) return;
 
     if (tiles && edgelist) {
-        paint_roads_tiled(r, rs, v, nodes, edges, tiles, edgelist, np, dd,
+        paint_roads_tiled(rs, v, nodes, edges, tiles, edgelist, np, dd,
                           max_class, st, peer_tiles, n_peer);
         return;
     }
@@ -544,14 +532,12 @@ void paint_roads(SDL_Renderer *r, Raster *rs, const MapView *v,
     }
 }
 
-void paint_marker(SDL_Renderer *r, int x, int y, int radius,
+void paint_marker(Raster *rs, int x, int y, int radius,
                   uint8_t rr, uint8_t gg, uint8_t bb)
 {
-    SDL_SetRenderDrawColor(r, rr, gg, bb, 255);
-    SDL_Rect rc = { x - radius, y - radius, radius * 2 + 1, radius * 2 + 1 };
-    SDL_RenderFillRect(r, &rc);
-    SDL_SetRenderDrawColor(r, 255, 255, 255, 255);
-    SDL_RenderDrawRect(r, &rc);
+    int rx = x - radius, ry = y - radius, rw = radius * 2 + 1, rh = radius * 2 + 1;
+    raster_fill_rect(rs, rx, ry, rw, rh, rr, gg, bb, 255);
+    raster_rect(rs, rx, ry, rw, rh, 255, 255, 255, 255);
 }
 
 /* ------------------------------------------------------------------ */
@@ -707,12 +693,11 @@ static int project_ring(const MvProj *P, const NMBinFile *nodes,
     return n;
 }
 
-int paint_areas(SDL_Renderer *r, Raster *rs, const MapView *v,
+int paint_areas(Raster *rs, const MapView *v,
                 const NMBinFile *nodes, const NMBinFile *areas,
                 const NMBinFile *polyrefs,
                  int32_t **bbox_cache, PaintStats *st)
 {
-    (void)r;                       /* 热点走 rs；SDL 渲染器在此函数里已无用 */
     uint64_t na = areas->hdr.rec_count;
     uint64_t np = polyrefs->hdr.rec_count;
     uint64_t nn = nodes->hdr.rec_count;
@@ -835,12 +820,11 @@ int paint_areas(SDL_Renderer *r, Raster *rs, const MapView *v,
 /* 线要素：步行道 / 铁路 / 水系线                                        */
 /* ------------------------------------------------------------------ */
 
-int paint_lines(SDL_Renderer *r, Raster *rs, const MapView *v,
+int paint_lines(Raster *rs, const MapView *v,
                 const NMBinFile *nodes, const NMBinFile *lines,
                 const NMBinFile *polyrefs,
                 int32_t **bbox_cache, PaintStats *st)
 {
-    (void)r;
     uint64_t nl = lines->hdr.rec_count;
     uint64_t np = polyrefs->hdr.rec_count;
     uint64_t nn = nodes->hdr.rec_count;

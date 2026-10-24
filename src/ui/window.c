@@ -47,9 +47,9 @@ int app_init(App *a, const char *graph_dir, int w, int h,
     a->show_panel = 1;
     a->sim_speed_idx = SIM_SPEED_DEFAULT;
     a->sim_follow = 1;
-    /* 互斥量要在 SDL_Init 之后建（main.c 里 app_init 早于 app_run）。 */
-    if (SDL_WasInit(SDL_INIT_VIDEO) == 0) SDL_Init(SDL_INIT_VIDEO);
-    a->nav_mu = SDL_CreateMutex();     /* 算路线程与主线程之间的那点状态 */
+    /* 互斥量用平台抽象层（不直接碰 pthread / CRITICAL_SECTION）。
+       app_init 早于 app_run，但 nm_mutex 不依赖任何窗口系统，这里直接建。 */
+    a->nav_mu = nm_mutex_create();     /* 算路线程与主线程之间的那点状态 */
     if (!a->nav_mu) fprintf(stderr, "提示: 建不了互斥量，导航功能不可用\n");
 
     /* 图集加载。graph_dir 既可以是单个省目录（products/graph/beijing），
@@ -138,34 +138,28 @@ void app_shutdown(App *a)
        必须等它退出再销毁：nav_busy 由 nav_mu 保护，这里自旋等一下。
        退出路径上最多等几秒，不当成错误。 */
     if (a->nav_mu) {
-        SDL_LockMutex(a->nav_mu);
+        nm_mutex_lock(a->nav_mu);
         a->nav_stop = 1;                 /* 排队的请求不再开工 */
-        SDL_UnlockMutex(a->nav_mu);
+        nm_mutex_unlock(a->nav_mu);
         for (int i = 0; i < 3000; i++) { /* 最多等 30 秒：跨省长途 5 秒级 */
-            SDL_LockMutex(a->nav_mu);
+            nm_mutex_lock(a->nav_mu);
             int busy = a->nav_busy;
-            SDL_UnlockMutex(a->nav_mu);
+            nm_mutex_unlock(a->nav_mu);
             if (!busy) break;
-            SDL_Delay(10);
+            nm_sleep_ms(10);
         }
     }
     if (a->nav_done) { route_result_free(&a->nav_done->rr); free(a->nav_done); a->nav_done = NULL; }
     if (a->have_rr) route_result_free(&a->rr);
     maneuver_free(&a->man);
     router_destroy(a->router);
-    if (a->nav_mu) { SDL_DestroyMutex(a->nav_mu); a->nav_mu = NULL; }
+    if (a->nav_mu) { nm_mutex_destroy(a->nav_mu); a->nav_mu = NULL; }
     mapset_free(&a->ms);
     dedup_free(&a->dd);
     label_cache_free(&a->places);
     search_close(a->sdb);
     font_close(a->font_big);
     font_close(a->font);
-    if (a->tex) SDL_DestroyTexture(a->tex);
-    if (a->ren) SDL_DestroyRenderer(a->ren);
-    if (a->surf) SDL_FreeSurface(a->surf);
-    if (a->win_ren) SDL_DestroyRenderer(a->win_ren);
-    if (a->win) SDL_DestroyWindow(a->win);
-    SDL_Quit();
 }
 
 #define FONT_SIZE_MIN 8
@@ -266,17 +260,17 @@ static int nav_err_of(int rc)
     return -2;                  /* 超限 */
 }
 
-static int nav_worker(void *ud)
+static void nav_worker(void *ud)
 {
     App *a = (App *)ud;
 
     for (;;) {
         NavPick pa, pb;
-        SDL_LockMutex(a->nav_mu);
+        nm_mutex_lock(a->nav_mu);
         pa = a->req_a;
         pb = a->req_b;
         a->nav_pending = 0;
-        SDL_UnlockMutex(a->nav_mu);
+        nm_mutex_unlock(a->nav_mu);
 
         NavResult *res = calloc(1, sizeof(NavResult));
         if (!res) { fprintf(stderr, "导航: 内存不足\n"); break; }
@@ -299,16 +293,15 @@ static int nav_worker(void *ud)
             }
         }
 
-        SDL_LockMutex(a->nav_mu);
+        nm_mutex_lock(a->nav_mu);
         if (a->nav_done) { route_result_free(&a->nav_done->rr); free(a->nav_done); }
         a->nav_done = res;
         a->nav_done_flag = 1;
         int again = a->nav_pending && !a->nav_stop;
         if (!again) a->nav_busy = 0;
-        SDL_UnlockMutex(a->nav_mu);
+        nm_mutex_unlock(a->nav_mu);
         if (!again) break;
     }
-    return 0;
 }
 
 static void nav_request(App *a)
@@ -319,24 +312,22 @@ static void nav_request(App *a)
         return;
     }
     int start = 0;
-    SDL_LockMutex(a->nav_mu);
+    nm_mutex_lock(a->nav_mu);
     a->req_a = a->pick_a;
     a->req_b = a->pick_b;
     if (a->nav_busy) a->nav_pending = 1;    /* 手头这单跑完再算新的 */
     else { a->nav_busy = 1; start = 1; }
-    SDL_UnlockMutex(a->nav_mu);
+    nm_mutex_unlock(a->nav_mu);
     if (!start) return;
 
-    a->nav_t0 = SDL_GetTicks();
-    SDL_Thread *th = SDL_CreateThread(nav_worker, "navplan", a);
-    if (!th) {
-        SDL_LockMutex(a->nav_mu);
+    a->nav_t0 = nm_now_ms();
+    if (nm_thread_spawn(nav_worker, a) != 0) {
+        nm_mutex_lock(a->nav_mu);
         a->nav_busy = 0;
-        SDL_UnlockMutex(a->nav_mu);
+        nm_mutex_unlock(a->nav_mu);
         snprintf(a->nav_msg, sizeof(a->nav_msg), "算路线程起不来");
         return;
-    }
-    SDL_DetachThread(th);                   /* 结果走 nav_done，不等它 join */
+    }                                          /* 结果走 nav_done，不等它 join */
 }
 
 void app_nav_poll(App *a)
@@ -344,10 +335,10 @@ void app_nav_poll(App *a)
     if (!a->nav_done_flag) return;
 
     NavResult *res = NULL;
-    SDL_LockMutex(a->nav_mu);
+    nm_mutex_lock(a->nav_mu);
     if (a->nav_done) { res = a->nav_done; a->nav_done = NULL; }
     a->nav_done_flag = 0;
-    SDL_UnlockMutex(a->nav_mu);
+    nm_mutex_unlock(a->nav_mu);
     if (!res) return;
 
     int was_sim = a->sim_on;            /* 偏航重算后要接着模拟 */
@@ -381,7 +372,7 @@ void app_nav_poll(App *a)
             a->sim.speed_mul = sim_speed_of(a);
             a->sim_on = 1;
             a->sim_paused = 0;
-            a->sim_tick = SDL_GetTicks();
+            a->sim_tick = nm_now_ms();
         }
         printf("路线  %.2f km  约 %.0f 分  %u 段  %d 条指令  展开 %llu  %llu ms\n",
                a->rr.total_m / 1000.0, a->rr.total_s / 60.0, a->rr.n - 1,
@@ -482,7 +473,8 @@ void app_search_open(App *a)
     }
     a->su.active = 1;
     a->su.editing[0] = '\0';
-    SDL_StartTextInput();          /* 没有它 SDL 不会给 TEXTINPUT 事件 */
+    /* 注：SDL 窗口版在 window_sdl.c 的事件处理里负责 SDL_StartTextInput，
+       本函数是平台无关的；Qt 前端由 QLineEdit 自带 IME，无需额外动作。 */
     if (a->su.text[0]) app_search_query(a, a->su.text);
     a->need_redraw = 1;
 }
@@ -492,7 +484,6 @@ void app_search_close(App *a)
     if (!a->su.active) return;
     a->su.active = 0;
     a->su.editing[0] = '\0';
-    SDL_StopTextInput();
     a->need_redraw = 1;
 }
 
@@ -599,7 +590,7 @@ void app_nav_sim_toggle(App *a)
         a->sim_on = 1;
         a->sim_paused = 0;
         a->sim_follow = 1;
-        a->sim_tick = SDL_GetTicks();
+        a->sim_tick = nm_now_ms();
         a->nav_msg[0] = '\0';
         /* 导航视角：z<14 时路口看不清，转向提示无从判断对不对 */
         if (a->view.zoom < 14.0) a->view.zoom = 15.0;
@@ -656,7 +647,7 @@ void app_nav_sim_tick(App *a)
     /* have_rr 一起判：正常情况下 sim_on 蕴含 have_rr（drop 时会一起关），
        这里再挡一道，悬空指针就进不了 navsim_advance。 */
     if (!a->sim_on || !a->have_rr || a->sim_paused) return;
-    Uint32 now = SDL_GetTicks();
+    uint64_t now = nm_now_ms();
     double dt = (double)(now - a->sim_tick) / 1000.0;
     a->sim_tick = now;
     if (dt <= 0) return;
@@ -757,7 +748,7 @@ static void app_update_coverage(App *a)
 
 
 
-static void paint_frame(SDL_Renderer *r, Raster *rs, App *a, PaintStats *st)
+static void paint_frame(Raster *rs, App *a, PaintStats *st)
 {
     /* 统计在这里清零一次，且只在这里清。
        曾经放在 paint_roads 入口，结果把它之前 paint_areas 累加的 areas_drawn
@@ -778,7 +769,7 @@ static void paint_frame(SDL_Renderer *r, Raster *rs, App *a, PaintStats *st)
                    ts0 = ts1)
 
     ts0 = nm_now_ms();
-    paint_background(r, a->view.w, a->view.h);
+    paint_background(rs, a->view.w, a->view.h);
     TICK(ms_bg);
 
     double vb[4];
@@ -820,8 +811,8 @@ static void paint_frame(SDL_Renderer *r, Raster *rs, App *a, PaintStats *st)
         if (s->dup_of >= 0) continue;            /* 整省被别省包了，见下方说明 */
         if (!s->loaded) continue;                /* 该省已卸载（set_view 判定视口外） */
         if (s->has_features)
-            paint_areas(r, rs, &a->view, &s->nodes, &s->areas, &s->polyrefs,
-                        &s->area_bbox, st);
+            paint_areas(rs, &a->view, &s->nodes, &s->areas, &s->polyrefs,
+                       &s->area_bbox, st);
     }
     TICK(ms_areas);
     /* 各省的 tiles.bin（含被跳过的省也算了？不：被跳过的省不画，它的格子
@@ -841,7 +832,7 @@ static void paint_frame(SDL_Renderer *r, Raster *rs, App *a, PaintStats *st)
         if (!bbox_hits(s->bbox, vb)) continue;
         if (s->dup_of >= 0) continue;
         if (!s->loaded) continue;
-        paint_roads(r, rs, &a->view, &s->nodes, &s->edges,
+        paint_roads(rs, &a->view, &s->nodes, &s->edges,
                     s->has_tiles ? &s->tiles : NULL,
                     s->has_tiles ? &s->edgelist : NULL,
                     s->np.ready ? &s->np : NULL, dd,
@@ -854,14 +845,14 @@ static void paint_frame(SDL_Renderer *r, Raster *rs, App *a, PaintStats *st)
         if (s->dup_of >= 0) continue;
         if (!s->loaded) continue;
         if (s->has_features)
-            paint_lines(r, rs, &a->view, &s->nodes, &s->lines, &s->polyrefs,
-                        &s->line_bbox, st);
+            paint_lines(rs, &a->view, &s->nodes, &s->lines, &s->polyrefs,
+                       &s->line_bbox, st);
     }
     TICK(ms_lines);
     if (a->font) {
         /* 地名库是全局一份（places.db 跨省通用），只需查一次 */
-        paint_place_labels(r, &a->view, &a->places, a->font, st);
-        paint_road_labels(r, &a->view, a->font, st);
+        paint_place_labels(rs, &a->view, &a->places, a->font, st);
+        paint_road_labels(rs, &a->view, a->font, st);
     }
     TICK(ms_labels);
 #undef TICK
@@ -876,32 +867,32 @@ static void paint_frame(SDL_Renderer *r, Raster *rs, App *a, PaintStats *st)
             double lm = a->rr.seg_m ? (double)a->rr.seg_m[a->sim.seg] : 0.0;
             dt = lm > 0 ? a->sim.seg_pos / lm : 0.0;
         }
-        paint_route(r, &a->view, a->rr.lat_e7, a->rr.lon_e7, a->rr.n, 0, ds, dt);
+        paint_route(rs, &a->view, a->rr.lat_e7, a->rr.lon_e7, a->rr.n, 0, ds, dt);
     }
     if (a->sim_on)
-        paint_nav_car(r, &a->view, a->sim.car_lat, a->sim.car_lon,
+        paint_nav_car(rs, &a->view, a->sim.car_lat, a->sim.car_lon,
                       a->sim.heading_deg);
     if (a->pick_a.have)
-        paint_nav_marker(r, &a->view,
+        paint_nav_marker(rs, &a->view,
                          a->pick_a.snapped ? a->pick_a.slat : a->pick_a.lat,
                          a->pick_a.snapped ? a->pick_a.slon : a->pick_a.lon,
                          1, a->font);
     if (a->pick_b.have)
-        paint_nav_marker(r, &a->view,
+        paint_nav_marker(rs, &a->view,
                          a->pick_b.snapped ? a->pick_b.slat : a->pick_b.lat,
                          a->pick_b.snapped ? a->pick_b.slon : a->pick_b.lon,
                          0, a->font);
 
     int cx, cy;
     mv_project(&a->view, a->view.lat, a->view.lon, &cx, &cy);
-    paint_marker(r, cx, cy, 4, 30, 90, 220);
+    paint_marker(rs, cx, cy, 4, 30, 90, 220);
 
     /* 夜间蒙版：只压暗地图，不压下面要画的面板/文字/chrome */
-    if (a->day_night) paint_night_tint(r, a->view.w, a->view.h);
+    if (a->day_night) paint_night_tint(rs, a->view.w, a->view.h);
 
     /* Qt 前端接管后这些自绘 UI 全部由真控件承担，不再画 */
     if (a->show_panel && a->font && !a->qt_ui)
-        paint_nav_panel(r, a->have_rr ? &a->rr : NULL,
+        paint_nav_panel(rs, a->have_rr ? &a->rr : NULL,
                         a->man.n ? &a->man : NULL, a->font,
                         a->font_size + 8, 12, 12, 6,
                         a->nav_msg[0] ? a->nav_msg : NULL);
@@ -935,7 +926,7 @@ static void paint_frame(SDL_Renderer *r, Raster *rs, App *a, PaintStats *st)
         else            snprintf(b_eta, sizeof(b_eta), "约 %d 分钟", mins);
         b.turn = b_turn; b.dist = b_dist; b.road = b_road;
         b.remain = b_rem; b.eta = b_eta;
-        paint_nav_banner(r, &a->view, a->font, a->font_big,
+        paint_nav_banner(rs, &a->view, a->font, a->font_big,
                          a->font_size + 8, app_big_size(a->font_size) + 8, &b);
     }
 
@@ -943,7 +934,7 @@ static void paint_frame(SDL_Renderer *r, Raster *rs, App *a, PaintStats *st)
     if (a->su.active && a->font) {
         int show = a->su.n_hits < 8 ? a->su.n_hits : 8;
         for (int i = 0; i < show; i++)
-            paint_search_pin(r, &a->view, a->su.hits[i].lat, a->su.hits[i].lon,
+            paint_search_pin(rs, &a->view, a->su.hits[i].lat, a->su.hits[i].lon,
                              i == a->su.sel, a->font,
                              i == a->su.sel ? a->su.hits[i].name : NULL);
         if (!a->qt_ui) {
@@ -957,7 +948,7 @@ static void paint_frame(SDL_Renderer *r, Raster *rs, App *a, PaintStats *st)
         sb.sel = a->su.sel;
         sb.show_max = 8;
         sb.elapsed_ms = (int)a->su.elapsed_ms;
-        paint_search_box(r, &a->view, a->font, a->font_big,
+        paint_search_box(rs, &a->view, a->font, a->font_big,
                          a->font_size + 8, app_big_size(a->font_size) + 8, &sb);
         }
     }
@@ -966,91 +957,37 @@ static void paint_frame(SDL_Renderer *r, Raster *rs, App *a, PaintStats *st)
        被面板或按钮压住就失去意义了。 */
     app_update_coverage(a);
     if (a->cov_state == COV_NONE || a->cov_state == COV_BBOX_ONLY)
-        paint_nomap_banner(r, &a->view, a->font, a->font_size + 8, a->cov_state);
+        paint_nomap_banner(rs, &a->view, a->font, a->font_size + 8, a->cov_state);
 
     /* nav-desktop 风格 chrome（自绘标题栏 / 顶栏 / 右栏 / 导航栏 /
        步骤面板 / 主菜单 / 无图卡片 / 比例尺 / 指北针 / 昼夜）叠在最上层；
        Qt 前端时由真控件承担，跳过。 */
     if (!a->qt_ui)
-        paint_chrome(r, a);
+        paint_chrome(rs, a);
 }
 
-int app_render_to_surface(App *a, SDL_Surface *surf, PaintStats *st)
+int app_render_to_buf(App *a, void *px, int w, int h, size_t stride,
+                     uint32_t rmask, uint32_t gmask, uint32_t bmask,
+                     uint32_t amask, PaintStats *st)
 {
-    SDL_Renderer *r = SDL_CreateSoftwareRenderer(surf);
-    if (!r) return -1;
-    a->view.w = surf->w;
-    a->view.h = surf->h;
+    if (w <= 0 || h <= 0 || !px) return -1;
+    a->view.w = w;
+    a->view.h = h;
 
+    /* 绑定到调用方持有的 32bpp 像素缓冲：窗口版在 window_sdl.c 的离屏
+     * surface 上、Qt 前端在自己的 QImage 缓冲上、map_shot 在 SDL_Surface 上。
+     * 字形走 stb_truetype 的 CPU 缓存（见 font.c），与渲染目标生命周期无关，
+     * 这里不再每帧 drop 纹理。 */
     Raster rs;
-    if (raster_bind(&rs, surf) != 0) { SDL_DestroyRenderer(r); return -1; }
-    paint_frame(r, &rs, a, st);
-
-    SDL_RenderPresent(r);
-    /* ★ 销毁 renderer 前必须作废字形纹理（与 app_ensure_canvas 同一约定）。
-     *
-     * 字形纹理挂在创建它的 renderer 上，随 renderer 一起销毁。而 glyph_get
-     * 只在 `tex_owner != r` 时才重建 —— 判据是**指针相等**，不是"renderer
-     * 真的换了"。本函数每帧新建/销毁一个软件渲染器，两次 SDL_CreateSoftware-
-     * Renderer 完全可能返回**同一个地址**（中间的 SDL_DestroyRenderer 把那块
-     * 内存还回分配器，下次立即复用；实测在 8 省图集上就是如此）。
-     * 一旦地址相同，tex_owner 判定为"没换"，缓存里的 g->tex 就成了悬垂指针，
-     * 下一帧 RenderCopy 会画出错的字（实测表现为文字像素整体错位）。
-     *
-     * 这个 bug 只在"两帧地址恰好相同"时显形，而地址是否相同取决于堆布局 ——
-     * 任何改变分配顺序的改动（多解码一个 PBF、多打开一个文件、多一个缓存）都可能
-     * 把它从"不出现"推到"出现"。ASan/valgrind 也查不到（不是 use-after-free，
-     * SDL 内部仍认为该纹理有效）。所以必须无条件作废，不能靠判据躲。
-     */
-    font_drop_textures(a->font);
-    font_drop_textures(a->font_big);
-    SDL_DestroyRenderer(r);
+    if (raster_bind_mem(&rs, px, w, h, stride, rmask, gmask, bmask, amask) != 0)
+        return -1;
+    paint_frame(&rs, a, st);
     return 0;
 }
 
-/* ---- 窗口模式的画布 ----
- *
- * 面/路/线现在直接写像素，需要一个能拿到 pixels 的画布；而 SDL 的窗口渲染器
- * 不暴露它的 surface。所以统一成：先在**离屏 surface** 上画完（光栅画地图、
- * SDL 画文字和 UI，两者混在同一张图上——软件渲染器没有双缓冲，实测可以直接
- * 混写），再把整张 surface 上传成纹理贴到窗口。
- *
- * 代价是每帧多一次 1280×800×4 的上传（实测 ~2.6 ms），换来的是：
- *   ① 窗口和 map_shot 走**同一套** paint_frame，不再有两份渲染代码；
- *   ② 省掉的是 80 ms 级的 SDL 调用开销（PLAN.md §29），2.6 ms 不值一提。
- *
- * ★ resize 会重建离屏渲染器，那时字形纹理会跟着旧 renderer 一起没。必须
- *   先 font_drop_textures() 把它们作废，否则新 renderer 万一分配到同一个
- *   地址，缓存里的悬空指针就会被当有效纹理用。
- */
-static int app_ensure_canvas(App *a, int w, int h)
-{
-    if (a->surf && a->surf->w == w && a->surf->h == h && a->ren) return 0;
-    if (w <= 0 || h <= 0) return -1;
+/* SDL 离屏画布 + 主循环见 window_sdl.c（仅 navmap / map_shot 链 SDL）。 */
 
-    font_drop_textures(a->font);
-    font_drop_textures(a->font_big);
-    if (a->ren) { SDL_DestroyRenderer(a->ren); a->ren = NULL; }
-    if (a->surf) { SDL_FreeSurface(a->surf); a->surf = NULL; }
-    if (a->tex) { SDL_DestroyTexture(a->tex); a->tex = NULL; }
-
-    a->surf = SDL_CreateRGBSurface(0, w, h, 32, 0, 0, 0, 0);
-    if (!a->surf) return -1;
-    a->ren = SDL_CreateSoftwareRenderer(a->surf);
-    if (!a->ren) return -1;
-    if (a->win_ren) {
-        Uint32 fmt = SDL_MasksToPixelFormatEnum(a->surf->format->BitsPerPixel,
-                                                a->surf->format->Rmask,
-                                                a->surf->format->Gmask,
-                                                a->surf->format->Bmask,
-                                                a->surf->format->Amask);
-        a->tex = SDL_CreateTexture(a->win_ren, fmt,
-                                   SDL_TEXTUREACCESS_STREAMING, w, h);
-    }
-    return 0;
-}
-
-static void update_status(App *a, double frame_ms)
+void update_status(App *a, double frame_ms)
 {
     /* 标题栏只留 60 字符给导航信息：nav_msg 最长 191，全放进来会把
        前面的坐标挤掉（gcc 也会报截断）。状态栏不是给人读长句的地方。 */
@@ -1071,218 +1008,4 @@ static void update_status(App *a, double frame_ms)
              a->view.lat, a->view.lon, a->view.zoom, a->max_class,
              a->font ? a->font_size : 0,
              a->ms.n, (unsigned long long)a->total_edges, frame_ms, nav);
-}
-
-void app_run(App *a)
-{
-    if (SDL_Init(SDL_INIT_VIDEO) != 0) {
-        fprintf(stderr, "SDL_Init 失败: %s\n", SDL_GetError());
-        return;
-    }
-    a->win = SDL_CreateWindow("NavMap",
-                              SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED,
-                              a->view.w, a->view.h,
-                              SDL_WINDOW_SHOWN | SDL_WINDOW_RESIZABLE |
-                              SDL_WINDOW_BORDERLESS);
-    if (!a->win) { fprintf(stderr, "建窗口失败: %s\n", SDL_GetError()); SDL_Quit(); return; }
-    a->win_ren = SDL_CreateRenderer(a->win, -1, SDL_RENDERER_SOFTWARE);
-    if (!a->win_ren) { fprintf(stderr, "建窗口渲染器失败: %s\n", SDL_GetError()); SDL_Quit(); return; }
-    if (app_ensure_canvas(a, a->view.w, a->view.h) != 0) {
-        fprintf(stderr, "建离屏画布失败: %s\n", SDL_GetError()); SDL_Quit(); return;
-    }
-
-    SDL_Event e;
-    while (!a->quit) {
-        while (SDL_PollEvent(&e)) {
-            switch (e.type) {
-            case SDL_QUIT: a->quit = 1; break;
-            case SDL_TEXTINPUT:
-                /* 输入法最终上屏的文本（中文一次一个字或一串） */
-                app_search_input(a, e.text.text);
-                break;
-            case SDL_TEXTEDITING:
-                /* 正在组合的串（拼音阶段）：只显示，不参与查询 */
-                app_search_editing(a, e.edit.text);
-                break;
-            case SDL_KEYDOWN:
-                /* ★ 搜索框打开时，按键优先归搜索：否则打字会顺手触发
-                   g/t/n/c/f 这些地图快捷键（'s' 既是搜索又是别的就更乱）。 */
-                if (a->su.active) {
-                    SDL_Keycode k = e.key.keysym.sym;
-                    if (k == SDLK_ESCAPE)               app_search_close(a);
-                    else if (k == SDLK_RETURN || k == SDLK_KP_ENTER)
-                                                        app_search_commit(a);
-                    else if (k == SDLK_BACKSPACE)       app_search_backspace(a);
-                    else if (k == SDLK_DOWN)            app_search_move(a, 1);
-                    else if (k == SDLK_UP)              app_search_move(a, -1);
-                    break;
-                }
-                if (e.key.keysym.sym == SDLK_ESCAPE) {
-                    if (a->menu_open) { a->menu_open = 0; a->need_redraw = 1; }
-                    else if (a->su.active) app_search_close(a);
-                    else a->quit = 1;
-                }
-                else if (e.key.keysym.sym == SDLK_q) a->quit = 1;
-                else if (e.key.keysym.sym == SDLK_d) {
-                    a->day_night = !a->day_night; a->need_redraw = 1;
-                }
-                else if (e.key.keysym.sym == SDLK_EQUALS || e.key.keysym.sym == SDLK_KP_PLUS)
-                    mv_zoom_at(&a->view, 0.5, a->view.w / 2, a->view.h / 2), a->need_redraw = 1;
-                else if (e.key.keysym.sym == SDLK_MINUS || e.key.keysym.sym == SDLK_KP_MINUS)
-                    mv_zoom_at(&a->view, -0.5, a->view.w / 2, a->view.h / 2), a->need_redraw = 1;
-                else if (e.key.keysym.sym >= SDLK_0 && e.key.keysym.sym <= SDLK_4) {
-                    a->max_class = e.key.keysym.sym - SDLK_0;
-                    a->need_redraw = 1;
-                }
-                /* 字号：[ 减小 / ] 增大（+/- 已给缩放用了） */
-                else if (e.key.keysym.sym == SDLK_LEFTBRACKET) {
-                    app_set_font_size(a, a->font_size - 1);
-                    a->need_redraw = 1;
-                }                 else if (e.key.keysym.sym == SDLK_RIGHTBRACKET) {
-                    app_set_font_size(a, a->font_size + 1);
-                    a->need_redraw = 1;
-                }
-                /* 导航：c 清除 / f 缩放到路线 / p 开关面板 */
-                else if (e.key.keysym.sym == SDLK_c) app_nav_clear(a);
-                else if (e.key.keysym.sym == SDLK_f) app_nav_fit(a);
-                else if (e.key.keysym.sym == SDLK_p) app_nav_toggle_panel(a);
-                /* 搜索：/ 或 s 打开搜索框 */
-                else if (e.key.keysym.sym == SDLK_SLASH ||
-                         e.key.keysym.sym == SDLK_s) app_search_open(a);
-                /* 模拟导航：g 开关 / t 跟随 / n 注入偏航 / . , 倍速 */
-                else if (e.key.keysym.sym == SDLK_g) app_nav_sim_toggle(a);
-                else if (e.key.keysym.sym == SDLK_t) app_nav_sim_follow(a);
-                else if (e.key.keysym.sym == SDLK_n) app_nav_sim_deviate(a);
-                else if (e.key.keysym.sym == SDLK_PERIOD) app_nav_sim_speed(a, 1);
-                else if (e.key.keysym.sym == SDLK_COMMA)  app_nav_sim_speed(a, -1);
-                break;
-            case SDL_MOUSEBUTTONDOWN:
-                if (e.button.button == SDL_BUTTON_LEFT) {
-                    int mx = e.button.x, my = e.button.y;
-                    int id = chrome_hit(a, mx, my);
-                    /* 自绘标题栏：落在窗口按钮以外就拖拽整个窗口 */
-                    if (my < CHROME_TITLE_H && id != CH_WIN_MIN &&
-                        id != CH_WIN_MAX && id != CH_WIN_CLOSE) {
-                        a->win_drag = 1;
-                        int wx, wy;
-                        SDL_GetWindowPosition(a->win, &wx, &wy);
-                        a->win_drag_x = mx - wx;
-                        a->win_drag_y = my - wy;
-                        a->dragging = 0;
-                    } else if ((SDL_GetModState() & KMOD_CTRL) && id == CH_NONE) {
-                        /* Ctrl+拖动 = 旋转地图（指北针可一键回正北） */
-                        a->rotating = 1;
-                        a->dragging = 0;
-                        a->last_x = mx; a->last_y = my;
-                    } else if (id != CH_NONE) {
-                        /* 命中 chrome 元素：交给 UP 当点击处理，不拖动地图 */
-                        a->dragging = 0;
-                    } else {
-                        a->dragging = 1;
-                        a->last_x = a->down_x = mx;
-                        a->last_y = a->down_y = my;
-                    }
-                } else if (e.button.button == SDL_BUTTON_RIGHT) {
-                    app_nav_clear(a);          /* 右键：清掉起终点和路线 */
-                }
-                break;
-            case SDL_MOUSEBUTTONUP:
-                if (e.button.button == SDL_BUTTON_LEFT) {
-                    int mx = e.button.x, my = e.button.y;
-                    int was_drag = a->win_drag || a->rotating;
-                    a->win_drag = 0; a->rotating = 0; a->dragging = 0;
-                    int id = chrome_hit(a, mx, my);
-                    if (id != CH_NONE) {
-                        chrome_act(a, id, mx, my);
-                        break;
-                    }
-                    /* 菜单打开时点菜单外任意处：先关菜单，不当成选点 */
-                    if (a->menu_open) { a->menu_open = 0; a->need_redraw = 1; break; }
-                    /* 拖动和点击用同一个左键：位移在 4 像素以内才算"点",
-                       否则每次拖完地图都会顺手设一个点。 */
-                    if (!was_drag &&
-                        abs(mx - a->down_x) + abs(my - a->down_y) <= 4) {
-                        double lat, lon;
-                        mv_unproject(&a->view, mx, my, &lat, &lon);
-                        app_nav_click(a, lat, lon);
-                    }
-                }
-                break;
-            case SDL_MOUSEMOTION: {
-                int mx = e.motion.x, my = e.motion.y;
-                if (a->win_drag) {
-                    SDL_SetWindowPosition(a->win, mx - a->win_drag_x,
-                                          my - a->win_drag_y);
-                } else if (a->rotating) {
-                    a->view.rot += (mx - a->last_x) * 0.4;
-                    while (a->view.rot > 180.0)  a->view.rot -= 360.0;
-                    while (a->view.rot < -180.0) a->view.rot += 360.0;
-                    a->need_redraw = 1;
-                } else if (a->dragging) {
-                    mv_pan_pixels(&a->view, mx - a->last_x, my - a->last_y);
-                    a->need_redraw = 1;
-                }
-                /* 光标位置始终记着：滚轮缩放拿它当锚点，否则鼠标没动过时
-                   会锚在 (0,0)，画面一下就飞走。★ 必须在算完位移之后再更新。 */
-                a->last_x = mx; a->last_y = my;
-                break;
-            }
-            case SDL_MOUSEWHEEL:
-                /* 2.26+ 的 wheel 事件自带鼠标位置；老版本退回 last_x/last_y */
-                mv_zoom_at(&a->view, e.wheel.y > 0 ? 0.35 : -0.35,
-                           e.wheel.mouseX ? e.wheel.mouseX : a->last_x,
-                           e.wheel.mouseY ? e.wheel.mouseY : a->last_y);
-                mv_clamp_zoom(&a->view, 3.0, 19.0);
-                a->need_redraw = 1;
-                break;
-            case SDL_WINDOWEVENT:
-                if (e.window.event == SDL_WINDOWEVENT_RESIZED ||
-                    e.window.event == SDL_WINDOWEVENT_SIZE_CHANGED) {
-                    a->view.w = e.window.data1;
-                    a->view.h = e.window.data2;
-                    a->need_redraw = 1;
-                }
-                break;
-            default: break;
-            }
-        }
-
-        /* 收割后台算路的结果（它会置 need_redraw） */
-        app_nav_poll(a);
-        /* 模拟导航推进（内部只在 sim_on 且未暂停时动，开销可忽略） */
-        app_nav_sim_tick(a);
-
-        if (!a->need_redraw) {
-            /* 算路跑几秒，期间没有重绘，标题栏会一直显示旧数字，看着像卡死。
-               这里只改标题，不重画（重画要几百毫秒，反而更卡）。 */
-            if (a->nav_busy) {
-                char tmp[300];
-                snprintf(tmp, sizeof(tmp), "算路中… %.1f 秒（%s）",
-                         (SDL_GetTicks() - a->nav_t0) / 1000.0, a->status);
-                SDL_SetWindowTitle(a->win, tmp);
-            }
-            SDL_Delay(8);
-            continue;
-        }
-        a->need_redraw = 0;
-
-        Uint32 t0 = SDL_GetTicks();
-        PaintStats st;
-        /* 窗口模式与离屏同一套代码路径：画在离屏 surface 上，再贴到窗口。
-           尺寸变了（resize）先重建画布——它连渲染器一起换，字形纹理要作废。 */
-        if (app_ensure_canvas(a, a->view.w, a->view.h) != 0) { a->quit = 1; break; }
-        if (raster_bind(&a->ras, a->surf) != 0) { a->quit = 1; break; }
-        paint_frame(a->ren, &a->ras, a, &st);
-        if (a->tex) {
-            SDL_UpdateTexture(a->tex, NULL, a->surf->pixels, a->surf->pitch);
-            SDL_RenderCopy(a->win_ren, a->tex, NULL, NULL);
-        }
-        SDL_RenderPresent(a->win_ren);
-        double ms = (double)(SDL_GetTicks() - t0);
-
-        update_status(a, ms);
-        SDL_SetWindowTitle(a->win, a->status);
-        fprintf(stderr, "%s  扫边 %llu 画边 %llu\n", a->status,
-                (unsigned long long)st.visited, (unsigned long long)st.drawn);
-    }
 }

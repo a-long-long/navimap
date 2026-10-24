@@ -74,6 +74,20 @@ NmDir      *nm_dir_open(const char *path);
 const char *nm_dir_next(NmDir *d);
 void        nm_dir_close(NmDir *d);
 
+/* ---------------- 并发 ---------------- */
+
+/* 互斥锁（跨平台）。业务代码只调 nm_mutex_*，不直接碰 pthread / CRITICAL_SECTION。
+ * 单一所有权：创建者负责 nm_mutex_destroy。锁内不要做阻塞/耗时操作。 */
+typedef struct NmMutex NmMutex;
+NmMutex *nm_mutex_create(void);
+void     nm_mutex_destroy(NmMutex *m);
+void     nm_mutex_lock(NmMutex *m);
+void     nm_mutex_unlock(NmMutex *m);
+
+/* 起一个脱离式（detached）线程跑 f(arg)。成功返回 0，失败返回 -1。
+ * 线程自行结束，调用方不 join；f 内部自行处理自己的资源。 */
+int nm_thread_spawn(void (*f)(void *), void *arg);
+
 /* ---------------- 进程 / 时间 ---------------- */
 
 /* 当前可执行文件路径（Linux /proc/self/exe，macOS _NSGetExecutablePath，
