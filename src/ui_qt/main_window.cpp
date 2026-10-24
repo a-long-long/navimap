@@ -619,7 +619,6 @@ void MainWindow::layoutOverlays()
     if (m_searchOverlay) {
         m_searchOverlay->adjustSize();
         int w = m_searchOverlay->width();
-        int h = m_searchOverlay->height();
         int cw = m_canvas->width();
         if (cw > 0) {
             /* 宽度不许超出画布（窄窗口时收缩输入框而不是溢出） */

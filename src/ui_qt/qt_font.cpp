@@ -91,7 +91,9 @@ QString qt_setup_fonts(int pointSize)
         "Noto Sans CJK SC", "Noto Sans CJK TC", "Source Han Sans SC",
         "WenQuanYi Micro Hei", "Droid Sans Fallback", "PingFang SC",
     };
-    QStringList sysFams = QFontDatabase::families();
+    /* Qt6 起 families() 是静态成员；Qt5 需经 QFontDatabase 实例调用。
+     * 用临时实例统一两种写法（静态成员经实例调用在 C++ 合法）。 */
+    QStringList sysFams = QFontDatabase().families();
     for (const char *name : kSysCjk) {
         QString fam = QString::fromUtf8(name);
         if (!sysFams.contains(fam)) continue;
@@ -116,7 +118,13 @@ QString qt_setup_fonts(int pointSize)
         if (!chain.contains(fam)) chain.append(fam);
     }
     QFont app_font = QApplication::font();
+#if QT_VERSION >= QT_VERSION_CHECK(6, 0, 0)
     app_font.setFamilies(chain);
+#else
+    /* Qt5 无 setFamilies：把首个中文字族设为主族，Qt 自己按字形回退到其他
+     * 已注册字体（拉丁字走其余族）。回退链由 Qt 字体引擎自动完成。 */
+    app_font.setFamily(chain.first());
+#endif
     app_font.setPointSize(pointSize > 0 ? pointSize : app_font.pointSize());
     QApplication::setFont(app_font);
 

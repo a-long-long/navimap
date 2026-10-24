@@ -27,6 +27,7 @@ else()
 endif()
 
 find_package(PkgConfig REQUIRED)
+find_package(Threads REQUIRED)
 
 # ---------------------------------------------------------------------------
 # 依赖（方案2 架构约束：navimap_core 不链 SDL）。
@@ -98,7 +99,7 @@ set(PROTO_SRCS ${GEN_DIR}/osmformat.pb-c.c ${GEN_DIR}/fileformat.pb-c.c)
 set(PROTO_HDRS ${GEN_DIR}/osmformat.pb-c.h ${GEN_DIR}/fileformat.pb-c.h)
 # 生成源由 add_custom_command 产出，必须显式标记 GENERATED，否则 add_library
 # 在配置期因文件尚不存在而拒绝创建目标。
-set_source_files_properties(${PROTO_SRCS} PROPERTIES GENERATED TRUE)
+set_source_files_properties(${PROTO_SRCS} ${PROTO_HDRS} PROPERTIES GENERATED TRUE)
 
 if(WIN32)
     add_custom_command(
@@ -136,7 +137,9 @@ set(UTILS_SRCS
     src/utils/strpool.c)
 set(PBF_SRCS
     src/pbf/pbf_stream.c
-    src/pbf/pbf_block.c)
+    src/pbf/pbf_block.c
+    ${PROTO_SRCS}
+    ${PROTO_HDRS})
 
 set(CORE_SRCS
     src/map/road_tags.c
@@ -161,7 +164,7 @@ set(CORE_SRCS
     src/render/font.c
     src/render/labels.c
     src/ui/window.c
-    ${PROTO_SRCS})
+    )
 
 # 叶子库 1：navmap_utils（src/utils/*，零内部依赖）
 add_library(navmap_utils STATIC ${UTILS_SRCS})
@@ -184,18 +187,17 @@ target_include_directories(navmap_pbf PUBLIC
     ${ZLIB_INCLUDE_DIRS}
     ${PROTOC_INCLUDE_DIRS}
     ${PROTOC_REAL_INCLUDE_DIR})
-target_link_directories(navmap_pbf PUBLIC ${PROTOC_LIBRARY_DIRS})
 target_link_libraries(navmap_pbf PUBLIC ${ZLIB_LIBRARIES} ${PROTOC_LIB})
 if(WIN32)
     target_compile_options(navmap_pbf PUBLIC -Wno-format)
 endif()
 
 # 核心库：去掉 utils/pbf 后剩余的模块。
-add_library(navmap_core STATIC ${CORE_SRCS})
+add_library(navimap_core STATIC ${CORE_SRCS})
 
 # ★ 核心不含 SDL：连 include 路径都不给。理由见上面"依赖"一节的架构约束。
 #   谁需要 SDL（窗口版 / 离屏出图）自己去链 navimap_sdl 或直接链 SDL2。
-target_include_directories(navmap_core PUBLIC
+target_include_directories(navimap_core PUBLIC
     ${CMAKE_SOURCE_DIR}/src
     ${GEN_DIR}
     ${ZLIB_INCLUDE_DIRS}
@@ -203,24 +205,28 @@ target_include_directories(navmap_core PUBLIC
     ${PROTOC_INCLUDE_DIRS}
     ${PROTOC_REAL_INCLUDE_DIR})
 
-target_link_directories(navmap_core PUBLIC
-    ${SQLITE3_LIBRARY_DIRS}
-    ${PROTOC_LIBRARY_DIRS})
 
-target_link_libraries(navmap_core PUBLIC
+# 平台相关链接：libm 只有类 Unix 有；Windows 的 GetProcessMemoryInfo 在 psapi.dll。
+# 注意：必须并入同一次 target_link_libraries 调用。本机 CMake 3.22.1 对"同一目标的
+# 第二次 target_link_libraries（且包在 if() 内）"会误报 target not built by this project，
+# 故用配置期变量在这里一次性决定平台库，再在下方单次调用里展开。
+if(UNIX)
+    set(NAVIMAP_CORE_SYS_LIBS m)
+elseif(WIN32)
+    set(NAVIMAP_CORE_SYS_LIBS psapi)
+else()
+    set(NAVIMAP_CORE_SYS_LIBS "")
+endif()
+
+target_link_libraries(navimap_core PUBLIC
     navmap_utils
     navmap_pbf
     ${ZLIB_LIBRARIES}
     ${SQLITE3_LIBRARIES}
-    ${PROTOC_LIB})
+    ${PROTOC_LIB}
+    ${NAVIMAP_CORE_SYS_LIBS})
 
-# 平台相关链接：libm 只有类 Unix 有；Windows 的 GetProcessMemoryInfo 在 psapi.dll。
-if(UNIX)
-    target_link_libraries(navimap_core PUBLIC m)
-endif()
-if(WIN32)
-    target_link_libraries(navimap_core PUBLIC psapi)
-endif()
+
 
 # Windows（MSVC）需要这两个宏：_CRT_SECURE_NO_WARNINGS 关掉 POSIX 名字的"不安全"
 # 警告（fopen/snprintf 我们是故意用的），_USE_MATH_DEFINES 放 M_PI。
@@ -269,6 +275,7 @@ endif()
 add_executable(pbf_info tools/pbf_info.c)
 target_link_libraries(pbf_info PRIVATE navimap_core)
 
+
 # PBF 按需解码显示层的等价性校验（"只留 PBF"方案的门禁）
 add_executable(pbfmap_check tools/pbfmap_check.c)
 target_link_libraries(pbfmap_check PRIVATE navimap_core)
@@ -294,7 +301,7 @@ target_include_directories(navmap_sdl PUBLIC
     ${CMAKE_SOURCE_DIR}/src
     ${SDL2_INCLUDE_DIRS})
 target_link_directories(navmap_sdl PUBLIC ${SDL2_LIBRARY_DIRS})
-target_link_libraries(navmap_sdl PUBLIC navimap_core ${SDL2_LIBRARIES})
+target_link_libraries(navmap_sdl PUBLIC navimap_core ${SDL2_LIBRARIES} Threads::Threads)
 
 # 主程序（GUI）
 add_executable(navmap src/main.c)
@@ -321,7 +328,7 @@ if(QT)
         src/ui_qt/qt_font.cpp
         src/ui_qt/qt_icons.cpp
         src/ui_qt/main_window.cpp)
-    target_link_libraries(navmap_qt PRIVATE navimap_core ${QT}::Widgets)
+    target_link_libraries(navmap_qt PRIVATE navimap_core ${QT}::Widgets Threads::Threads)
     message(STATUS "Qt 前端: 启用 (${QT} ${${QT}Widgets_VERSION})")
 else()
     message(STATUS "Qt 前端: 未找到 Qt6/Qt5 Widgets，跳过 navmap_qt")
@@ -331,19 +338,19 @@ endif()
 add_executable(map_shot tools/map_shot.c)
 target_include_directories(map_shot PRIVATE ${SDL2_INCLUDE_DIRS})
 target_link_directories(map_shot PRIVATE ${SDL2_LIBRARY_DIRS})
-target_link_libraries(map_shot PRIVATE navimap_core ${SDL2_LIBRARIES})
+target_link_libraries(map_shot PRIVATE navimap_core ${SDL2_LIBRARIES} Threads::Threads)
 
 # 光栅 alpha 混色与 SDL 软渲染器的逐像素等价性（去 SDL 化的门禁）。
 add_executable(blend_equiv tools/blend_equiv.c)
 target_include_directories(blend_equiv PRIVATE ${SDL2_INCLUDE_DIRS})
 target_link_directories(blend_equiv PRIVATE ${SDL2_LIBRARY_DIRS})
-target_link_libraries(blend_equiv PRIVATE navimap_core ${SDL2_LIBRARIES})
+target_link_libraries(blend_equiv PRIVATE navimap_core ${SDL2_LIBRARIES} Threads::Threads)
 
 # 线段裁剪与 SDL_IntersectRectAndLine 的等价性（去 SDL 化的门禁）。
 add_executable(clip_equiv tools/clip_equiv.c)
 target_include_directories(clip_equiv PRIVATE ${SDL2_INCLUDE_DIRS})
 target_link_directories(clip_equiv PRIVATE ${SDL2_LIBRARY_DIRS})
-target_link_libraries(clip_equiv PRIVATE navimap_core ${SDL2_LIBRARIES})
+target_link_libraries(clip_equiv PRIVATE navimap_core ${SDL2_LIBRARIES} Threads::Threads)
 
 # 架构门禁：核心与 Qt 前端零 SDL 符号（正反双向）。
 add_executable(core_no_sdl tools/core_no_sdl.c)

@@ -85,7 +85,6 @@ int main(int argc, char **argv)
         /* 找一个确定无中文的（拉丁字体）和一个确定有中文的。
          * 前者：NotoSans 系列；后者：任意命中 > 0 的。 */
         const char *no_cjk = NULL, *has_cjk = NULL;
-        int has_cjk_hits = 0;
         for (size_t i = 0; i < n; i++) {
             if (!cands[i]) continue;
             int hits = cjk_hit_count(cands[i]);
@@ -98,7 +97,6 @@ int main(int argc, char **argv)
                     no_cjk = cands[i];
             } else if (hits > 0 && !has_cjk) {
                 has_cjk = cands[i];
-                has_cjk_hits = hits;
             }
         }
         if (!no_cjk) {
