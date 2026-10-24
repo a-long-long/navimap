@@ -125,16 +125,14 @@ else()
 endif()
 
 # ---------------------------------------------------------------------------
-# 核心库 + 阶段 1 叶子库（ARCH_ASSESSMENT.md §4）
-#   navmap_utils（src/utils/*）与 navmap_pbf（src/pbf/*）都是 DAG 上的叶子
-#   （零内部依赖），拆库零破环风险。两者都链进 navimap_core 的 PUBLIC 接口，
-#   24 个 exe 继续只链 navimap_core（本阶段不改它们的 target_link_libraries）。
+# 核心库 + 阶段 1 叶子库（ARCH_ASSESSMENT.md §4，字面补全拆分）
+#   src/utils 内的 4 个模块拆成独立 STATIC 库：
+#     navmap_plat / navmap_geo / navmap_strpool（纯叶子，零内部依赖）
+#     navmap_mem（仅依赖 navmap_plat：mem → plat）
+#   加 navmap_pbf（src/pbf/*）共 5 个叶子库，全部链进 navimap_core 的 PUBLIC
+#   接口；24 个 exe 继续只链 navimap_core（本阶段不改它们的
+#   target_link_libraries）。依赖：mem → plat；其余零内部依赖，拆库零破环风险。
 # ---------------------------------------------------------------------------
-set(UTILS_SRCS
-    src/utils/plat.c
-    src/utils/mem.c
-    src/utils/geo.c
-    src/utils/strpool.c)
 set(PBF_SRCS
     src/pbf/pbf_stream.c
     src/pbf/pbf_block.c
@@ -166,19 +164,54 @@ set(CORE_SRCS
     src/ui/window.c
     )
 
-# 叶子库 1：navmap_utils（src/utils/*，零内部依赖）
-add_library(navmap_utils STATIC ${UTILS_SRCS})
-target_include_directories(navmap_utils PUBLIC ${CMAKE_SOURCE_DIR}/src)
+# 阶段 1 叶子库：把 src/utils 按模块拆成 4 个独立 STATIC 库（字面补全阶段1）。
+# 依赖关系：mem → plat；geo / strpool / plat 为纯叶子（零内部依赖）。
+# 每个叶子库都 PUBLIC 暴露 ${CMAKE_SOURCE_DIR}/src 作为包含根，使消费者可用
+# "utils/xxx.h"；并各自携带平台系统库（m / psapi），保证可独立复用。
+
+# 平台相关链接（每个叶子库各自挂，不再聚合到单个 navmap_utils）：
+#   Unix 需要 -lm（geo 等数学函数）；Windows 的 GetProcessMemoryInfo 在 psapi.dll。
 if(UNIX)
-    target_link_libraries(navmap_utils PUBLIC m)
-endif()
-if(WIN32)
-    target_link_libraries(navmap_utils PUBLIC psapi)
-    # MinGW 的 %z/%ll 格式告警（同核心）
-    target_compile_options(navmap_utils PUBLIC -Wno-format)
+    set(NM_LEAF_SYS_LIBS m)
+elseif(WIN32)
+    set(NM_LEAF_SYS_LIBS psapi)
+else()
+    set(NM_LEAF_SYS_LIBS "")
 endif()
 
-# 叶子库 2：navmap_pbf（src/pbf/*，零内部依赖）
+# 叶子库 1：navmap_plat（src/utils/plat.c，纯叶子）
+add_library(navmap_plat STATIC src/utils/plat.c)
+target_include_directories(navmap_plat PUBLIC ${CMAKE_SOURCE_DIR}/src)
+target_link_libraries(navmap_plat PUBLIC ${NM_LEAF_SYS_LIBS})
+if(WIN32)
+    target_compile_options(navmap_plat PUBLIC -Wno-format)
+endif()
+
+# 叶子库 2：navmap_geo（src/utils/geo.c，纯叶子）
+add_library(navmap_geo STATIC src/utils/geo.c)
+target_include_directories(navmap_geo PUBLIC ${CMAKE_SOURCE_DIR}/src)
+target_link_libraries(navmap_geo PUBLIC ${NM_LEAF_SYS_LIBS})
+if(WIN32)
+    target_compile_options(navmap_geo PUBLIC -Wno-format)
+endif()
+
+# 叶子库 3：navmap_strpool（src/utils/strpool.c，纯叶子）
+add_library(navmap_strpool STATIC src/utils/strpool.c)
+target_include_directories(navmap_strpool PUBLIC ${CMAKE_SOURCE_DIR}/src)
+target_link_libraries(navmap_strpool PUBLIC ${NM_LEAF_SYS_LIBS})
+if(WIN32)
+    target_compile_options(navmap_strpool PUBLIC -Wno-format)
+endif()
+
+# 叶子库 4：navmap_mem（src/utils/mem.c，依赖 plat）
+add_library(navmap_mem STATIC src/utils/mem.c)
+target_include_directories(navmap_mem PUBLIC ${CMAKE_SOURCE_DIR}/src)
+target_link_libraries(navmap_mem PUBLIC navmap_plat ${NM_LEAF_SYS_LIBS})
+if(WIN32)
+    target_compile_options(navmap_mem PUBLIC -Wno-format)
+endif()
+
+# 叶子库 5：navmap_pbf（src/pbf/*，零内部依赖）
 #   PBF 解码依赖 zlib（解压）与 protobuf-c（schema），生成头在 GEN_DIR。
 add_library(navmap_pbf STATIC ${PBF_SRCS})
 target_include_directories(navmap_pbf PUBLIC
@@ -219,7 +252,10 @@ else()
 endif()
 
 target_link_libraries(navimap_core PUBLIC
-    navmap_utils
+    navmap_geo
+    navmap_strpool
+    navmap_plat
+    navmap_mem
     navmap_pbf
     ${ZLIB_LIBRARIES}
     ${SQLITE3_LIBRARIES}
