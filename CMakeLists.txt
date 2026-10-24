@@ -159,6 +159,7 @@ set(MAP_SRCS
 set(ROUTE_SRCS
     src/route/st.c
     src/route/restr.c
+    src/route/cost.c
     src/route/route.c
     src/route/lmtable.c
     src/route/revidx.c

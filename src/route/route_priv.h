@@ -13,6 +13,9 @@
 #include "route/revidx.h"    /* RevIdx */
 #include "route/lmtable.h"   /* LmTable */
 #include "map/binfmt.h"      /* NM_NODE_BYTES / RF_* / NM_RESTR_BYTES / EF_* */
+#include "map/road_tags.h"   /* RC_* 道路等级 */
+#include "map/coordkey.h"    /* coord_key_e7 */
+#include "utils/geo.h"       /* nm_haversine_m */
 
 /* 双向搜索方向下标（正向=朝终点，反向=朝起点）；route.c 与 restr.c 共用。 */
 #define DIR_FWD 0
@@ -20,6 +23,9 @@
 
 /* 瓦片缝合缓存槽数（2 的幂，哈希 + 线性探测）。详见 route.c 顶部注释历史。 */
 #define SEW_SLOTS 16384
+
+/* A* 启发式分母；需 >= 全图最高限速才 admissible（原在 route.c，cost.c 的 heur 也用）。 */
+#define H_SPEED_KMH    130.0
 
 /* 同一坐标的成员（跨国 / 重复副本省）临时结构 */
 typedef struct { uint64_t coord; uint32_t prov, node; } SewEnt;
