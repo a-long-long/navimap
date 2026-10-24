@@ -158,6 +158,7 @@ set(MAP_SRCS
     src/map/tileidx.c)
 set(ROUTE_SRCS
     src/route/st.c
+    src/route/sew.c
     src/route/restr.c
     src/route/cost.c
     src/route/route.c
