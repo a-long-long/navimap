@@ -22,7 +22,7 @@ DO_BUILD=0
 for a in "$@"; do
     case "$a" in
         --build) DO_BUILD=1 ;;
-        --keep)  SHOTS=$ROOT/docs/shots/regress ;;
+        --keep)  KEEP=1; SHOTS=$ROOT/docs/shots/regress ;;
         *) echo "未知参数: $a" >&2; exit 2 ;;
     esac
 done
@@ -129,6 +129,15 @@ run rev_verify "REV-VERIFY-OK" "$BUILD/revbuild_cli" --graph="$GRAPH" --verify
 #    但严格模式必须能挡住，否则那条取舍就没有兜底。
 REVT=$SHOTS/revtest
 rm -rf "$REVT"
+# revtest 是辽宁省图的三份拷贝（ok/none/bad，各约 3.9G，共约 12G），
+# 且每轮开头就重建——历史数据没有任何保留价值。本机 /tmp 在 40G 系统盘、
+# 项目数据在 127G 数据盘，不清理的话每轮回归都在小盘上堆 12G：
+# 2026-10-24 实踩，7 轮回归 + 一份 A/B 快照把系统盘顶到 100%（剩 34M），
+# 连编译都写不了临时文件。非 --keep 模式退出/被杀/中断一律清掉；
+# --keep 是给人工排查用的，那份自己管。
+if [ "${KEEP:-0}" != 1 ]; then
+    trap 'rm -rf "$REVT"' EXIT INT TERM
+fi
 for d in ok none bad; do
     mkdir -p "$REVT/$d/liaoning"
     ln -s "$GRAPH"/liaoning/*.bin "$REVT/$d/liaoning/"
