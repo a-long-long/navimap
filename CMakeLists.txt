@@ -157,6 +157,8 @@ set(MAP_SRCS
     src/map/map_view.c
     src/map/tileidx.c)
 set(ROUTE_SRCS
+    src/route/st.c
+    src/route/restr.c
     src/route/route.c
     src/route/lmtable.c
     src/route/revidx.c

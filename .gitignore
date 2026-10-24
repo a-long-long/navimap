@@ -2,6 +2,7 @@
 build/
 build-san/
 build-*/
+build2/
 cmake-build-*/
 
 # ===== 地图数据产物：4.2 GB，全部可重建，不入库 =====

@@ -15,6 +15,9 @@
 #include "route/lmtable.h"
 #include "utils/geo.h"
 #include "utils/plat.h"
+#include "route/st.h"
+#include "route/route_priv.h"
+#include "route/restr.h"
 
 /* ---------------------------------------------------------------------------
  * 跨省 A* 路由（状态主键 = 坐标，见 route.h 顶部说明）
@@ -23,7 +26,6 @@
  * 两条搜索各自一张状态表 + 一个堆，按"堆顶 f 小的那侧先走"交替推进。
  * ------------------------------------------------------------------------- */
 
-#define INF_G          1e30
 /* 展开上限（防跑飞）。★ 800 万是在**自适应 w 之前**定的，实测会把真实路线剪断：
    郑州→大连 要 11334703 展开（15.6 s / 2.29 GB）⇒ 直接 ROUTE-FAIL；同类失败的
    还有西安/南阳/太原 → 大连，全是"从远处到半岛端点"（启发式失效那一类）。
@@ -31,19 +33,6 @@
    ★ 再往上要小心：峰值内存随展开数近似线性（~210~290 B/展开），本机可用
      3.59 GB 且 zram swap 常满 ⇒ 别超过 1600 万。 */
 #define DEFAULT_MAX_EXPAND 12000000u
-/* 瓦片缝合缓存槽数（2 的幂，哈希 + 线性探测）。
-   两次定案，**第二次推翻了第一次**（完整过程见 PLAN.md §39）：
-   - 256 → 4096（§36）：京→郑命中率 49% → 97.8%，省 ~2.2 s。
-   - 4096 → 16384（§39）：★ §36 那句"再往上没用（16384 净 0）"是
-     **路线选择偏差** —— 它只在京→郑上测过，而京→郑碰到的瓦片数刚好
-     4096 就够；换到青岛→西安（跨 4 省，瓦片数多得多），members_of 占
-     24.4%（672 ms），扩到 16384 实测省 **600~900 ms（22~32%）**。
-   - 65536 没有额外收益（青西 2245 vs 16384 的 2278，在噪声内；
-     京郑反而慢 ~30 ms）。262144 同理。
-   ⇒ 16384（槽数组 655 KB，可忽略）。
-   ★ 教训：缓存容量的最优值依赖"工作集大小"，必须拿**工作集最大**的那条
-     路线测，拿最短/最简单的路线测出来的结论会偏向小容量。 */
-#define SEW_SLOTS      16384
 #define H_SPEED_KMH    130.0     /* A* 启发式分母；需 >= 全图最高限速才 admissible */
 #define MAX_MEMBER     64        /* 同一坐标最多取多少个跨省成员 */
 /* 吸附时保留几个候选节点。>1 是为了"最近那个是死节点"时换下一个重试
@@ -51,167 +40,13 @@
    4 个足够（实测第 1~2 个候选就救回了全部失败样本）。 */
 #define SNAP_TRY       4
 
-#define DIR_FWD 0
-#define DIR_BWD 1
 
-/* NAVIMAP_RESTR_DEBUG 以前是在**每条边**上现调 getenv()：本机 environ 有 178 项，
-   一次 getenv 实测 135 ns，京→郑一帧要调 318 万次 ⇒ 约 430 ms（占 18%）。
-   只在首次调用时查一次并缓存。 */
-static int restr_debug(void)
-{
-    static int v = -1;
-    if (v < 0) v = getenv("NAVIMAP_RESTR_DEBUG") != NULL;
-    return v;
-}
 
-static void *xrealloc(void *p, size_t n)
-{
-    void *q = realloc(p, n);
-    if (!q) {
-        fprintf(stderr, "路由: 内存不足（需要 %zu 字节）\n", n);
-        exit(2);
-    }
-    return q;
-}
 
-static uint64_t mix64(uint64_t x)
-{
-    x += 0x9E3779B97F4A7C15ULL;
-    x = (x ^ (x >> 30)) * 0xBF58476D1CE4E5B9ULL;
-    x = (x ^ (x >> 27)) * 0x94D049BB133111EBULL;
-    return x ^ (x >> 31);
-}
 
 static uint64_t now_ms(void)
 {
     return nm_now_ms();                /* 平台层：clock_gettime / QPC */
-}
-
-/* ---------------------------- 状态表 ---------------------------- */
-
-/* 一个坐标 = 一个状态。rep_* 是"到达/离开时落在哪个省的节点上"，只用于输出
- * 路径与转向限制；搜索本身只认坐标。 */
-typedef struct {
-    uint64_t key;        /* coord_key_e7 */
-    double   g;
-    /* ★ 前驱存的是**同一张 ents 数组里的下标**（UINT32_MAX = 没有前驱），
-       不是坐标 key。理由：ents 只 append、realloc 也不改下标，所以拿到前驱时
-       直接 &ents[prev_idx] 即可，不必再用 key 去哈希查找一次
-       （那次冷查找原本值 186 ns/次，PLAN.md §41 / §42）。
-       副作用是 StEnt 从 48 字节缩到 40 字节（原 uint64 prev + 尾部 padding）。
-       ★ 本表之外（例如 st.h 的使用者）不要把它当成 key 用。 */
-    uint32_t prev_idx;
-    uint32_t eprov;      /* 前驱 → 本坐标用的边所属省 */
-    uint32_t eidx;       /* 边下标；REDGE_SEAM = 起点（无入边） */
-    uint32_t from_node;  /* 该边的起点节点（eprov 省内下标） */
-    uint32_t rep_prov;   /* 本坐标落在哪个省的节点上 */
-    uint32_t rep_node;
-    uint8_t  settled;
-} StEnt;
-
-/* 开地址哈希表的槽。★ 存的是 **32 位哈希**而不是 64 位 key：
-   - 槽从 8B(key)+4B(idx) 两个数组（共 12 B/槽、命中时要摸两个数组）合并成
-     **一个 8 B 数组**，命中时 idx 跟 h 在同一条 cache line 里；
-   - 探测数组体积直接减半（8 省最大搜索 8M 槽 ⇒ 64 MB/表 → 32 MB/表）。
-   代价是 h 可能撞（32 位），所以命中 h 之后必须再用 ents[idx].key **回验一次**。
-   回验不贵：ents[idx] 本来就要读（te->settled / te->g）。
-   ★ h 用 mix64 的**高 32 位**、下标用**低 32 位**，一次 mix64 出两个值；
-     h |= 1 保证非零（0 表示空槽）。 */
-typedef struct {
-    uint32_t h;         /* 32 位哈希（|1，保证非 0）；0 = 空槽 */
-    uint32_t idx;       /* → ents 下标 */
-} StSlot;
-
-typedef struct {
-    StSlot   *slot;
-    size_t    cap, used;
-    StEnt    *ents;
-    size_t    n_ents, cap_ents;
-} StateTab;
-
-/* ★ ents 会 realloc，所以 StEnt* 不能跨 st_intern() 持有。
-   全文件遵循：intern/find → 立刻用完 → 下次重新查。 */
-
-static void st_init(StateTab *t)
-{
-    t->cap = 1u << 20;
-    t->slot = calloc(t->cap, sizeof(StSlot));
-    t->cap_ents = 1u << 18;
-    t->ents = malloc(t->cap_ents * sizeof(StEnt));
-    if (!t->slot || !t->ents) {
-        fprintf(stderr, "路由: 状态表分配失败\n");
-        exit(2);
-    }
-}
-
-static void st_free(StateTab *t)
-{
-    free(t->slot); free(t->ents);
-    memset(t, 0, sizeof(*t));
-}
-
-static void st_rehash(StateTab *t)
-{
-    size_t ncap = t->cap * 2;
-    StSlot *ns = calloc(ncap, sizeof(StSlot));
-    if (!ns) { fprintf(stderr, "路由: 状态表扩容失败\n"); exit(2); }
-    for (size_t i = 0; i < t->cap; i++) {
-        if (!t->slot[i].h) continue;
-        /* h 可以复用；下标要按新 cap 重算 ⇒ 需要 key ⇒ 从 ents 取（扩容很罕见） */
-        uint64_t m = mix64(t->ents[t->slot[i].idx].key);
-        size_t j = (size_t)(m & (ncap - 1));
-        while (ns[j].h) j = (j + 1) & (ncap - 1);
-        ns[j].h = t->slot[i].h;
-        ns[j].idx = t->slot[i].idx;
-    }
-    free(t->slot);
-    t->slot = ns; t->cap = ncap;
-}
-
-static StEnt *st_intern(StateTab *t, uint64_t key)
-{
-    uint64_t m = mix64(key);
-    uint32_t h = (uint32_t)(m >> 32) | 1u;
-    size_t mask = t->cap - 1;
-    size_t j = (size_t)(m & mask);
-    while (t->slot[j].h) {
-        if (t->slot[j].h == h && t->ents[t->slot[j].idx].key == key)
-            return &t->ents[t->slot[j].idx];
-        j = (j + 1) & mask;
-    }
-    if (t->n_ents == t->cap_ents) {
-        t->cap_ents *= 2;
-        t->ents = xrealloc(t->ents, t->cap_ents * sizeof(StEnt));
-    }
-    uint32_t ei = (uint32_t)t->n_ents++;
-    t->ents[ei].key = key;
-    t->ents[ei].g = INF_G;
-    t->ents[ei].prev_idx = UINT32_MAX;
-    t->ents[ei].eprov = 0;
-    t->ents[ei].eidx = REDGE_SEAM;
-    t->ents[ei].from_node = 0;
-    t->ents[ei].rep_prov = 0;
-    t->ents[ei].rep_node = 0;
-    t->ents[ei].settled = 0;
-    t->slot[j].h = h;
-    t->slot[j].idx = ei;
-    t->used++;
-    if (t->used * 10 >= t->cap * 7) st_rehash(t);
-    return &t->ents[ei];
-}
-
-static StEnt *st_find(const StateTab *t, uint64_t key)
-{
-    uint64_t m = mix64(key);
-    uint32_t h = (uint32_t)(m >> 32) | 1u;
-    size_t mask = t->cap - 1;
-    size_t j = (size_t)(m & mask);
-    while (t->slot[j].h) {
-        if (t->slot[j].h == h && t->ents[t->slot[j].idx].key == key)
-            return &t->ents[t->slot[j].idx];
-        j = (j + 1) & mask;
-    }
-    return NULL;
 }
 
 /* --------------------- 反向入边索引 --------------------- */
@@ -219,51 +54,6 @@ static StEnt *st_find(const StateTab *t, uint64_t key)
    只给反向搜索真正走进去的省建，副本省（被完全包含）从不建。 */
 /* --------------------- 瓦片缝合缓存 / 限制表 类型 --------------------- */
 
-typedef struct { uint64_t coord; uint32_t prov, node; } SewEnt;
-
-typedef struct {
-    int      used;      /* 0 = 空槽 */
-    int      tx, ty;
-    int      nprov;     /* 覆盖这片瓦片且有边的省数；-1 = 还没算 */
-    int      full;      /* v 是否已构建 */
-    SewEnt  *v;
-    size_t   n;
-} SewSlot;
-
-typedef struct {
-    int       built;
-    uint64_t *kv;      /* (via_node << 32) | from_edge，升序 */
-    uint32_t *to;
-    size_t    n;
-    /* kind=2（via=way 两段）单独一张：除了 (via, from, to) 还要比 prev_edge，
-       塞进上面那张要改键结构，不如分开——数量也是几百条级。 */
-    uint64_t *kv2;     /* (via_node << 32) | from_edge，升序 */
-    uint32_t *to2;
-    uint32_t *prev2;   /* 三段序列里的第一条边 */
-    size_t    n2;
-    /* kind=1（only_*）再单独一张。它跟上面两张**语义相反**：
-       上面是"命中即禁"；这张是"命中 {via,from} 之后，只有集合里的 to 允许走，
-       其余全禁"。所以不能并进 kv/to——那张表的语义在调用点已经写死了。 */
-    uint64_t *kv1;     /* (via_node << 32) | from_edge，升序 */
-    uint32_t *to1;     /* 允许的出边；同一 key 的多条记录共同组成一个允许集 */
-    size_t    n1;
-} RestrIdx;
-
-struct Router {
-    const MapSet *ms;
-    RouteOpts     opt;
-    StateTab      st[2];
-    PQueue        pq[2];
-    SewSlot       sew[SEW_SLOTS];
-    RestrIdx     *ri;
-    RevIdx       *rv;
-    int32_t       tgt_lat[2], tgt_lon[2];  /* 启发式目标：[0]=终点 [1]=起点 */
-    LmTable       lm;                      /* 地标下界表（可选；没有就退回纯直线） */
-    size_t        lm_tc[2];                /* 两端所在格号，(size_t)-1 = 不在网格内 */
-    double        best_cut;                /* 剪枝阈值：超过它不是最优解 */
-    uint64_t      expanded;
-    uint64_t      max_expand;
-};
 
 /* ------------------------ 瓦片缝合缓存 ------------------------ */
 
@@ -382,201 +172,6 @@ static void sew_build(Router *r, SewSlot *s)
         if (i == 0 || cmp_pn(&c.v[i], &c.v[w - 1]) != 0) c.v[w++] = c.v[i];
     qsort(c.v, w, sizeof(SewEnt), cmp_coord_prov);
     s->v = c.v; s->n = w; s->full = 1;
-}
-
-/* ------------------------ 转向限制 ------------------------ */
-
-/* 按 kv 升序排三/两个平行数组（w 只有几百条，插入排序足够） */
-static void sort_kv(uint64_t *kv, uint32_t *a, uint32_t *b, size_t w)
-{
-    for (size_t i = 1; i < w; i++) {
-        uint64_t k = kv[i];
-        uint32_t x = a ? a[i] : 0, y = b ? b[i] : 0;
-        size_t j = i;
-        while (j > 0 && kv[j - 1] > k) {
-            kv[j] = kv[j - 1];
-            if (a) a[j] = a[j - 1];
-            if (b) b[j] = b[j - 1];
-            j--;
-        }
-        kv[j] = k;
-        if (a) a[j] = x;
-        if (b) b[j] = y;
-    }
-}
-
-static void restr_build(const MapSrc *s, RestrIdx *ri)
-{
-    ri->built = 1;
-    if (!s->has_restr || s->restrictions.hdr.rec_count == 0) return;
-    size_t n = (size_t)s->restrictions.hdr.rec_count;
-    ri->kv  = malloc(n * sizeof(uint64_t));
-    ri->to  = malloc(n * sizeof(uint32_t));
-    ri->kv2 = malloc(n * sizeof(uint64_t));
-    ri->to2 = malloc(n * sizeof(uint32_t));
-    ri->prev2 = malloc(n * sizeof(uint32_t));
-    ri->kv1 = malloc(n * sizeof(uint64_t));
-    ri->to1 = malloc(n * sizeof(uint32_t));
-    if (!ri->kv || !ri->to || !ri->kv2 || !ri->to2 || !ri->prev2 ||
-        !ri->kv1 || !ri->to1) {
-        fprintf(stderr, "路由: 限制表分配失败\n"); exit(2);
-    }
-    const uint8_t *d = s->restrictions.data;
-    size_t w = 0, w2 = 0, w1 = 0;
-    for (size_t i = 0; i < n; i++) {
-        const uint8_t *rec = d + i * NM_RESTR_BYTES;
-        uint64_t key = ((uint64_t)nm_get_u32(rec + RF_VIA_NODE) << 32) |
-                        nm_get_u32(rec + RF_FROM_EDGE);
-        if (rec[RF_KIND] == 2) {
-            ri->kv2[w2]   = key;
-            ri->to2[w2]   = nm_get_u32(rec + RF_TO_EDGE);
-            ri->prev2[w2] = nm_get_u32(rec + RF_PREV_EDGE);
-            w2++;
-        } else if (rec[RF_KIND] == 0) {
-            ri->kv[w] = key;
-            ri->to[w] = nm_get_u32(rec + RF_TO_EDGE);
-            w++;
-        } else if (rec[RF_KIND] == 1) {
-            /* kind=1 的 to_edge 是"允许"的那一支；一个 only_* 关系有多个 to
-               成员就有多条记录，它们共享同一个 key，合起来才是允许集。 */
-            ri->kv1[w1] = key;
-            ri->to1[w1] = nm_get_u32(rec + RF_TO_EDGE);
-            w1++;
-        }
-    }
-    ri->n = w; ri->n2 = w2; ri->n1 = w1;
-    sort_kv(ri->kv,  ri->to,  NULL,   w);
-    sort_kv(ri->kv2, ri->to2, ri->prev2, w2);
-    sort_kv(ri->kv1, ri->to1, NULL,   w1);
-}
-
-/* 在 kv 升序表里找 key 对应的区间起点 */
-static size_t kv_lower(const uint64_t *kv, size_t n, uint64_t key)
-{
-    size_t lo = 0, hi = n;
-    while (lo < hi) {
-        size_t mid = (lo + hi) / 2;
-        if (kv[mid] < key) lo = mid + 1; else hi = mid;
-    }
-    return lo;
-}
-
-static int restr_blocked(Router *r, uint32_t prov, uint32_t via_node,
-                         uint32_t from_edge, uint32_t to_edge)
-{
-    if (from_edge == REDGE_SEAM || to_edge == REDGE_SEAM) return 0;
-    if (prov >= (uint32_t)r->ms->n) return 0;
-    RestrIdx *ri = &r->ri[prov];
-    if (!ri->built) restr_build(&r->ms->srcs[prov], ri);
-    if (ri->n == 0) return 0;
-    uint64_t want = ((uint64_t)via_node << 32) | from_edge;
-    size_t i = kv_lower(ri->kv, ri->n, want);
-    for (; i < ri->n && ri->kv[i] == want; i++)
-        if (ri->to[i] == to_edge) return 1;
-    return 0;
-}
-
-/* kind=1（only_*）：语义跟上面两张表**相反**。
-   OSM 的 only_* 是"从 from 进来只许往这几支拐"，所以文件里存的是**允许集**
-   （一个关系有多个 to 成员就有多条记录，共享同一个 key）。于是查表反过来：
-     - 这个 {via, from} 没有 only_* 记录 ⇒ 不限制（返回 0）
-     - 有 ⇒ to 不在允许集里就禁（返回 1）
-   ★ 与 kind=0 正交：同一个路口可以同时有 no_* 和 only_*，两个都要查。
-   ★ 掉头回 from_edge 本身也算"不在允许集里"——除非 OSM 显式列了它，
-     与语义一致（only_straight_on 就是不许掉头）。
-   ★ 反向搜索不需要"保守版"：only_* 是点限制，只依赖 (via, from, to)，
-     反向松弛时这三个都已知，跟 kind=0 一样对称。 */
-static int restr_blocked_only(Router *r, uint32_t prov, uint32_t via_node,
-                              uint32_t from_edge, uint32_t to_edge)
-{
-    if (r->opt.no_restr1) return 0;
-    if (from_edge == REDGE_SEAM || to_edge == REDGE_SEAM) return 0;
-    if (prov >= (uint32_t)r->ms->n) return 0;
-    RestrIdx *ri = &r->ri[prov];
-    if (!ri->built) restr_build(&r->ms->srcs[prov], ri);
-    if (ri->n1 == 0) return 0;
-    uint64_t want = ((uint64_t)via_node << 32) | from_edge;
-    size_t i = kv_lower(ri->kv1, ri->n1, want);
-    if (i >= ri->n1 || ri->kv1[i] != want) return 0;   /* 这个来路没有 only_* */
-    for (; i < ri->n1 && ri->kv1[i] == want; i++)
-        if (ri->to1[i] == to_edge) return 0;           /* 在允许集里 */
-    return 1;
-}
-
-/* via=way 两段限制：三段序列 prev → from → to 被禁。
-   prev_edge 是"再往前一条边"，REDGE_SEAM 表示没有（起点附近）或跨了省
-   （边下标是省内的，跨省无从比起），这两种情况都放行——宁可漏禁也不误禁。 */
-static int restr_blocked2(Router *r, uint32_t prov, uint32_t via_node,
-                          uint32_t prev_edge, uint32_t from_edge,
-                          uint32_t to_edge)
-{
-    if (r->opt.no_restr2) return 0;
-    if (from_edge == REDGE_SEAM || to_edge == REDGE_SEAM) return 0;
-    if (prev_edge == REDGE_SEAM) return 0;
-    if (prov >= (uint32_t)r->ms->n) return 0;
-    RestrIdx *ri = &r->ri[prov];
-    if (!ri->built) restr_build(&r->ms->srcs[prov], ri);
-    if (ri->n2 == 0) return 0;
-    uint64_t want = ((uint64_t)via_node << 32) | from_edge;
-    size_t i = kv_lower(ri->kv2, ri->n2, want);
-    for (; i < ri->n2 && ri->kv2[i] == want; i++)
-        if (ri->to2[i] == to_edge && ri->prev2[i] == prev_edge) return 1;
-    if (restr_debug())
-        fprintf(stderr, "DBG2 miss via=%u prev=%u from=%u to=%u (n2=%zu)\n",
-                via_node, prev_edge, from_edge, to_edge, ri->n2);
-    return 0;
-}
-
-/* 反向搜索用的保守版：反向是从终点往起点推，站在 B 时"到达 A 的那条边"
-   （三段序列里的 prev）在搜索方向上还没确定，无从精确判定。
-   所以只要 (via, from, to) 命中就禁——会误伤"从别的路合法进入"的情形，
-   但方向是保守的：不会给出被禁转向。代价是反向可能绕一点远。 */
-static int restr_blocked2_rev(Router *r, uint32_t prov, uint32_t via_node,
-                              uint32_t from_edge, uint32_t to_edge)
-{
-    if (r->opt.no_restr2) return 0;
-    if (from_edge == REDGE_SEAM || to_edge == REDGE_SEAM) return 0;
-    if (prov >= (uint32_t)r->ms->n) return 0;
-    RestrIdx *ri = &r->ri[prov];
-    if (!ri->built) restr_build(&r->ms->srcs[prov], ri);
-    if (ri->n2 == 0) return 0;
-    uint64_t want = ((uint64_t)via_node << 32) | from_edge;
-    size_t i = kv_lower(ri->kv2, ri->n2, want);
-    for (; i < ri->n2 && ri->kv2[i] == want; i++)
-        if (ri->to2[i] == to_edge) return 1;
-    if (restr_debug())
-        fprintf(stderr, "DBGr miss via=%u from=%u to=%u\n",
-                via_node, from_edge, to_edge);
-    return 0;
-}
-
-/* 双向搜索的接缝检查：正向段的最后一条边 e_f 与反向段的第一条边 e_b
-   在相遇坐标 k 处构成一个完整转向（e_f 进入 k、e_b 离开 k）。
-   两个方向各自展开时都看不到这个转向——正向在 k 停住没走 e_b，反向在 k
-   停住没走 e_f——所以只能在这里补查。不合法的相遇点不接受，继续搜。 */
-static int seam_blocked(Router *r, uint64_t k)
-{
-    /* no_seam_restr 只给 restr_ab 做负向对照用：证明"判据能失败"，见 PLAN.md §33 */
-    if (r->opt.no_seam_restr) return 0;
-    StEnt *f = st_find(&r->st[DIR_FWD], k);
-    StEnt *b = st_find(&r->st[DIR_BWD], k);
-    if (!f || !b) return 0;
-    uint32_t e_f = f->eidx, e_b = b->eidx;
-    if (e_f == REDGE_SEAM || e_b == REDGE_SEAM) return 0;
-    /* 两边必须落在同一省的同一个节点上，否则边下标无从比起 */
-    if (f->rep_prov != b->rep_prov || f->rep_node != b->rep_node) return 0;
-    uint32_t prov = f->rep_prov;
-    if (prov >= (uint32_t)r->ms->n) return 0;
-    if (restr_blocked(r, prov, f->rep_node, e_f, e_b)) return 1;
-    if (restr_blocked_only(r, prov, f->rep_node, e_f, e_b)) return 1;
-
-    uint32_t prev2 = REDGE_SEAM;
-    if (f->prev_idx != UINT32_MAX) {
-        StEnt *pf = &r->st[DIR_FWD].ents[f->prev_idx];
-        if (pf->eprov == prov) prev2 = pf->eidx;
-    }
-    if (restr_blocked2(r, prov, f->rep_node, prev2, e_f, e_b)) return 1;
-    return 0;
 }
 
 /* ------------------------ 代价与启发式 ------------------------ */
