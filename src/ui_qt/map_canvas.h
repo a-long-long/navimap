@@ -41,6 +41,10 @@ public:
     QString summaryText() const;
     /* 无人值守截图（--shot 用）：确保渲染最新并抓取整个画布 */
     QImage grabMap();
+    /* 右下角读数的那一行文本（按所选基准换算 + 基准短名前缀）。
+     * 单独抽成公开方法是为了让 --ui-test 能断言"切基准确实改了读数"——
+     * 直接对绘制结果做 OCR/像素比对既脆又测不到文案。 */
+    QString cursorCoordsText() const;
 
 protected:
     void paintEvent(QPaintEvent *e) override;

@@ -7,7 +7,8 @@
 - `sources/` 只放原始 `*.osm.pbf`；`products/` 全可删、`./scripts/sync_maps.sh` 确定性重建。
 - ★★ **实验参数不能只活在命令行上**（header 不存地标坐标）：30 地标在
   `lmbuild_cli.c` 的 `k_lm[]`，`--nlm=N` 取前 N。
-- 验收 `./scripts/regress.sh`（**54 项**：基线 47 + 去 SDL 化 4 + 字体 2 + UI 1）；编译**零警告**；
+- 验收 `./scripts/regress.sh`（**62 项**；本机 Windows 仅 beijing 数据时 = 38 通过 / 24 失败，
+  失败全是环境缺失：7 省 PBF / `places_auto.db` / `lm.bin` / `build/navimap` 路径 glitch）；编译**零警告**；
   改渲染补 `python3 scripts/bmpdiff.py 旧 新`（要素色→背景色=丢要素）。
   Windows 本机构建用 `./scripts/build_win.sh`（见下面的 gcc 静默失败条目）。
   ★ Qt 前端 UI 交互自检：`navmap_qt --ui-test`（16 项：搜索按钮→点击→输入框出现→Esc 收起
@@ -67,6 +68,24 @@
   **负向对照必须能失败**。
 - 怀疑未初始化内存**先查对象生命周期**（悬垂 ASan/valgrind 查不到）；
   两阶段行为不同先 dump 计数（622 vs 311 直接破案）。
+- ★★ **判据只 grep 标记行会漏掉"打印了 OK 但退出码非 0"**：`dmap_selftest` 曾打完
+  `DMAP-OK` 就 `return`，而 `MapSet` 是 main 的栈变量、后台 worker 还在解码 ⇒ 回调命中
+  已销毁的栈，rc=139 却显示"通过"。**收尾必须 `mapset_free(&ms)`**；判据要同时看退出码。
+
+## 设置项与 C/C++ 边界（2026-10-25）
+
+- ★★★ **`app_init` 是逐字段读设置的**（不走 `app_apply_settings`——那个只服务 SDL 设置面板的
+  「应用/恢复默认」）。新增设置项必须**三处都改**：`SETTINGS_SCHEMA`（settings.c）+
+  `app_init`（window.c）+ `app_persist_settings`（window.c）。漏 `app_init` 的表现：
+  启动不生效、且退出时把它写回默认值（datum 踩过）。
+- ★★ **C++ 也要 include 的 C 模块头必须自带 `#ifdef __cplusplus extern "C"`**（datum.h 已加；
+  否则 C++ 端名字改编 ⇒ 链接期一片 undefined reference）。注释里别写 `src/x/*.cpp`
+  —— `/*` 触发 `-Wcomment`（-Werror 下直接 FAIL）。
+- 坐标系：参数在 `src/utils/datum.c` 的 `DATUMS[]`；`datum_note()` 的文案与参数表**同文件维护**。
+  - 北京1954 = EPSG:15921（+15.8, −154.4, −82.3），北京实测水平 63.5 m。
+  - 西安1980：**EPSG 无 XA80↔WGS84 变换**（PROJ 定义 `+ellps=IAU76 +no_defs`）⇒ 平移 0、只换椭球；
+    IAG75 ≈ WGS84 整体放大 3 m ⇒ 水平 0.019 m / 高程 −2.996 m，**经纬度几乎重合是正常的**。
+
 
 ## 已达成水平
 

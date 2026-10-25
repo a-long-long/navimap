@@ -2,6 +2,8 @@
 #include "map_canvas.h"
 #include "qt_icons.h"
 #include "qt_icon_button.hpp"
+#include "utils/datum.h"   /* 坐标系（大地基准）：枚举与标签 */
+#include "settings/settings.h"  /* settings_set_int：切基准后落盘 */
 
 #include <QMenuBar>
 #include <QMenu>
@@ -286,6 +288,33 @@ int MainWindow::runUiSelfTest()
         check(before != after, "鼠标移动后：右下角坐标随之更新");
     }
 
+    /* ⑪ 坐标系（大地基准）：下拉框存在且项数与枚举一致；切基准后
+     *    右下角读数**真的变**（前缀换成基准短名），切回去能**原样恢复**。
+     *    这条是成对的：只查"变了"会漏掉抖动，只查"恢复"会漏掉根本没生效。 */
+    {
+        const int keep = m_a->datum;
+        check(m_datumCombo && m_datumCombo->count() == (int)DATUM_COUNT,
+              "坐标系下拉框存在且项数与枚举一致");
+
+        m_canvas->update();   /* 光标位置沿用上一条断言里那次 MouseMove，保持固定 */
+        setDatum(DATUM_WGS84);
+        const QString t_wgs = m_canvas->cursorCoordsText();
+        setDatum(DATUM_BJ54);
+        const QString t_bj = m_canvas->cursorCoordsText();
+        setDatum(DATUM_XA80);
+        const QString t_xa = m_canvas->cursorCoordsText();
+        setDatum(DATUM_WGS84);
+        const QString t_back = m_canvas->cursorCoordsText();
+
+        check(t_bj != t_wgs && t_bj.startsWith(QString::fromUtf8("北京54")),
+              "切到北京54：读数变化且带基准前缀");
+        check(t_xa.startsWith(QString::fromUtf8("西安80")),
+              "切到西安80：读数带基准前缀");
+        check(t_back == t_wgs, "切回 WGS84：读数原样恢复");
+
+        setDatum(keep);                          /* 还原，别把自检结果写进设置 */
+    }
+
     if (fail == 0) {
         printf("QT-UI-OK\n");
         return 0;
@@ -367,6 +396,17 @@ void MainWindow::buildMenus()
            [this]() { app_set_font_size(m_a, m_a->font_size + 1); m_a->need_redraw = 1; });
     addAct(mview, QStringLiteral("字号减小"), QKeySequence(Qt::Key_BracketLeft), this,
            [this]() { app_set_font_size(m_a, m_a->font_size - 1); m_a->need_redraw = 1; });
+
+    /* 坐标系（大地基准）：切基准后经纬网与读数按该基准呈现。与右栏下拉框同步。 */
+    QMenu *mdatum = menuBar()->addMenu(QStringLiteral("坐标系(&C)"));
+    for (int i = 0; i < DATUM_COUNT; i++) {
+        QAction *act = mdatum->addAction(QString::fromUtf8(datum_label((DatumId)i)));
+        act->setCheckable(true);
+        act->setData(i);
+        act->setChecked(m_a->datum == i);
+        connect(act, &QAction::triggered, this, [this, i]() { setDatum(i); });
+        m_datumActs.append(act);
+    }
 }
 
 /* ---------------- 顶栏：搜索按钮 + 模式页签 + 路线摘要 ----------------
@@ -573,6 +613,19 @@ void MainWindow::buildRightCol()
         m_canvas->setShowGrid(on);
     });
 
+    /* 坐标系（大地基准）下拉框：紧邻坐标网按钮 ——
+     * 切基准后经纬网（若开着）与右下角读数立即按该基准呈现。 */
+    m_datumCombo = new QComboBox();
+    m_datumCombo->setFixedWidth(124);
+    m_datumCombo->setToolTip(QStringLiteral("坐标系（大地基准）：切基准后经纬网与右下角读数随之变化"));    for (int i = 0; i < DATUM_COUNT; i++)
+        m_datumCombo->addItem(QString::fromUtf8(datum_label((DatumId)i)));
+    m_datumCombo->setCurrentIndex(m_a->datum);
+    /* 提示里带上该基准的**来源与精度**（文案在 datum.c 的 datum_note，跟参数表
+       一起维护）：西安80 只换椭球、经纬度与 WGS84 几乎一样，不说明会被当成没生效。 */
+    m_datumCombo->setToolTip(QString::fromUtf8(datum_note((DatumId)m_a->datum)));
+    connect(m_datumCombo, QOverload<int>::of(&QComboBox::currentIndexChanged),
+            this, [this](int i) { setDatum(i); });
+
     /* 菜单按钮：弹出与菜单栏同一份 QMenu（SDLV 版 TopBar 的 ☰ 按钮行为）。
        Qt 5.11 的 popup 只有 (pos, at) 两参，用 sizeHint 把菜单定位到按钮左侧，
        避免从最底钮向下弹出超出屏幕。 */
@@ -591,6 +644,7 @@ void MainWindow::buildRightCol()
     vl->addWidget(day);
     vl->addSpacing(6);
     vl->addWidget(grid);
+    vl->addWidget(m_datumCombo);
     vl->addWidget(menu);
 
     /* 外观：底板/边框/悬停高亮全部由 IconButton::paintEvent 自绘
@@ -660,6 +714,21 @@ void MainWindow::locate()
 void MainWindow::setShowGrid(bool v)
 {
     if (m_canvas) m_canvas->setShowGrid(v);
+}
+
+void MainWindow::setDatum(int id)
+{
+    if (id < 0 || id >= DATUM_COUNT) id = DATUM_WGS84;
+    m_a->datum = id;
+    if (m_datumCombo) {
+        m_datumCombo->setCurrentIndex(id);
+        m_datumCombo->setToolTip(QString::fromUtf8(datum_note((DatumId)id)));
+    }
+    for (QAction *a : m_datumActs)
+        a->setChecked(a->data().toInt() == id);
+    /* 落盘延到 app_shutdown（app_persist_settings 统一写回 settings.ini） */
+    settings_set_int(m_a->cfg, "datum", id);
+    m_a->need_redraw = 1;   /* 经纬网/读数立即按新基准重绘 */
 }
 
 /* ---------------- 左侧步骤面板 ---------------- */

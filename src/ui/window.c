@@ -11,6 +11,7 @@
 #include "map/binfmt.h"
 #include "map/map_view.h"
 #include "utils/geo.h"
+#include "utils/datum.h"
 #include "utils/plat.h"
 #include "settings/settings.h"
 
@@ -61,6 +62,13 @@ int app_init(App *a, const char *graph_dir, int w, int h,
     a->show_labels = settings_get_bool(a->cfg, "show_labels", 1);
     a->voice_on    = settings_get_bool(a->cfg, "voice_on", 1);
     a->mode        = settings_get_int(a->cfg, "mode", 0);
+    /* ★ app_init 是**逐字段**读设置的（不经过 app_apply_settings——那个只给
+     *   SDL 设置面板的「应用/恢复默认」用）。新增设置项必须在这里也读一遍，
+     *   否则启动时不生效、下次退出还会把它写回默认值（踩过：datum 启动读不出）。 */
+    {
+        int dv = settings_get_int(a->cfg, "datum", 0);
+        a->datum = (dv >= 0 && dv < DATUM_COUNT) ? dv : DATUM_WGS84;
+    }
     a->sim_speed_idx = SIM_SPEED_DEFAULT;
     a->sim_follow = 1;
     /* 互斥量用平台抽象层（不直接碰 pthread / CRITICAL_SECTION）。
@@ -240,6 +248,8 @@ void app_apply_settings(App *a)
     a->voice_on     = settings_get_bool(a->cfg, "voice_on", 1);
     a->mode         = settings_get_int(a->cfg, "mode", 0);
     a->max_class    = settings_get_int(a->cfg, "max_class", 4);
+    int dv = settings_get_int(a->cfg, "datum", 0);
+    a->datum = (dv >= 0 && dv < DATUM_COUNT) ? dv : DATUM_WGS84;
     int fs = settings_get_int(a->cfg, "font_size", 14);
     if (fs != a->font_size) app_set_font_size(a, fs);
 }
@@ -255,6 +265,7 @@ void app_persist_settings(App *a)
     settings_set_int(a->cfg,  "mode",        a->mode);
     settings_set_int(a->cfg,  "font_size",   a->font_size);
     settings_set_int(a->cfg,  "max_class",   a->max_class);
+    settings_set_int(a->cfg,  "datum",       a->datum);
     /* 视图位置：记住上次退出时所在（下次启动直接回到这里） */
     settings_set_dbl(a->cfg, "view_lat",  a->view.lat);
     settings_set_dbl(a->cfg, "view_lon",  a->view.lon);

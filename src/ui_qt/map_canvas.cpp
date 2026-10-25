@@ -10,6 +10,7 @@
 #include <cstring>
 
 #include "main_window.h"
+#include "utils/datum.h"   /* 坐标系（大地基准）：经纬网/读数按所选基准呈现 */
 
 /* Qt 前端的地图画布实现。设计要点见 map_canvas.h 顶部注释。
  *
@@ -136,14 +137,28 @@ void MapCanvas::setShowGrid(bool v)
 }
 
 /* ---- 坐标网格（lat/lon 经纬网）：Qt 端叠加层，C 渲染核心一行不改 ----
- * 用 mv_visible_bbox 取当前可见范围的经纬度边界，再按 nice 1/2/5 步进
- * 取经线/纬线，逐条 mv_project 到像素画直线 + 边缘标注。
- * 旋转角 rot 是投影的一部分，所以网格随地图一起转，天然正确。 */
+ * 用 mv_visible_bbox 取当前可见范围（WGS84），把四角换到所选基准取范围，
+ * 再按 nice 1/2/5 步进取该基准下的经线/纬线；每条线的两端先换回 WGS84 再
+ * mv_project（基准偏移在视口内近似常数，端点投影后连直线精度足够），标签标
+ * 基准坐标。旋转角 rot 是投影的一部分，所以网格随地图一起转，天然正确。 */
 void MapCanvas::drawGraticule(QPainter &p)
 {
     double bbox[4];
-    mv_visible_bbox(&m_a->view, bbox);   /* [la0(底), lo0(左), la1(顶), lo1(右)] */
-    double la0 = bbox[0], lo0 = bbox[1], la1 = bbox[2], lo1 = bbox[3];
+    mv_visible_bbox(&m_a->view, bbox);   /* [la0(底), lo0(左), la1(顶), lo1(右)]，WGS84 */
+    DatumId id = (DatumId)m_a->datum;
+
+    /* 可见区四角 WGS84 → 基准，取基准下的经纬度范围（偏移近常数，4 角 min/max 保不漏画）。 */
+    static const int corner[4][2] = { {0,1}, {0,3}, {2,1}, {2,3} };
+    double dlat_min = 1e9, dlat_max = -1e9, dlon_min = 1e9, dlon_max = -1e9;
+    double latc, lonc;
+    for (int i = 0; i < 4; i++) {
+        datum_wgs84_to(id, bbox[corner[i][0]], bbox[corner[i][1]], 0, &latc, &lonc, NULL);
+        if (latc < dlat_min) dlat_min = latc;
+        if (latc > dlat_max) dlat_max = latc;
+        if (lonc < dlon_min) dlon_min = lonc;
+        if (lonc > dlon_max) dlon_max = lonc;
+    }
+    double la0 = dlat_min, lo0 = dlon_min, la1 = dlat_max, lo1 = dlon_max;
     double span = qMax(lo1 - lo0, la1 - la0);
     if (span <= 0) return;
 
@@ -158,22 +173,26 @@ void MapCanvas::drawGraticule(QPainter &p)
     p.setPen(QColor(40, 60, 95, 160));
 
     char buf[32];
-    /* 经线（恒定 lon）：竖向，标签标在顶端 */
+    double lw0, lo0w, lw1, lo1w;
+    int xb, yb, xt, yt;
+    /* 经线（恒定 lon，基准下）：两端换回 WGS84 投影，标签标基准坐标 */
     double lon = ceil(lo0 / step - 1e-9) * step;
     for (; lon <= lo1 + 1e-9; lon += step) {
-        int xb, yb, xt, yt;
-        mv_project(&m_a->view, la0, lon, &xb, &yb);
-        mv_project(&m_a->view, la1, lon, &xt, &yt);
+        datum_to_wgs84(id, la0, lon, 0, &lw0, &lo0w, NULL);
+        datum_to_wgs84(id, la1, lon, 0, &lw1, &lo1w, NULL);
+        mv_project(&m_a->view, lw0, lo0w, &xb, &yb);
+        mv_project(&m_a->view, lw1, lo1w, &xt, &yt);
         p.drawLine(xb, yb, xt, yt);
         snprintf(buf, sizeof(buf), "%.4f°%c", fabs(lon), lon >= 0 ? 'E' : 'W');
         p.drawText(xt + 2, yt + 10, QString::fromUtf8(buf));
     }
-    /* 纬线（恒定 lat）：横向，标签标在左端 */
+    /* 纬线（恒定 lat，基准下） */
     double lat = ceil(la0 / step - 1e-9) * step;
     for (; lat <= la1 + 1e-9; lat += step) {
-        int xb, yb, xt, yt;
-        mv_project(&m_a->view, lat, lo0, &xb, &yb);
-        mv_project(&m_a->view, lat, lo1, &xt, &yt);
+        datum_to_wgs84(id, lat, lo0, 0, &lw0, &lo0w, NULL);
+        datum_to_wgs84(id, lat, lo1, 0, &lw1, &lo1w, NULL);
+        mv_project(&m_a->view, lw0, lo0w, &xb, &yb);
+        mv_project(&m_a->view, lw1, lo1w, &xt, &yt);
         p.drawLine(xb, yb, xt, yt);
         snprintf(buf, sizeof(buf), "%.4f°%c", fabs(lat), lat >= 0 ? 'N' : 'S');
         p.drawText(xb + 2, yb - 3, QString::fromUtf8(buf));
@@ -219,7 +238,7 @@ void MapCanvas::drawScaleBar(QPainter &p)
  *   经纬度的数字用 QString::asprintf 直接格式化，避免 QString::number
  *   的 locale 影响。
  */
-void MapCanvas::drawCursorCoords(QPainter &p)
+QString MapCanvas::cursorCoordsText() const
 {
     double la, lo;
     const bool has_cursor = m_cursor_in;
@@ -229,12 +248,23 @@ void MapCanvas::drawCursorCoords(QPainter &p)
         la = m_a->view.lat;
         lo = m_a->view.lon;
     }
-    /* 前缀区分语义：光标处 vs 视口中心（状态栏里已经有中心坐标了）。
+    /* 读数按所选基准呈现（底图几何仍是 WGS84，只换读数/标注的基准） */
+    DatumId id = (DatumId)m_a->datum;
+    double lad, lod;
+    datum_wgs84_to(id, la, lo, 0, &lad, &lod, NULL);
+
+    /* 前缀区分语义：基准短名 / 光标处 vs 视口中心（状态栏里已经有中心坐标了）。
        主流地图软件（OsmAnd / 高德）的做法也是鼠标一动就显示光标处坐标。 */
-    QString txt = QString::asprintf("%s %.5f°%c  %.5f°%c",
-                                    has_cursor ? "光标" : "中心",
-                                    fabs(la), la >= 0 ? 'N' : 'S',
-                                    fabs(lo), lo >= 0 ? 'E' : 'W');
+    return QString::asprintf("%s %s %.5f°%c  %.5f°%c",
+                             datum_short(id),
+                             has_cursor ? "光标" : "中心",
+                             fabs(lad), lad >= 0 ? 'N' : 'S',
+                             fabs(lod), lod >= 0 ? 'E' : 'W');
+}
+
+void MapCanvas::drawCursorCoords(QPainter &p)
+{
+    QString txt = cursorCoordsText();
 
     QFont f = p.font();
     f.setPointSize(8);

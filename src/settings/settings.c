@@ -16,6 +16,7 @@ const SettingMeta SETTINGS_SCHEMA[] = {
     { "mode",        "默认页签",   ST_INT,  0, 0, 1, 1, "浏览\0导航\0" },
     { "font_size",   "字号(pt)",   ST_INT, 14, 8, 32, 1, NULL },
     { "max_class",   "道路细节",   ST_INT,  4, 0, 4, 1, NULL },
+    { "datum",       "坐标系",     ST_INT,  0, 0, 3, 1, "WGS84\0CGCS2000\0北京1954\0西安1980\0" },
 };
 const int SETTINGS_SCHEMA_N = (int)(sizeof(SETTINGS_SCHEMA) / sizeof(SETTINGS_SCHEMA[0]));
 

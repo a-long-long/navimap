@@ -85,5 +85,14 @@ int main(int argc, char **argv)
     }
 
     printf(bad ? "DMAP-FAIL\n" : "DMAP-OK\n");
+
+    /* ★ 必须先收尾再 return：`ms` 是 main 的**栈变量**，worker 线程此刻可能
+     *   还在 pbfmap_decode 里，若直接 return，栈帧销毁后它回调
+     *   dmap_progress_cb(ud=&ms) 就会去锁已释放的 dmap_mtx ⇒ 退出期 SIGSEGV。
+     *   实测：日志里 DMAP-OK 齐全、进程 rc=139（一度被误当成"通过"，因为判据
+     *   只 grep 了标记行）。mapset_free 会置 dmap_quit 并等 worker 停下。 */
+    fflush(stdout);
+    mapset_free(&ms);
+
     return bad ? 1 : 0;
 }

@@ -203,8 +203,8 @@ if(WIN32)
     target_compile_options(navmap_plat PUBLIC -Wno-format)
 endif()
 
-# 叶子库 2：navmap_geo（src/utils/geo.c，纯叶子）
-add_library(navmap_geo STATIC src/utils/geo.c)
+# 叶子库 2：navmap_geo（src/utils/geo.c + datum.c，纯叶子）
+add_library(navmap_geo STATIC src/utils/geo.c src/utils/datum.c)
 target_include_directories(navmap_geo PUBLIC ${CMAKE_SOURCE_DIR}/src)
 target_link_libraries(navmap_geo PUBLIC ${NM_LEAF_SYS_LIBS})
 if(WIN32)
@@ -601,6 +601,10 @@ nm_link_tool(disp_tile_selftest navmap_map navmap_route navmap_search navmap_ren
 
 add_executable(disp_runtime_selftest tools/disp_runtime_selftest.c)
 nm_link_tool(disp_runtime_selftest navmap_map navmap_route navmap_search navmap_render navmap_ui)
+
+# 坐标系（大地基准）自测：WGS84/CGCS2000/北京54/西安80 的枚举/往返/位移合理性 + 负向对照。
+add_executable(datum_selftest tools/datum_selftest.c)
+nm_link_tool(datum_selftest navmap_map navmap_route navmap_search navmap_render navmap_ui)
 
 # 字体契约验收：内置 Noto 字体集是否真能加载并出字形。
 add_executable(font_selftest tools/font_selftest.c)

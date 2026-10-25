@@ -29,6 +29,8 @@
  */
 #include <QMainWindow>
 #include <QMenu>
+#include <QComboBox>
+#include <QList>
 
 extern "C" {
 #include "ui/window.h"
@@ -52,6 +54,9 @@ public:
     bool takeShot(const QString &path);
     /* 坐标网叠加层开关（右栏「坐标网」按钮 / --grid 用） */
     void setShowGrid(bool v);
+
+    /* 坐标系（大地基准）切换：连到右栏「坐标网」按钮旁的下拉框与 ☰ 菜单 */
+    void setDatum(int id);
 
     /* MapCanvas 键盘事件转发到这里（焦点在画布上） */
     void handleKey(int key);
@@ -98,6 +103,8 @@ private:
     QTimer       *m_timer  = nullptr;
     QMenu        *m_menuMain = nullptr;  /* 右栏「菜单」按钮弹出的主菜单（同时挂在菜单栏） */
     QWidget      *m_rightOverlay = nullptr; /* 右上角浮层容器（挂在画布上） */
+    QComboBox    *m_datumCombo = nullptr;   /* 右栏坐标网按钮旁的坐标系下拉框 */
+    QList<QAction*> m_datumActs;           /* ☰ 菜单里的坐标系动作（与下拉框同步） */
     QString       m_lastPick;            /* 最近一次选中的地点（按钮提示用） */
     int           m_step_count = -1;     /* 步骤面板增量刷新哨兵 */
 };

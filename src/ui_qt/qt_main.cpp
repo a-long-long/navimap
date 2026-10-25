@@ -23,6 +23,7 @@
 extern "C" {
 #include "ui/window.h"
 #include "map/mapset.h"     /* mapset_enable_pbf_display / mapset_totals */
+#include "utils/datum.h"     /* DatumId / DATUM_*：--datum 解析 */
 }
 
 #include "main_window.h"
@@ -41,6 +42,7 @@ int main(int argc, char **argv)
     int grid = 0;                     /* --grid：开局打开坐标网叠加层 */
     int ui_test = 0;                  /* --ui-test：跑无头 UI 自检后退出 */
     int shot_search = 0;              /* --shot-search：截图前先展开搜索框 */
+    const char *datum = NULL;         /* --datum=wgs84|cgcs2000|bj54|xa80：坐标系（命令行优先） */
 
     AutoBuildOpt ab;
     memset(&ab, 0, sizeof(ab));
@@ -58,6 +60,7 @@ int main(int argc, char **argv)
         else if (strncmp(argv[i], "--sources=", 10) == 0) ab.src_dir = argv[i] + 10;
         else if (strncmp(argv[i], "--shot=", 7) == 0) shot = argv[i] + 7;
         else if (strcmp(argv[i], "--grid") == 0) grid = 1;
+        else if (strncmp(argv[i], "--datum=", 8) == 0) datum = argv[i] + 8;
         else if (strcmp(argv[i], "--ui-test") == 0) ui_test = 1;
         else if (strcmp(argv[i], "--shot-search") == 0) shot_search = 1;
         else if (strncmp(argv[i], "--pbf-display=", 14) == 0) {
@@ -101,6 +104,21 @@ int main(int argc, char **argv)
     App a;
     if (app_init(&a, graph, w, h, font, font_size, &ab) != 0) return 1;
     a.qt_ui = 1;
+
+    /* 坐标系：命令行优先于设置文件（app_init 已按 settings.ini 设过 a.datum）。 */
+    if (datum) {
+        int did = DATUM_WGS84;
+        if (!strcmp(datum, "cgcs2000") || !strcmp(datum, "cgcs2000+") ||
+            !strcmp(datum, "2000"))
+            did = DATUM_CGCS2000;
+        else if (!strcmp(datum, "bj54") || !strcmp(datum, "beijing1954") ||
+                 !strcmp(datum, "北京54") || !strcmp(datum, "北京1954"))
+            did = DATUM_BJ54;
+        else if (!strcmp(datum, "xa80") || !strcmp(datum, "xian1980") ||
+                 !strcmp(datum, "西安80") || !strcmp(datum, "西安1980"))
+            did = DATUM_XA80;
+        a.datum = did;
+    }
 
     if (pbf_display) {
         if (mapset_enable_pbf_display(&a.ms, pbf_display, pbf_lru) != 0) {

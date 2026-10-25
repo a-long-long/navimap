@@ -199,6 +199,9 @@ run dmap_selftest "DMAP-OK" "$BUILD/dmap_selftest" "$GRAPH" "$ROOT/sources"
 run disp_tile_selftest "DISP-TILE-OK" "$BUILD/disp_tile_selftest" --graph="$GRAPH/beijing"
 run disp_runtime_selftest "DISP-RUNTIME-OK" "$BUILD/disp_runtime_selftest" --graph="$GRAPH/beijing"
 
+# ---- 坐标系（大地基准）：WGS84/CGCS2000/北京54/西安80 枚举/恒等/往返/偏移自测 ----
+run datum_selftest "DATUM-OK" "$BUILD/datum_selftest"
+
 # ---- 去 SDL 化的三条门禁（方案2）----
 #
 # 背景：navimap_core 已做到"零 SDL"，Qt 前端（navmap_qt）一行 SDL 都不链，

@@ -131,6 +131,7 @@ typedef struct {
      * 这些是纯 UI 状态，与导航/渲染算法无关；改它们不影响算路结果。 */
     int           day_night;      /* 0 昼 / 1 夜（夜间半透明蒙版） */
     int           mode;           /* 顶栏模式页签：0 浏览 / 1 导航 */
+    int           datum;          /* 坐标系（大地基准）：0 WGS84 / 1 CGCS2000 / 2 北京54 / 3 西安80 */
     int           menu_open;      /* 主菜单浮层是否展开 */
     int           chrome_menu_item;/* 菜单命中项下标（chrome_hit 写入） */
     int           win_drag;       /* 自绘标题栏拖拽中 */
