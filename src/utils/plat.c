@@ -622,6 +622,114 @@ double nm_peak_rss_mb(void)
 #endif
 }
 
+/* ======================= 语音播报（离线 TTS） ======================= */
+
+/* 真正的发声：Windows 用 PowerShell + System.Speech（SAPI），其它平台用
+ * espeak-ng / espeak / say（按 PATH 探测）。文本写到 UTF-8 BOM 的 .ps1 临时
+ * 脚本再让 PowerShell 读，绕开命令行中文编码问题（CreateProcessA 走系统 ANSI
+ * 代码页，直接把中文塞进命令行会被改坏）。 */
+static void tts_speak_sync(const char *text)
+{
+    /* DRYRUN：写文件代替发声（无头自测用，确定性好） */
+    const char *dry = getenv("NAVIMAP_TTS_DRYRUN");
+    if (dry && *dry) {
+        FILE *f = fopen(dry, "ab");
+        if (f) { fputs(text, f); fputc('\n', f); fclose(f); }
+        return;
+    }
+
+#ifdef _WIN32
+    char ps[1024];
+    if (nm_find_in_path("powershell.exe", ps, sizeof(ps)) == 0) {
+        char tmpl[1024];
+        int k = snprintf(tmpl, sizeof(tmpl), "%s/navimap_tts_%d_%llu.ps1",
+                         nm_temp_dir(), (int)nm_get_pid(),
+                         (unsigned long long)nm_now_ms());
+        if (k < 0 || (size_t)k >= sizeof(tmpl)) return;
+        FILE *f = fopen(tmpl, "wb");
+        if (f) {
+            static const unsigned char bom[3] = { 0xEF, 0xBB, 0xBF };
+            fwrite(bom, 1, 3, f);
+            fputs("Add-Type -AssemblyName System.Speech\n", f);
+            fputs("$s = New-Object System.Speech.Synthesis.SpeechSynthesizer\n", f);
+            fputs("$s.Speak('", f);
+            for (const char *p = text; *p; p++) {       /* 单引号转义为两个单引号 */
+                if (*p == '\'') fputs("''", f);
+                else            fputc(*p, f);
+            }
+            fputs("')\n", f);
+            fclose(f);
+            char *argv[] = { ps, "-NoProfile", "-NonInteractive", "-File", tmpl, NULL };
+            int code = 0;
+            nm_spawn_wait(ps, argv, &code);
+            nm_unlink(tmpl);
+        }
+        return;
+    }
+#else
+    char exe[1024];
+    if (nm_find_in_path("espeak-ng", exe, sizeof(exe)) == 0) {
+        char *argv[] = { exe, "-a", "100", "-s", "150", (char *)text, NULL };
+        int c = 0; nm_spawn_wait(exe, argv, &c); return;
+    }
+    if (nm_find_in_path("espeak", exe, sizeof(exe)) == 0) {
+        char *argv[] = { exe, "-a", "100", "-s", "150", (char *)text, NULL };
+        int c = 0; nm_spawn_wait(exe, argv, &c); return;
+    }
+    if (nm_find_in_path("say", exe, sizeof(exe)) == 0) {
+        char *argv[] = { exe, (char *)text, NULL };
+        int c = 0; nm_spawn_wait(exe, argv, &c); return;
+    }
+#endif
+    /* 没有任何引擎：静默（无头环境不报错） */
+}
+
+struct NmTtsArg { char *text; };
+
+static void tts_worker(void *p)
+{
+    struct NmTtsArg *a = (struct NmTtsArg *)p;
+    tts_speak_sync(a->text);
+    free(a->text);
+    free(a);
+}
+
+int nm_tts_speak(const char *text)
+{
+    if (!text || !*text) return 0;
+    /* DRYRUN 同步写，避免起线程（自测要确定性） */
+    if (getenv("NAVIMAP_TTS_DRYRUN")) { tts_speak_sync(text); return 1; }
+    /* 本机没有可用引擎就不起线程（无头环境静默） */
+    if (!nm_tts_available()) return 0;
+    struct NmTtsArg *a = (struct NmTtsArg *)malloc(sizeof *a);
+    if (!a) return 0;
+    a->text = nm_strdup(text);
+    if (!a->text) { free(a); return 0; }
+    if (nm_thread_spawn(tts_worker, a) != 0) { free(a->text); free(a); return 0; }
+    return 1;
+}
+
+int nm_tts_available(void)
+{
+#ifdef _WIN32
+    char exe[1024];
+    return nm_find_in_path("powershell.exe", exe, sizeof(exe)) == 0 ? 1 : 0;
+#else
+    char exe[1024];
+    if (nm_find_in_path("espeak-ng", exe, sizeof(exe)) == 0) return 1;
+    if (nm_find_in_path("espeak",   exe, sizeof(exe)) == 0) return 1;
+    if (nm_find_in_path("say",      exe, sizeof(exe)) == 0) return 1;
+    return 0;
+#endif
+}
+
+int nm_tts_tier_for_distance(double to_go_m)
+{
+    if (to_go_m <= 60.0)  return 2;   /* 立即层：即将转向 */
+    if (to_go_m <= 300.0) return 1;   /* 接近层：提前预告 */
+    return 0;
+}
+
 /* ============================ 其它 ============================ */
 
 int nm_strcasecmp(const char *a, const char *b)

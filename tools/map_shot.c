@@ -290,6 +290,18 @@ int main(int argc, char **argv)
                a.pick_a.snap_m, a.pick_b.snap_m);
         printf("maneuvers      %d 条（里程和 %.1f m / 总里程 %.1f m）\n",
                a.man.n, a.man.sum_m, a.rr.total_m);
+        if (a.have_alts) {
+            printf("alts           %d 方案\n", a.ralts.n);
+            for (int k = 0; k < a.ralts.n; k++) {
+                if (a.ralts.err[k] == 0)
+                    printf("  [%d] %-8s %.2f km  约 %.0f 分  收费 %.2f km  非铺装 %.2f km\n",
+                           k, a.ralts.tag[k], a.ralts.total_m[k] / 1000.0,
+                           a.ralts.total_s[k] / 60.0, a.ralts.toll_m[k] / 1000.0,
+                           a.ralts.unpaved_m[k] / 1000.0);
+                else
+                    printf("  [%d] %-8s (不可行 err=%d)\n", k, a.ralts.tag[k], a.ralts.err[k]);
+            }
+        }
         if (have_center != 3 || fit_route) {
             app_nav_fit(&a);
             printf("fit-route      zoom %.2f 中心 %.5f,%.5f\n",
@@ -385,6 +397,17 @@ int main(int argc, char **argv)
         printf("sim 指令       %s（%.0f m 后）%s\n",
                mi >= 0 ? maneuver_kind_text(&a.man.v[mi]) : "(已过完)",
                to_go, navsim_offroute(&a.sim, 0) ? "  【已偏航】" : "");
+        /* 车道指示诊断：复刻 window.c 取"下个转向驶入路口的边"的 turn:lanes，
+         * 用来确认车道数据确实喂进了底部指令条（b_lanes）。 */
+        if (mi >= 0 && mi < a.man.n) {
+            int midx = a.man.v[mi].idx;
+            if (midx >= 1 && midx < a.rr.n) {
+                int seg = midx - 1;
+                int prov = a.rr.pts[midx].prov;
+                const char *ls = mapset_edge_lanes(&a.ms, prov, a.rr.edge_idx[seg]);
+                printf("sim 车道       %s\n", (ls && *ls) ? ls : "(该边无 turn:lanes)");
+            }
+        }
     }
 
     SDL_Surface *surf = SDL_CreateRGBSurface(0, w, h, 32, 0, 0, 0, 0);

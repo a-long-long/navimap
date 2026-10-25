@@ -163,6 +163,106 @@ void paint_nav_marker(Raster *rs, const MapView *v,
     }
 }
 
+/* ---- 路口车道指示 ---- */
+static int lane_has(const char *s, size_t n, const char *kw)
+{
+    size_t kl = strlen(kw);
+    if (kl == 0 || n < kl) return 0;
+    for (size_t i = 0; i + kl <= n; i++)
+        if (memcmp(s + i, kw, kl) == 0) return 1;
+    return 0;
+}
+
+/* 画一个箭头：dir 0=直行(上) -1=左 +1=右 2=掉头(画成向左下勾) 其它=短竖线。 */
+static void draw_lane_arrow(Raster *rs, int cx, int cy, int dir, int R, int G, int B)
+{
+    uint8_t r = (uint8_t)R, g = (uint8_t)G, b = (uint8_t)B;
+    int sh = 9, hd = 5;
+    if (dir == 0) {
+        raster_line_rgba(rs, cx, cy + sh, cx, cy - sh, r, g, b, 255);
+        raster_line_rgba(rs, cx, cy - sh, cx - hd, cy - sh + hd, r, g, b, 255);
+        raster_line_rgba(rs, cx, cy - sh, cx + hd, cy - sh + hd, r, g, b, 255);
+    } else if (dir < 0) {
+        raster_line_rgba(rs, cx, cy + sh, cx, cy - 2, r, g, b, 255);
+        raster_line_rgba(rs, cx, cy - 2, cx - (sh + 2), cy - 2, r, g, b, 255);
+        raster_line_rgba(rs, cx - (sh + 2), cy - 2, cx - (sh + 2) + hd, cy - 2 - hd, r, g, b, 255);
+        raster_line_rgba(rs, cx - (sh + 2), cy - 2, cx - (sh + 2) + hd, cy - 2 + hd, r, g, b, 255);
+    } else if (dir == 2) {
+        /* 掉头：向上再折回下方，用一个小环近似 */
+        raster_line_rgba(rs, cx, cy + sh, cx, cy - 3, r, g, b, 255);
+        raster_line_rgba(rs, cx, cy - 3, cx + 3, cy - 3, r, g, b, 255);
+        raster_line_rgba(rs, cx + 3, cy - 3, cx + 3, cy + 3, r, g, b, 255);
+        raster_line_rgba(rs, cx + 3, cy + 3, cx + 1, cy + 1, r, g, b, 255);
+        raster_line_rgba(rs, cx + 3, cy + 3, cx + 5, cy + 1, r, g, b, 255);
+    } else if (dir > 0) {
+        raster_line_rgba(rs, cx, cy + sh, cx, cy - 2, r, g, b, 255);
+        raster_line_rgba(rs, cx, cy - 2, cx + (sh + 2), cy - 2, r, g, b, 255);
+        raster_line_rgba(rs, cx + (sh + 2), cy - 2, cx + (sh + 2) - hd, cy - 2 - hd, r, g, b, 255);
+        raster_line_rgba(rs, cx + (sh + 2), cy - 2, cx + (sh + 2) - hd, cy - 2 + hd, r, g, b, 255);
+    } else {
+        raster_line_rgba(rs, cx, cy - 6, cx, cy + 6, r, g, b, 255);
+    }
+}
+
+/* 在 banner_top 上方画一排车道格，把"能走这条转向"的车道高亮。
+   lanes 形如 "left|through|through|right"。turn_dir 见 NavBanner 注释。 */
+static void paint_lane_arrows(Raster *rs, const MapView *v,
+                              const char *lanes, int turn_dir, int banner_top)
+{
+    if (!rs || !lanes || !*lanes) return;
+
+    int n = 1;
+    for (const char *p = lanes; *p; p++) if (*p == '|') n++;
+    if (n <= 1) return;              /* 单车道没什么可指示的 */
+    if (n > 8) n = 8;
+
+    const int bw = 30, bh = 44, gap = 5;
+    int total = n * bw + (n - 1) * gap;
+    int x0 = v->w / 2 - total / 2;
+    int y = banner_top - bh - 10;
+    if (y < 4) return;
+
+    raster_fill_rect(rs, x0 - 8, y - 6, total + 16, bh + 12, 18, 26, 42, 214);
+    raster_rect(rs, x0 - 8, y - 6, total + 16, bh + 12, 90, 160, 255, 255);
+
+    const char *p = lanes;
+    for (int i = 0; i < n; i++) {
+        const char *bar = p;
+        while (*p && *p != '|') p++;
+        size_t len = (size_t)(p - bar);
+        if (*p == '|') p++;
+
+        int has_l = lane_has(bar, len, "left");
+        int has_r = lane_has(bar, len, "right");
+        int has_t = lane_has(bar, len, "through") || lane_has(bar, len, "straight");
+        int has_u = lane_has(bar, len, "uturn") || lane_has(bar, len, "u_turn")
+                 || lane_has(bar, len, "reverse");
+
+        int hot = 0;
+        if (turn_dir == 0 && has_t) hot = 1;
+        else if (turn_dir == -1 && (has_l || has_u)) hot = 1;
+        else if (turn_dir == 1 && has_r) hot = 1;
+
+        int x = x0 + i * (bw + gap);
+        if (hot) raster_fill_rect(rs, x, y, bw, bh, 30, 92, 182, 240);
+        else     raster_fill_rect(rs, x, y, bw, bh, 44, 52, 68, 240);
+        if (hot) raster_rect(rs, x, y, bw, bh, 130, 195, 255, 255);
+        else     raster_rect(rs, x, y, bw, bh, 105, 118, 138, 255);
+
+        /* 该格画哪种箭头：多向时优先左>右>直行，全无关键词则画短竖线 */
+        int dir;
+        if (has_l)      dir = -1;
+        else if (has_r) dir = 1;
+        else if (has_u) dir = 2;
+        else if (has_t) dir = 0;
+        else            dir = -99;
+
+        int cx = x + bw / 2, cy = y + bh / 2;
+        if (hot) draw_lane_arrow(rs, cx, cy, dir, 236, 246, 255);
+        else     draw_lane_arrow(rs, cx, cy, dir, 150, 158, 172);
+    }
+}
+
 /* 底部导航条：左边大字号转向 + 小字号"多远/进哪条路"，右边剩余里程与 ETA。
    高度固定，宽度按内容取（上限 760），屏幕窄时自动收窄。 */
 void paint_nav_banner(Raster *rs, const MapView *v, Font *f, Font *fbig,
@@ -198,6 +298,9 @@ void paint_nav_banner(Raster *rs, const MapView *v, Font *f, Font *fbig,
     int bh = 16 + lhb + 6 + line_h + 12;
     int bx = (v->w - bw) / 2;
     int by = v->h - bh - 16;
+
+    /* 车道指示画在指令条上方（有 turn:lanes 才出现） */
+    paint_lane_arrows(rs, v, b->lanes, b->turn_dir, by);
 
     raster_fill_rect(rs, bx, by, bw, bh, 18, 26, 42, 232);
     raster_rect(rs, bx, by, bw, bh, 90, 160, 255, 255);

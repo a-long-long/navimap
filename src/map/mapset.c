@@ -50,6 +50,8 @@ static void src_close(MapSrc *s)
         nmbin_close(&s->edgelist);
     }
     name_pool_close(&s->np);
+    nmbin_close(&s->lanes);
+    name_pool_close(&s->lnp);
     free(s->area_bbox);
     free(s->line_bbox);
     memset(s, 0, sizeof(*s));
@@ -130,6 +132,16 @@ static int src_open_files(MapSrc *s)
     if (name_pool_open(&s->np, p) != 0)
         fprintf(stderr, "图集: %s 无路名池（不画路名标注）\n", s->name);
 
+    /* 车道指示可选：lanes.bin + lane_names.bin 齐备才有 */
+    s->has_lanes = 1;
+    snprintf(p, sizeof(p), "%s/lanes.bin", s->dir);
+    if (nmbin_open(p, &s->lanes) != 0 || nmbin_check(&s->lanes, err, sizeof(err)) != 0)
+        s->has_lanes = 0;
+    if (s->has_lanes) {
+        snprintf(p, sizeof(p), "%s/lane_names.bin", s->dir);
+        if (name_pool_open(&s->lnp, p) != 0) s->has_lanes = 0;
+    }
+
     /* 视口裁剪用的 bbox。没有 manifest（旧目录）就置全域，宁可多画。 */
     if (manifest_bbox(s->dir, s->bbox) != 0) {
         s->bbox[0] = -900000000; s->bbox[1] = -1800000000;
@@ -149,6 +161,8 @@ fail:
     nmbin_close(&s->tiles);
     nmbin_close(&s->edgelist);
     name_pool_close(&s->np);
+    nmbin_close(&s->lanes);
+    name_pool_close(&s->lnp);
     return -1;
 }
 
@@ -187,6 +201,9 @@ static void src_unload(MapSrc *s)
         nmbin_close(&s->edgelist);
     }
     name_pool_close(&s->np);
+    nmbin_close(&s->lanes);
+    name_pool_close(&s->lnp);
+    s->has_lanes = 0;
     free(s->area_bbox);
     free(s->line_bbox);
     memset(&s->nodes, 0, sizeof(s->nodes));
@@ -752,6 +769,17 @@ void mapset_totals(const MapSet *ms, uint64_t *nodes, uint64_t *edges)
     }
     if (nodes) *nodes = n;
     if (edges) *edges = e;
+}
+
+const char *mapset_edge_lanes(const MapSet *ms, int prov, uint32_t edge)
+{
+    if (!ms || prov < 0 || prov >= ms->n) return NULL;
+    const MapSrc *s = &ms->srcs[prov];
+    if (!s->loaded || !s->has_lanes || !s->lnp.ready || !s->lanes.data) return NULL;
+    if ((uint64_t)edge >= s->lanes.hdr.rec_count) return NULL;
+    uint32_t sid = nm_get_u32(s->lanes.data + (size_t)edge * 4);
+    if (sid == 0 || sid > s->lnp.n) return NULL;       /* 0 = 无车道信息 */
+    return s->lnp.blob + s->lnp.off[sid];
 }
 
 /* 按 tile 跨省查询。tiles.bin 的 payload 布局见 binfmt.h：

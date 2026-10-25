@@ -582,6 +582,15 @@ nm_link_tool(coverage_cli navmap_map navmap_route navmap_search navmap_render na
 # 平台抽象层（utils/plat.h）的全接口自验收（正反双向）。
 add_executable(plat_selftest tools/plat_selftest.c)
 nm_link_tool(plat_selftest)
+add_executable(tts_selftest tools/tts_selftest.c)
+nm_link_tool(tts_selftest)
+add_executable(alts_selftest tools/alts_selftest.c tools/tool_common.c)
+nm_link_tool(alts_selftest navmap_map navmap_route navmap_search navmap_render navmap_ui)
+
+# 车道转向指示（turn:lanes）数据链路验收：mapset 加载 lanes.bin 并能按 (省,边)
+# 取出合法车道串。
+add_executable(lane_selftest tools/lane_selftest.c)
+nm_link_tool(lane_selftest navmap_map navmap_route navmap_search navmap_render navmap_ui)
 
 # 字体契约验收：内置 Noto 字体集是否真能加载并出字形。
 add_executable(font_selftest tools/font_selftest.c)

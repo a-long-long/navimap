@@ -29,6 +29,17 @@ void route_result_free(RouteResult *rr)
     memset(rr, 0, sizeof(*rr));
 }
 
+/* 释放整个 RouteResultSet。逐条 route_result_free——每条 rr 独立持有自己的堆数组，
+ * 互不重叠，所以调用方把某条 rr 的指针"搬"到别处时（例如 App 把选中方案
+ * 挪进 a->rr），只要把源 rr memset 成零值，这里就不会重复释放。 */
+void route_result_set_free(RouteResultSet *s)
+{
+    if (!s) return;
+    for (int k = 0; k < s->n; k++)
+        route_result_free(&s->rr[k]);
+    memset(s, 0, sizeof(*s));
+}
+
 int route_check(Router *r, const RouteResult *rr)
 {
     int fail = 0;

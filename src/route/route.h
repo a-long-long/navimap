@@ -66,6 +66,30 @@ typedef struct {
     uint64_t elapsed_ms;
 } RouteResult;
 
+/* ---------------------------------------------------------------------------
+ * 多方案对比（阶段 12）：一次算路顺手给出 K 条备选。
+ *
+ * 四套选项复用同一个"吸附后的端点对"——端点必须先按基准选项（最快）找到一对
+ * 连通的，四个方案再各自以这组端点算，否则不同方案可能吸附到不同的候选节点、
+ * 比出来的就不是"同起终点不同走法"了。
+ *
+ * 派生指标（total_m/total_s/expanded/toll_m/unpaved_m）只在 err[k]==0 时有效；
+ * 失败方案的对应字段为 0。toll_m/unpaved_m 是从每段 edge_flags 累加的米数，
+ * 给对比面板画"收费 X 公里"用，不参与算路。 */
+#define ROUTE_ALT_K 4
+
+typedef struct {
+    int         n;                  /* 方案总数（恒为 ROUTE_ALT_K） */
+    int         err[ROUTE_ALT_K];   /* 各方案错误码：0=成功，其余同 router_plan */
+    RouteResult rr[ROUTE_ALT_K];    /* 各方案路线（失败者为零值结构体） */
+    char        tag[ROUTE_ALT_K][24];   /* 方案名：最快/最短/避收费/避非铺装 */
+    double      total_m[ROUTE_ALT_K];
+    double      total_s[ROUTE_ALT_K];
+    uint64_t    expanded[ROUTE_ALT_K];
+    uint32_t    toll_m[ROUTE_ALT_K];    /* 收费路段总长（米） */
+    uint32_t    unpaved_m[ROUTE_ALT_K]; /* 非铺装路段总长（米） */
+} RouteResultSet;
+
 typedef struct {
     int      mode_time;     /* 1 = 按时间（默认），0 = 按距离 */
     int      avoid_toll;
@@ -193,9 +217,20 @@ int     router_route_ll(Router *r, double flat, double flon, double tlat, double
                         RouteResult *out, RNode *fa, RNode *fb,
                         double *da, double *db);
 
+/* 多方案对比：同一对端点算 K 条备选（最快/最短/避收费/避非铺装）。
+ * 端点先按基准选项找到一对连通的，再各自复用这组端点，所以比出来的差异
+ * 纯粹来自"走法不同"。返回 0 = 至少有一个可行；<0 全失败（口径同 router_route_ll）。
+ * 失败时 alts 内所有 rr 为零值，调用方不应读取。 */
+int     router_route_alts(Router *r, double flat, double flon, double tlat, double tlon,
+                          RouteResultSet *out, RNode *fa, RNode *fb,
+                          double *da, double *db);
+
 /* 计算 from → to。返回 0 = 找到（out->ok=1）；-1 = 不连通；-2 = 内存/规模超限 */
 int     router_plan(Router *r, RNode from, RNode to, RouteResult *out);
 void    route_result_free(RouteResult *rr);
+/* 释放整个 RouteResultSet（逐条 route_result_free）。供 NavResult / App 的
+ * 多方案容器在重算 / 退出时整组释放。 */
+void    route_result_set_free(RouteResultSet *s);
 
 /* 路径自检：每段长度与边记录一致、相邻点坐标连续、接缝处坐标相同，
  * 且路径不踩任何转向限制（含 via=way 两段序列）。

@@ -113,6 +113,18 @@ uint64_t nm_now_us(void);             /* 单调时钟，微秒（基准测试要
 void     nm_sleep_ms(unsigned ms);
 double   nm_peak_rss_mb(void);        /* 峰值驻留内存（MB） */
 
+/* ---------------- 语音播报（离线 TTS） ----------------
+ * 跨平台离线发声：Windows 走 PowerShell + System.Speech（SAPI），
+ * 其它平台按 PATH 探测 espeak-ng / espeak / say。真正的发声在分离线程里
+ * 做（nm_thread_spawn），调用方（导航每帧推进）绝不被阻塞。
+ * 设 NAVIMAP_TTS_DRYRUN=文件路径 时只把文本写进该文件、不真正发声，
+ * 用于无头自测（本机没有音频设备 / 没有 TTS 引擎时也能断言集成是否正确）。 */
+int  nm_tts_speak(const char *text);          /* 返回 1=已提交(或 dryrun 已写) / 0=无引擎 */
+int  nm_tts_available(void);                  /* 本机有可用引擎？（不含 dryrun） */
+/* 距下一条指令 to_go_m 米时该播报的层级：0 不播 / 1 接近层(<=300m) / 2 立即层(<=60m)。
+ * 调用方用 per-maneuver 位图去重，避免同一条指令重复播报。 */
+int  nm_tts_tier_for_distance(double to_go_m);
+
 /* ---------------- 其它 ---------------- */
 
 int        nm_strcasecmp(const char *a, const char *b);

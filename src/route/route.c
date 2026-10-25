@@ -287,6 +287,106 @@ int router_route_ll(Router *r, double flat, double flon, double tlat, double tlo
     return -2;
 }
 
+/* 多方案对比（阶段 12）：同一对端点算 K 条备选。
+ *
+ * ★ 端点必须先按"基准选项"找到一对连通的，四个方案再各自复用这组端点。
+ *   否则不同方案可能各自吸附到不同候选（router_nearest_k 取最近 4 个），
+ *   比出来就不是"同起终点不同走法"了——慢的方案可能只是因为吸到了更远的候选。
+ *
+ * ★ r->opt 是 Router 的共享状态、router_plan 内部会读它（bidir / mode_time /
+ *   avoid_* / heur_w）。这里在调用前临时把 r->opt 换成各方案自己的选项，
+ *   调完 router_plan 再把 r->opt 还原成进入时的 base —— router_plan 自己也会
+ *   把 heur_w 还原成进入值（route.c:918），所以来回切换不会串味。 */
+int router_route_alts(Router *r, double flat, double flon, double tlat, double tlon,
+                      RouteResultSet *out, RNode *fa, RNode *fb,
+                      double *da, double *db)
+{
+    if (out) memset(out, 0, sizeof(*out));
+    out->n = ROUTE_ALT_K;
+
+    RNode A[SNAP_TRY], B[SNAP_TRY];
+    double DA[SNAP_TRY], DB[SNAP_TRY];
+    int na = router_nearest_k(r, flat, flon, A, SNAP_TRY, DA);
+    int nb = router_nearest_k(r, tlat, tlon, B, SNAP_TRY, DB);
+    if (na > 0 && fa) *fa = A[0];
+    if (na > 0 && da) *da = DA[0];
+    if (nb > 0 && fb) *fb = B[0];
+    if (nb > 0 && db) *db = DB[0];
+    if (na <= 0 || nb <= 0) return -1;
+
+    /* 先按基准选项找一对连通端点（全部方案共用） */
+    RouteOpts base = r->opt;
+    RNode f = {0}, t = {0};
+    int found = 0;
+    for (int s = 0; s < SNAP_TRY && !found; s++) {
+        for (int i = 0; i <= s && i < na; i++) {
+            int j = s - i;
+            if (j >= nb) continue;
+            RouteResult probe; memset(&probe, 0, sizeof(probe));
+            r->opt = base;
+            int rc = router_plan(r, A[i], B[j], &probe);
+            if (rc == 0) {
+                f = A[i]; t = B[j];
+                if (fa) *fa = f;
+                if (fb) *fb = t;
+                if (da) *da = DA[i];
+                if (db) *db = DB[j];
+                route_result_free(&probe);
+                found = 1; break;
+            }
+            route_result_free(&probe);
+            if (rc == -1) continue;       /* 不连通：换候选 */
+            if (rc == -3) { r->opt = base; return -3; }  /* 超限：直接放弃 */
+        }
+    }
+    if (!found) { r->opt = base; return -2; }
+
+    /* 四套选项：最快（基准）/ 最短（按距离）/ 避收费 / 避非铺装。
+     * ★ "最短"用 heur_w=1.0（标准 A*，启发式可采纳 ⇒ 严格最短距离）。
+     *   否则加权 A*（w=1.25）返回的只是"近似距离极小化者"，实测会比
+     *   "最快"那条还长，标签就成假的了。heur_w_hi 同步 1.0，撞顶重跑也保持精确。 */
+    static const struct { int mode_time, avoid_toll, avoid_unpaved; double w; const char *tag; }
+        DEF[ROUTE_ALT_K] = {
+        { 1, 0, 0, 1.25, "最快" },
+        { 0, 0, 0, 1.00, "最短" },
+        { 1, 1, 0, 1.25, "避收费" },
+        { 1, 0, 1, 1.25, "避非铺装" },
+    };
+
+    int feasible = 0;
+    for (int k = 0; k < ROUTE_ALT_K; k++) {
+        RouteOpts o = base;
+        o.mode_time     = DEF[k].mode_time;
+        o.avoid_toll    = DEF[k].avoid_toll;
+        o.avoid_unpaved = DEF[k].avoid_unpaved;
+        o.heur_w        = DEF[k].w;
+        o.heur_w_hi     = DEF[k].w;
+        r->opt = o;
+        snprintf(out->tag[k], sizeof(out->tag[k]), "%s", DEF[k].tag);
+
+        int rc = router_plan(r, f, t, &out->rr[k]);
+        out->err[k] = rc;
+        if (rc == 0) {
+            RouteResult *rr = &out->rr[k];
+            out->total_m[k]   = rr->total_m;
+            out->total_s[k]   = rr->total_s;
+            out->expanded[k]  = rr->expanded;
+            uint32_t toll = 0, unp = 0;
+            for (uint32_t i = 0; i + 1 < rr->n; i++) {
+                if (rr->edge_flags[i] & EF_TOLL)    toll += rr->seg_m[i];
+                if (rr->edge_flags[i] & EF_UNPAVED) unp  += rr->seg_m[i];
+            }
+            out->toll_m[k]    = toll;
+            out->unpaved_m[k] = unp;
+            feasible++;
+        }
+        /* 失败方案的派生字段保持为 0（memset 已做），rr[k] 也是零值结构体 */
+    }
+    r->opt = base;
+    if (feasible == 0) return -2;   /* 端点连通但四个方案全失败：不该发生 */
+    return 0;
+}
+
 /* 取落在同一坐标上的所有 (省,节点) 成员。省内部的瓦片直接返回"到达时的
    那个节点"，连缝合索引都不建。 */
 size_t members_of(Router *r, uint64_t ck, uint32_t in_prov, uint32_t in_node,

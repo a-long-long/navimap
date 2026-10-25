@@ -43,6 +43,11 @@ typedef struct {
     const char *road;     /* "进入建国路"（可 NULL） */
     const char *remain;   /* "剩余 12.4 公里" */
     const char *eta;      /* "约 18 分钟" */
+    /* 路口车道指示（可选）：turn:lanes 串，'|' 分车道（如 "left|through|right"）。
+     * turn_dir 指明"这条要走的转向"用于高亮哪几格：
+     *   0=直行 -1=左转(含靠左/掉头) +1=右转(含靠右) -3=不高亮（环岛/到达）。 */
+    const char *lanes;
+    int         turn_dir;
 } NavBanner;
 
 void paint_nav_banner(Raster *rs, const MapView *v, Font *f, Font *fbig,

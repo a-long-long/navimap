@@ -29,14 +29,14 @@ typedef struct {
     char   prov[64];        /* 落在哪个省 */
 } NavPick;
 
-/* 后台算路线程交给主线程的结果包。RouteResult 里的指针整体搬过来，
+/* 后台算路线程交给主线程的结果包。RouteResultSet 里的指针整体搬过来，
    所以搬完只 free 外壳，不 route_result_free。 */
 typedef struct {
-    RouteResult rr;
-    int         err;        /* 0=成功 -1=不连通 -2=超限 -3=起点/终点附近无路 */
-    double      a_snap_m, b_snap_m;
-    double      a_lat, a_lon, b_lat, b_lon;
-    int         a_prov, b_prov;
+    RouteResultSet alts;    /* 多方案（至少 1 条可行） */
+    int            err;     /* 0=成功（至少1个可行） -1=不连通 -2=超限 -3=起点/终点附近无路 */
+    double         a_snap_m, b_snap_m;
+    double         a_lat, a_lon, b_lat, b_lon;
+    int            a_prov, b_prov;
 } NavResult;
 
 /* 搜索框状态（阶段 7）。
@@ -84,8 +84,11 @@ typedef struct {
      * 主线程只提交请求 + 收割结果，绝不直接调 router_*。 */
     Router       *router;        /* 惰性创建：第一次算路才建（状态表约 30MB） */
     NavPick       pick_a, pick_b;/* 起点 / 终点 */
-    RouteResult   rr;
+    RouteResult   rr;             /* 当前主路线（= 选中方案，指针从 ralts 搬来） */
     int           have_rr;
+    RouteResultSet ralts;        /* 多方案集合（含已选中的那一条，指针已被搬走） */
+    int           have_alts;     /* 是否已有多方案可对比 */
+    int           sel_alt;       /* 选中的方案下标（0..n-1） */
     ManeuverList  man;
     NmMutex      *nav_mu;
     int           nav_busy;      /* 后台在算（nav_mu 保护） */
@@ -147,6 +150,14 @@ typedef struct {
     int           settings_row;    /* 面板命中行：>=0 schema 下标，-1 关闭，-2 重置全部 */
     int           settings_btn;    /* 命中按钮：0=左/− 1=右/+ 2=行体（切换） */
     Settings     *cfg;             /* 配置文件（NULL=未启用） */
+
+    /* ---- 语音播报（离线 TTS）----
+     * voice_on 受设置面板 / V 键控制；ann_tier 是 per-maneuver 的"已播报层级"位图，
+     * 避免同一指令重复播报；ann_arrive 标记到达播报是否已发。 */
+    int           voice_on;        /* 语音播报开关 */
+    uint8_t      *ann_tier;        /* 每条 maneuver 的已播报层级位图（1=接近 2=立即） */
+    int           ann_cap;         /* ann_tier 容量（= man.n） */
+    uint8_t       ann_arrive;      /* 到达播报已发 */
 } App;
 
 /* font_path：NULL = 用默认字体（宋体优先的候选链）；"none" 或 "" = 不加载字体
@@ -196,6 +207,7 @@ void app_nav_clear(App *a);                           /* 右键 / c 键 */
 void app_nav_fit(App *a);                             /* f 键：缩放到整条路线 */
 void app_nav_toggle_panel(App *a);                    /* p 键 */
 void app_nav_poll(App *a);                            /* 主循环每帧调用，收割结果 */
+void app_nav_select_alt(App *a, int k);              /* 切换多方案中的第 k 条（0..n-1） */
 
 /* ---- 模拟导航 ---- */
 void app_nav_sim_toggle(App *a);      /* g 键：开始 / 停止 */

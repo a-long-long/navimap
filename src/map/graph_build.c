@@ -41,6 +41,7 @@ typedef struct {
     uint16_t flags;
     uint16_t speed, lanes;
     uint32_t name_id;
+    uint32_t lane_fwd, lane_bwd;   /* 车道转向串 id（进 g->lane_names 池），0=无 */
 } WayRec;
 
 typedef struct {
@@ -80,6 +81,7 @@ typedef struct {
 
     /* 边（建好 CSR 之前的临时数组） */
     Buf e_from, e_to, e_dist, e_name, e_flags, e_cls, e_speed, e_lanes, e_way;
+    Buf e_lane;                  /* 每条边的车道串 id（u32，append 序） */
 
     /* 落盘后的 CSR */
     uint32_t *node_edge_begin;   /* n_ids + 1 */
@@ -89,6 +91,7 @@ typedef struct {
     uint32_t *csr_of;            /* 原边序 → CSR 边序 */
 
     StrPool  *names;
+    StrPool  *lane_names;        /* 车道转向串池（lanes.bin 的字符串区） */
 
     /* 转向限制落盘 */
     Buf out_restr;               /* 16 字节一条 */
@@ -216,6 +219,11 @@ static int pass1(Graph *g, const char *path)
                     if (t.unpaved)    wr.flags |= EF_UNPAVED;
                     if (t.no_access)  wr.flags |= EF_NO_ACCESS;
                     wr.name_id = t.name ? sp_intern(g->names, t.name, t.name_len) : 0;
+                    wr.lane_fwd = t.turn_lanes_fwd
+                        ? sp_intern(g->lane_names, t.turn_lanes_fwd, t.turn_lanes_fwd_len) : 0;
+                    wr.lane_bwd = t.turn_lanes_bwd
+                        ? sp_intern(g->lane_names, t.turn_lanes_bwd, t.turn_lanes_bwd_len) : 0;
+                    if (wr.lane_fwd || wr.lane_bwd) g->st.ways_with_lanes++;
 
                     if (buf_reserve(&g->ways, sizeof(WayRec)) != 0) {
                         pbf_block_free(blk); pbf_stream_close(s); return -1;
@@ -428,6 +436,7 @@ static int build_edges(Graph *g)
 
     g->e_from.esz = 4; g->e_to.esz = 4; g->e_dist.esz = 4; g->e_name.esz = 4;
     g->e_flags.esz = 2; g->e_cls.esz = 1; g->e_speed.esz = 1; g->e_lanes.esz = 2;
+    g->e_lane.esz  = 4;   /* 车道转向串 id（u32，CSR 边序） */
     g->e_way.esz = 8;
 
     size_t nways = g->ways.n / sizeof(WayRec);
@@ -454,18 +463,22 @@ static int build_edges(Graph *g)
             uint32_t dcm = (uint32_t)(d * 100.0 + 0.5);
             if (dcm == 0) dcm = 1;
 
-            struct { size_t from, to; uint16_t flags; } dirs[2];
+            struct { size_t from, to; uint16_t flags; int rev; } dirs[2];
             int ndir = 1;
             dirs[0].from = pa; dirs[0].to = pb; dirs[0].flags = w->flags;
+            dirs[0].rev = 0;
             if (w->oneway == 0) {
                 dirs[1].from = pb; dirs[1].to = pa;
                 dirs[1].flags = w->flags | EF_REVERSE;
+                dirs[1].rev = 1;
                 ndir = 2;
             } else if (w->oneway == 2) {
                 /* oneway=-1：只允许按节点顺序逆向走。
                    这里**不能**打 EF_REVERSE —— 它是这条路唯一的一条边，
-                   打了会被渲染当成"双向路的回程边"跳掉，整条路就画不出来了。 */
+                   打了会被渲染当成"双向路的回程边"跳掉，整条路就画不出来了。
+                   rev=1 只影响车道串的取法（用 :backward）。 */
                 dirs[0].from = pb; dirs[0].to = pa; dirs[0].flags = w->flags;
+                dirs[0].rev = 1;
             }
 
             for (int di = 0; di < ndir; di++) {
@@ -474,7 +487,7 @@ static int build_edges(Graph *g)
                     buf_reserve(&g->e_dist, 4) || buf_reserve(&g->e_name, 4) ||
                     buf_reserve(&g->e_flags, 2) || buf_reserve(&g->e_cls, 1) ||
                     buf_reserve(&g->e_speed, 1) || buf_reserve(&g->e_lanes, 2) ||
-                    buf_reserve(&g->e_way, 8)) return -1;
+                    buf_reserve(&g->e_way, 8) || buf_reserve(&g->e_lane, 4)) return -1;
 
                 uint32_t fi = (uint32_t)g->e_from.n / 4;
                 memcpy(g->e_from.p + g->e_from.n, &f, 4); g->e_from.n += 4;
@@ -487,6 +500,9 @@ static int build_edges(Graph *g)
                 memcpy(g->e_speed.p + g->e_speed.n, &sp, 1); g->e_speed.n += 1;
                 memcpy(g->e_lanes.p + g->e_lanes.n, &w->lanes, 2); g->e_lanes.n += 2;
                 memcpy(g->e_way.p   + g->e_way.n,   &w->osm_id, 8); g->e_way.n += 8;
+                /* 车道转向串：逆向边取 :backward，正向取 :forward/generic */
+                uint32_t lsid = dirs[di].rev ? w->lane_bwd : w->lane_fwd;
+                memcpy(g->e_lane.p + g->e_lane.n, &lsid, 4); g->e_lane.n += 4;
                 (void)fi;
             }
         }
@@ -885,6 +901,55 @@ static int write_names(Graph *g, const char *path, const char *src)
     return nmbin_finalize(w);
 }
 
+/* lanes.bin：每条边一个 u32，指向 lane_names.bin 的字符串池（0=无车道信息）。
+ * ★ 必须按 CSR 边序落盘（edges.bin 是 CSR 序，rr.edge_idx 也按那个下标），
+ *   直接按 append 序写就张冠李戴了。 */
+static int write_lanes(Graph *g, const char *path, const char *src)
+{
+    size_t ne = g->e_lane.n / 4;
+    const uint32_t *el = (const uint32_t *)g->e_lane.p;
+
+    uint32_t *csr = malloc((ne ? ne : 1) * sizeof(uint32_t));
+    if (!csr) return -1;
+    for (size_t i = 0; i < ne; i++) csr[g->csr_of[i]] = el[i];
+
+    NMBinWriter *w = nmbin_create(path, NMBIN_KIND_LANES, 4, src);
+    if (!w) { free(csr); return -1; }
+    nmbin_add_field(w, "lane_sid", 0, NMT_U32, 4);
+
+    const size_t CHUNK = 8192;
+    uint8_t *bulk = malloc(CHUNK * 4);
+    if (!bulk) { free(csr); nmbin_abort(w); return -1; }
+    size_t off = 0;
+    while (off < ne) {
+        size_t n = ne - off < CHUNK ? ne - off : CHUNK;
+        for (size_t k = 0; k < n; k++) nm_put_u32(bulk + k * 4, csr[off + k]);
+        if (nmbin_write_records(w, bulk, n) != 0) {
+            free(bulk); free(csr); nmbin_abort(w); return -1;
+        }
+        off += n;
+    }
+    free(bulk); free(csr);
+    return nmbin_finalize(w);
+}
+
+/* lane_names.bin：车道转向串池。sp_serialize 的线格式（u32 cnt + offsets + blob）
+ * 与名字池一致，读取端直接复用 name_pool_open。 */
+static int write_lane_names(Graph *g, const char *path, const char *src)
+{
+    uint8_t *blob = NULL; size_t blob_len = 0;
+    sp_serialize(g->lane_names, &blob, &blob_len);
+
+    NMBinWriter *w = nmbin_create(path, NMBIN_KIND_LANES, 1, src);
+    if (!w) { free(blob); return -1; }
+    nmbin_add_field(w, "pool", 0, NMT_U8, 1);
+    if (blob && blob_len && nmbin_write_records(w, blob, blob_len) != 0) {
+        free(blob); nmbin_abort(w); return -1;
+    }
+    free(blob);
+    return nmbin_finalize(w);
+}
+
 static int write_restrictions(Graph *g, const char *path, const char *src)
 {
     NMBinWriter *w = nmbin_create(path, NMBIN_KIND_RESTRICTIONS, NM_RESTR_BYTES, src);
@@ -1206,11 +1271,12 @@ static void graph_free(Graph *g)
     buf_free(&g->lines); buf_free(&g->areas);
     buf_free(&g->e_from); buf_free(&g->e_to); buf_free(&g->e_dist); buf_free(&g->e_name);
     buf_free(&g->e_flags); buf_free(&g->e_cls); buf_free(&g->e_speed);
-    buf_free(&g->e_lanes); buf_free(&g->e_way);
+    buf_free(&g->e_lanes); buf_free(&g->e_way); buf_free(&g->e_lane);
     free(g->ids); free(g->lat); free(g->lon); free(g->osm_id);
     free(g->node_edge_begin); free(g->node_edge_count);
     free(g->node_class_mask); free(g->node_flags); free(g->csr_of);
     sp_destroy(g->names);
+    sp_destroy(g->lane_names);
 }
 
 int graph_build(const char *pbf_path, const char *out_dir, GraphBuildStats *st)
@@ -1219,13 +1285,14 @@ int graph_build(const char *pbf_path, const char *out_dir, GraphBuildStats *st)
     Graph g;
     memset(&g, 0, sizeof(g));
     g.names = sp_create(1 << 20);
+    g.lane_names = sp_create(1 << 12);
     g.ways.esz = sizeof(WayRec);
     g.refs.esz = sizeof(int64_t);
     g.restr.esz = sizeof(PendRestr);
     g.out_restr.esz = NM_RESTR_BYTES;
     g.lines.esz = sizeof(LineRec);
     g.areas.esz = sizeof(AreaRec);
-    if (!g.names) return -1;
+    if (!g.names || !g.lane_names) return -1;
 
     int rc = 0;
     if (pass1(&g, pbf_path) != 0) { rc = -1; goto done; }
@@ -1242,6 +1309,10 @@ int graph_build(const char *pbf_path, const char *out_dir, GraphBuildStats *st)
     if (write_edges(&g, OUTF(path, "edges.bin"), src) != 0) { rc = -1; goto done; }
     if (write_osmid(&g, OUTF(path, "osmid.bin"), src) != 0) { rc = -1; goto done; }
     if (write_names(&g, OUTF(path, "names.bin"), src) != 0) { rc = -1; goto done; }
+    /* 车道指示是可选的：写不出来（比如磁盘满）不该让整省建图失败 */
+    if (write_lanes(&g, OUTF(path, "lanes.bin"), src) != 0 ||
+        write_lane_names(&g, OUTF(path, "lane_names.bin"), src) != 0)
+        fprintf(stderr, "警告: 车道指示（lanes.bin）生成失败，该省无车道箭头\n");
     if (write_restrictions(&g, OUTF(path, "restrictions.bin"), src) != 0) { rc = -1; goto done; }
     if (write_lines_areas(&g, out_dir, src) != 0) { rc = -1; goto done; }
     /* 空间索引失败不致命：渲染回退全量扫描 */
@@ -1251,6 +1322,7 @@ int graph_build(const char *pbf_path, const char *out_dir, GraphBuildStats *st)
 
 done:
     g.st.names = sp_count(g.names);
+    g.st.lane_strings = sp_count(g.lane_names);
     g.st.elapsed_sec = (double)(clock() - t0) / CLOCKS_PER_SEC;
     for (int i = 0; i < 4; i++) g.st.bbox[i] = (int32_t)g.bb[i];
     *st = g.st;

@@ -37,6 +37,7 @@ typedef enum {
     CH_ZOOM_IN, CH_ZOOM_OUT, CH_LOCATE, CH_DAYNIGHT,
     CH_NAV_BACK, CH_NAV_EXIT,
     CH_COMPASS,
+    CH_ALT_BASE,            /* 多方案对比面板：第 k 个方案 = CH_ALT_BASE + k（k<ROUTE_ALT_K） */
     CH_MENU_ITEM,           /* 具体项下标在 a->chrome_menu_item */
     CH_SETTINGS             /* 设置面板内命中（行/按钮在 a->settings_row/btn） */
 } ChromeID;

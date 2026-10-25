@@ -39,6 +39,11 @@ static int app_big_size(int base)
     return s;
 }
 
+/* 语音播报：per-maneuver 去重位图重置 + 每帧按距离触发（实现见下方
+ * app_nav_sim_toggle 之前）。先声明，供 app_nav_poll / app_nav_plan_sync 调用。 */
+static void nav_announce_reset(App *a);
+static void nav_announce(App *a);
+
 int app_init(App *a, const char *graph_dir, int w, int h,
              const char *font_path, int font_size, const AutoBuildOpt *ab)
 {
@@ -54,6 +59,7 @@ int app_init(App *a, const char *graph_dir, int w, int h,
     a->day_night  = settings_get_bool(a->cfg, "day_night", 0);
     a->show_poi    = settings_get_bool(a->cfg, "show_poi", 1);
     a->show_labels = settings_get_bool(a->cfg, "show_labels", 1);
+    a->voice_on    = settings_get_bool(a->cfg, "voice_on", 1);
     a->mode        = settings_get_int(a->cfg, "mode", 0);
     a->sim_speed_idx = SIM_SPEED_DEFAULT;
     a->sim_follow = 1;
@@ -173,9 +179,11 @@ void app_shutdown(App *a)
             nm_sleep_ms(10);
         }
     }
-    if (a->nav_done) { route_result_free(&a->nav_done->rr); free(a->nav_done); a->nav_done = NULL; }
+    if (a->nav_done) { route_result_set_free(&a->nav_done->alts); free(a->nav_done); a->nav_done = NULL; }
     if (a->have_rr) route_result_free(&a->rr);
+    if (a->have_alts) route_result_set_free(&a->ralts);
     maneuver_free(&a->man);
+    free(a->ann_tier); a->ann_tier = NULL; a->ann_cap = 0;
     router_destroy(a->router);
     if (a->nav_mu) { nm_mutex_destroy(a->nav_mu); a->nav_mu = NULL; }
     mapset_free(&a->ms);
@@ -229,6 +237,7 @@ void app_apply_settings(App *a)
     a->show_panel   = settings_get_bool(a->cfg, "show_panel", 1);
     a->show_poi     = settings_get_bool(a->cfg, "show_poi", 1);
     a->show_labels  = settings_get_bool(a->cfg, "show_labels", 1);
+    a->voice_on     = settings_get_bool(a->cfg, "voice_on", 1);
     a->mode         = settings_get_int(a->cfg, "mode", 0);
     a->max_class    = settings_get_int(a->cfg, "max_class", 4);
     int fs = settings_get_int(a->cfg, "font_size", 14);
@@ -242,6 +251,7 @@ void app_persist_settings(App *a)
     settings_set_bool(a->cfg, "show_panel",  a->show_panel);
     settings_set_bool(a->cfg, "show_poi",    a->show_poi);
     settings_set_bool(a->cfg, "show_labels", a->show_labels);
+    settings_set_bool(a->cfg, "voice_on",    a->voice_on);
     settings_set_int(a->cfg,  "mode",        a->mode);
     settings_set_int(a->cfg,  "font_size",   a->font_size);
     settings_set_int(a->cfg,  "max_class",   a->max_class);
@@ -268,6 +278,7 @@ void app_persist_settings(App *a)
 static void nav_drop_route(App *a)
 {
     if (a->have_rr) { route_result_free(&a->rr); a->have_rr = 0; }
+    if (a->have_alts) { route_result_set_free(&a->ralts); a->have_alts = 0; a->sel_alt = 0; }
     maneuver_free(&a->man);
     a->nav_msg[0] = '\0';
     /* ★ 模拟导航必须跟着停：NavSim 里存的是 &a->rr 的指针，路线一释放
@@ -338,11 +349,10 @@ static void nav_worker(void *ud)
         } else {
             RNode f, t;
             double da = 0, db = 0;
-            /* ★ 用 router_route_ll 而不是"吸附两次 + router_plan"：吸附可能落在
-               与主干断开的小连通块里（PLAN.md §51.1），那样整条路线判"不连通"。
-               它内部会用最近的 4 个候选重试，失败的判定是毫秒级，几乎不要钱。 */
-            int rc = router_route_ll(a->router, pa.lat, pa.lon, pb.lat, pb.lon,
-                                     &res->rr, &f, &t, &da, &db);
+            /* ★ 用 router_route_alts 一次算出多方案（最快/最短/避收费/避非铺装），
+               端点先按"最快"找到一对连通的、四个方案复用这组端点，保证可比。 */
+            int rc = router_route_alts(a->router, pa.lat, pa.lon, pb.lat, pb.lon,
+                                       &res->alts, &f, &t, &da, &db);
             res->err = nav_err_of(rc);
             if (rc != -1) {
                 res->a_snap_m = da; res->b_snap_m = db;
@@ -352,7 +362,7 @@ static void nav_worker(void *ud)
         }
 
         nm_mutex_lock(a->nav_mu);
-        if (a->nav_done) { route_result_free(&a->nav_done->rr); free(a->nav_done); }
+        if (a->nav_done) { route_result_set_free(&a->nav_done->alts); free(a->nav_done); }
         a->nav_done = res;
         a->nav_done_flag = 1;
         int again = a->nav_pending && !a->nav_stop;
@@ -418,10 +428,16 @@ void app_nav_poll(App *a)
 
     nav_drop_route(a);
     if (res->err == 0) {
-        a->rr = res->rr;                    /* 数组指针整体搬家 */
+        a->ralts = res->alts;              /* 多方案整体搬入 App */
+        memset(&res->alts, 0, sizeof(res->alts));
+        a->have_alts = 1;
+        a->sel_alt = 0;                    /* 默认选中"最快" */
+        /* 把选中方案（ralts.rr[0]）的指针搬到 a->rr 当主路线，源槽清零避免双重释放 */
+        a->rr = a->ralts.rr[0];
+        memset(&a->ralts.rr[0], 0, sizeof(RouteResult));
         a->have_rr = 1;
-        memset(&res->rr, 0, sizeof(res->rr));
         maneuver_build(&a->rr, &a->ms, &a->man);
+        nav_announce_reset(a);
         a->nav_msg[0] = '\0';               /* 面板顶行回到"全程 X 约 Y 分钟" */
         /* 模拟导航开着时，新路线（可能是偏航重算的结果）从头起步：
            重算的起点就是当前位置，所以进度归零是对的。 */
@@ -437,13 +453,39 @@ void app_nav_poll(App *a)
                a->man.n, (unsigned long long)a->rr.expanded,
                (unsigned long long)a->rr.elapsed_ms);
     } else {
-        route_result_free(&res->rr);
+        route_result_set_free(&res->alts);
         const char *m = res->err == -1 ? "起终点之间不连通"
                       : res->err == -2 ? "搜索规模超限（路太远）"
                                        : "起终点附近没有可通行的路";
         snprintf(a->nav_msg, sizeof(a->nav_msg), "%s", m);
     }
     free(res);
+    a->need_redraw = 1;
+}
+
+/* 切换多方案中正在走的那条。k 必须是可行方案的下标（err[k]==0）。
+ * 把该方案从 ralts 整体"搬"进 a->rr 当主路线（源槽清零，避免双重释放），
+ * 重算转向指令；若正在模拟则从头重新开始。 */
+void app_nav_select_alt(App *a, int k)
+{
+    if (!a->have_alts || k < 0 || k >= a->ralts.n) return;
+    if (a->ralts.err[k] != 0) return;                 /* 不可行方案不能选 */
+    if (k == a->sel_alt && a->have_rr) return;        /* 已经是当前选中的 */
+
+    if (a->have_rr) route_result_free(&a->rr);        /* 释放旧主路线 */
+    a->rr = a->ralts.rr[k];                           /* 指针整体搬家 */
+    memset(&a->ralts.rr[k], 0, sizeof(RouteResult));
+    a->sel_alt = k;
+    a->have_rr = 1;
+    maneuver_build(&a->rr, &a->ms, &a->man);
+    nav_announce_reset(a);
+    if (a->sim_on) {                                  /* 模拟中切换：路线从头走 */
+        navsim_start(&a->sim, &a->rr);
+        a->sim.speed_mul = sim_speed_of(a);
+        a->sim_on = 1;
+        a->sim_paused = 0;
+        a->sim_tick = nm_now_ms();
+    }
     a->need_redraw = 1;
 }
 
@@ -633,6 +675,41 @@ void app_search_commit(App *a)
  * 唯一会"偏离路线"的情况是 app_nav_sim_deviate 主动注入，那之后走
  * nav_request 重算，新路线到了再 navsim_start 重新起步。 */
 
+/* 重置播报去重位图（新路线 / 重新起步时调用）。 */
+static void nav_announce_reset(App *a)
+{
+    if (a->ann_cap < a->man.n) {
+        free(a->ann_tier);
+        a->ann_tier = (uint8_t *)malloc(a->man.n ? (size_t)a->man.n : 1);
+        a->ann_cap = a->man.n;
+    }
+    if (a->ann_tier) memset(a->ann_tier, 0, (size_t)(a->ann_cap > 0 ? a->ann_cap : 1));
+    a->ann_arrive = 0;
+}
+
+/* 每帧调用：按"距下一条指令的距离"决定要不要播报。同一指令的"接近层(300m)"和
+ * "立即层(60m)"各只播一次（per-maneuver 位图去重）。依赖 navsim_next_maneuver
+ * 与既有的 maneuver_text —— 文案不需要重造。 */
+static void nav_announce(App *a)
+{
+    if (!a->voice_on || !a->have_rr || !a->sim_on || a->sim_paused) return;
+    if (a->sim.arrived) {
+        if (!a->ann_arrive) { a->ann_arrive = 1; nm_tts_speak("您已到达目的地"); }
+        return;
+    }
+    if (a->man.n <= 0) return;
+    double to_go; int mi, prev;
+    mi = navsim_next_maneuver(&a->sim, &a->man, &to_go, &prev);
+    if (mi < 0 || mi >= a->man.n) return;
+    int tier = nm_tts_tier_for_distance(to_go);
+    if (tier == 0) return;
+    if (mi < a->ann_cap && (a->ann_tier[mi] & (1u << tier))) return;   /* 该层已播 */
+    if (mi < a->ann_cap) a->ann_tier[mi] |= (uint8_t)(1u << tier);
+    char buf[256];
+    maneuver_text(&a->man.v[mi], buf, sizeof buf);
+    nm_tts_speak(buf);
+}
+
 void app_nav_sim_toggle(App *a)
 {
     if (!a->have_rr || a->rr.n < 2) {
@@ -648,6 +725,7 @@ void app_nav_sim_toggle(App *a)
         a->sim.speed_mul = sim_speed_of(a);
         a->sim_on = 1;
         a->sim_paused = 0;
+        nav_announce_reset(a);
         a->sim_follow = 1;
         a->sim_tick = nm_now_ms();
         a->nav_msg[0] = '\0';
@@ -721,6 +799,7 @@ void app_nav_sim_tick(App *a)
         a->sim_paused = 1;
         snprintf(a->nav_msg, sizeof(a->nav_msg), "已到达目的地");
     }
+    nav_announce(a);                      /* 按距离阈值播报下一条指令（V 键可关） */
     if (a->sim_follow) {
         a->view.lat = a->sim.car_lat;
         a->view.lon = a->sim.car_lon;
@@ -736,9 +815,10 @@ int app_nav_plan_sync(App *a, double alat, double alon, double blat, double blon
     RNode f, t;
     NavResult res;
     memset(&res, 0, sizeof(res));
-    /* 同上：走 router_route_ll，吸附撞上死节点会换候选重试（PLAN.md §51.1） */
-    int rc = router_route_ll(a->router, alat, alon, blat, blon,
-                             &res.rr, &f, &t, &res.a_snap_m, &res.b_snap_m);
+    /* 同上：走 router_route_alts，吸附撞上死节点会换候选重试（PLAN.md §51.1）。
+       同步路径也给多方案，便于 map_shot 一并验证。 */
+    int rc = router_route_alts(a->router, alat, alon, blat, blon,
+                               &res.alts, &f, &t, &res.a_snap_m, &res.b_snap_m);
     if (rc == -1) {
         snprintf(a->nav_msg, sizeof(a->nav_msg), "起终点附近没有可通行的路");
         return -1;
@@ -746,7 +826,7 @@ int app_nav_plan_sync(App *a, double alat, double alon, double blat, double blon
     nav_snap_info(&a->ms, f, &res.a_lat, &res.a_lon, &res.a_prov);
     nav_snap_info(&a->ms, t, &res.b_lat, &res.b_lon, &res.b_prov);
     if (rc != 0) {
-        route_result_free(&res.rr);
+        route_result_set_free(&res.alts);
         snprintf(a->nav_msg, sizeof(a->nav_msg), "%s",
                  rc == -2 ? "起终点之间不连通（已试过多组吸附候选）" : "搜索规模超限");
         return -1;
@@ -759,9 +839,15 @@ int app_nav_plan_sync(App *a, double alat, double alon, double blat, double blon
     a->pick_a.lat = alat; a->pick_a.lon = alon;
     a->pick_b.lat = blat; a->pick_b.lon = blon;
     nav_drop_route(a);
-    a->rr = res.rr;
+    a->ralts = res.alts;
+    memset(&res.alts, 0, sizeof(res.alts));
+    a->have_alts = 1;
+    a->sel_alt = 0;
+    a->rr = a->ralts.rr[0];
+    memset(&a->ralts.rr[0], 0, sizeof(RouteResult));
     a->have_rr = 1;
     maneuver_build(&a->rr, &a->ms, &a->man);
+    nav_announce_reset(a);
     a->nav_msg[0] = '\0';
     return 0;
 }
@@ -962,6 +1048,8 @@ static void paint_frame(Raster *rs, App *a, PaintStats *st)
         static char b_turn[64], b_dist[64], b_road[96], b_rem[64], b_eta[64];
         NavBanner b;
         memset(&b, 0, sizeof(b));
+        const char *b_lanes = NULL;
+        int b_turn_dir = -3;
         double to_go = 0;
         int mi = navsim_next_maneuver(&a->sim, &a->man, &to_go, NULL);
         if (mi >= 0) {
@@ -972,6 +1060,23 @@ static void paint_frame(Raster *rs, App *a, PaintStats *st)
             snprintf(b_dist, sizeof(b_dist), "%s后", d);
             if (m->road[0]) snprintf(b_road, sizeof(b_road), "进入%s", m->road);
             else            b_road[0] = '\0';
+
+            /* 车道指示：取"驶入该路口那条边"的 turn:lanes。
+               m->idx 是动作发生的路口点下标；驶入边 = edge_idx[idx-1]，
+               它属于 pts[idx] 那个省（route.h: edge_idx[i] 在 pts[i+1].prov 内）。 */
+            if (m->idx >= 1 && m->idx < a->rr.n) {
+                uint32_t seg = m->idx - 1;
+                int prov = a->rr.pts[m->idx].prov;
+                const char *ls = mapset_edge_lanes(&a->ms, prov, a->rr.edge_idx[seg]);
+                if (ls && *ls) b_lanes = ls;
+            }
+            switch (m->type) {
+            case MAN_SLIGHT_LEFT: case MAN_LEFT: case MAN_SHARP_LEFT: b_turn_dir = -1; break;
+            case MAN_SLIGHT_RIGHT:case MAN_RIGHT:case MAN_SHARP_RIGHT:b_turn_dir = 1;  break;
+            case MAN_STRAIGHT:                                       b_turn_dir = 0;  break;
+            case MAN_UTURN:                                          b_turn_dir = -1; break;
+            default:                                                 b_turn_dir = -3; break;
+            }
         } else {
             snprintf(b_turn, sizeof(b_turn), "沿当前道路行驶");
             b_dist[0] = '\0';
@@ -986,6 +1091,7 @@ static void paint_frame(Raster *rs, App *a, PaintStats *st)
         else            snprintf(b_eta, sizeof(b_eta), "约 %d 分钟", mins);
         b.turn = b_turn; b.dist = b_dist; b.road = b_road;
         b.remain = b_rem; b.eta = b_eta;
+        b.lanes = b_lanes; b.turn_dir = b_turn_dir;
         paint_nav_banner(rs, &a->view, a->font, a->font_big,
                          a->font_size + 8, app_big_size(a->font_size) + 8, &b);
     }

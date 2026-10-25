@@ -31,6 +31,7 @@ typedef struct {
     RectI zin, zout, loc, day;
     RectI navtop, nback, nex;
     RectI steps;
+    RectI alts;        /* 多方案对比面板（算路后、且多于 1 条可行时出现） */
     RectI scale;
     RectI compass;
     RectI menu;
@@ -79,6 +80,20 @@ static void layout(App *a, CLay *L)
     if (ph < 80) ph = 80;
     if (ph > 360) ph = 360;
     L->steps = (RectI){ 12, ny, 250, ph };
+
+    /* 多方案对比面板：放在右下角。只有"可行方案多于 1 条"才值得比（1 条没得选）。
+       行高 34，首行是标题 22，加 8 内边距。 */
+    int nfeas = 0;
+    if (a->have_alts)
+        for (int k = 0; k < a->ralts.n; k++)
+            if (a->ralts.err[k] == 0) nfeas++;
+    if (nfeas > 1) {
+        int AW = (a->font ? 236 : 200);
+        int AH = 22 + nfeas * 34 + 8;
+        L->alts = (RectI){ w - AW - 12, h - AH - 12, AW, AH };
+    } else {
+        L->alts = (RectI){ 0, 0, 0, 0 };
+    }
 
     L->scale = (RectI){ 12, h - 34, 150, 22 };
 
@@ -260,6 +275,48 @@ static void draw_steps(Raster *rs, App *a, const CLay *L)
     }
 }
 
+/* 多方案对比面板（右下角）。列出每条可行方案：方案名 / 预计时间 / 里程 /
+ * 是否收费或走非铺装路，选中方案高亮。点击某行即切到该方案（chrome_act 派发）。 */
+static void draw_alts(Raster *rs, App *a, const CLay *L)
+{
+    if (!a->have_alts || L->alts.w == 0) return;
+    int nfeas = 0;
+    for (int k = 0; k < a->ralts.n; k++)
+        if (a->ralts.err[k] == 0) nfeas++;
+    if (nfeas <= 1) return;
+
+    int x = L->alts.x, y = L->alts.y, w = L->alts.w, h = L->alts.h;
+    rfill(rs, x, y, w, h, 250, 251, 253, 248);
+    rstroke(rs, x, y, w, h, 150, 158, 172, 255);
+    if (a->font)
+        font_draw(a->font, rs, x + 12, y + 4, "备选方案（点击切换 / 按 1-4）", 40, 46, 60, 0);
+
+    int rowh = 34, ry = y + 22;
+    for (int k = 0; k < a->ralts.n; k++) {
+        if (a->ralts.err[k] != 0) continue;
+        int sel = (k == a->sel_alt);
+        if (sel) rfill(rs, x + 2, ry, w - 4, rowh - 2, 214, 228, 250, 255);
+        else if (((k) & 1) == 0) rfill(rs, x + 2, ry, w - 4, rowh - 2, 240, 243, 248, 255);
+        if (a->font) {
+            int cy = ry + 4;
+            font_draw(a->font, rs, x + 10, cy, a->ralts.tag[k], sel ? 24 : 36, 42, 56, 0);
+            char buf[64];
+            snprintf(buf, sizeof(buf), "约 %.0f 分 · %.1f 公里",
+                     a->ralts.total_s[k] / 60.0, a->ralts.total_m[k] / 1000.0);
+            font_draw(a->font, rs, x + 10, cy + 18, buf, 90, 96, 110, 0);
+            /* 特征标记：收费 / 非铺装 */
+            int mx = x + w - 12;
+            if (a->ralts.unpaved_m[k] > 0) {
+                font_draw(a->font, rs, mx - 72, cy + 4, "非铺装", 150, 90, 40, 0);
+            }
+            if (a->ralts.toll_m[k] > 0) {
+                font_draw(a->font, rs, mx - 36, cy + 4, "收费", 180, 60, 50, 0);
+            }
+        }
+        ry += rowh;
+    }
+}
+
 static void draw_menu(Raster *rs, App *a, const CLay *L)
 {
     if (!a->menu_open) return;
@@ -350,6 +407,7 @@ void paint_chrome(Raster *rs, App *a)
     draw_navtop(rs, a, &L);
     draw_navbottom(rs, a, &L);
     draw_steps(rs, a, &L);
+    draw_alts(rs, a, &L);
     draw_menu(rs, a, &L);
     draw_settings_panel(rs, a);
     draw_nomap(rs, a, &L);
@@ -388,6 +446,20 @@ int chrome_hit(App *a, int x, int y)
     if (IN(L.nback,   x, y)) return CH_NAV_BACK;
     if (IN(L.nex,     x, y)) return CH_NAV_EXIT;
     if (IN(L.compass, x, y)) return CH_COMPASS;
+
+    /* 多方案对比面板：命中某行 → 返回 CH_ALT_BASE + 实际方案下标 k */
+    if (a->have_alts && IN(L.alts, x, y)) {
+        int row = (y - L.alts.y - 22) / 34;
+        if (row >= 0) {
+            int cnt = 0;
+            for (int k = 0; k < a->ralts.n; k++) {
+                if (a->ralts.err[k] != 0) continue;
+                if (cnt == row) return CH_ALT_BASE + k;
+                cnt++;
+            }
+        }
+        return CH_NONE;
+    }
 
     return CH_NONE;
 }
@@ -445,6 +517,12 @@ void chrome_act(App *a, int id, int x, int y)
     case CH_COMPASS:
         a->view.rot = 0.0; a->need_redraw = 1;
         break;
+    default:
+        /* 多方案对比：CH_ALT_BASE + k → 切到第 k 条 */
+        if (id >= CH_ALT_BASE && id < CH_ALT_BASE + ROUTE_ALT_K) {
+            app_nav_select_alt(a, id - CH_ALT_BASE);
+        }
+        break;
     case CH_MENU_ITEM:
         switch (a->chrome_menu_item) {
         case 0: a->day_night = !a->day_night; app_persist_settings(a); break;
@@ -460,8 +538,6 @@ void chrome_act(App *a, int id, int x, int y)
         break;
     case CH_SETTINGS:
         chrome_act_settings(a);
-        break;
-    default:
         break;
     }
 }

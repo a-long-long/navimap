@@ -151,6 +151,13 @@ void app_run(App *a)
                     mv_zoom_at(&a->view, 0.5, a->view.w / 2, a->view.h / 2), a->need_redraw = 1;
                 else if (e.key.keysym.sym == SDLK_MINUS || e.key.keysym.sym == SDLK_KP_MINUS)
                     mv_zoom_at(&a->view, -0.5, a->view.w / 2, a->view.h / 2), a->need_redraw = 1;
+                else if (a->have_alts && e.key.keysym.sym >= SDLK_1 &&
+                         e.key.keysym.sym <= SDLK_4) {
+                    /* 有路线时：1-4 直接切到对应方案 */
+                    int k = (int)(e.key.keysym.sym - SDLK_1);
+                    if (k < a->ralts.n && a->ralts.err[k] == 0)
+                        app_nav_select_alt(a, k);
+                }
                 else if (e.key.keysym.sym >= SDLK_0 && e.key.keysym.sym <= SDLK_4) {
                     a->max_class = e.key.keysym.sym - SDLK_0;
                     a->need_redraw = 1;
@@ -178,6 +185,13 @@ void app_run(App *a)
                 else if (e.key.keysym.sym == SDLK_n) app_nav_sim_deviate(a);
                 else if (e.key.keysym.sym == SDLK_PERIOD) app_nav_sim_speed(a, 1);
                 else if (e.key.keysym.sym == SDLK_COMMA)  app_nav_sim_speed(a, -1);
+                else if (e.key.keysym.sym == SDLK_v) {      /* 语音播报开关 */
+                    a->voice_on = !a->voice_on;
+                    app_persist_settings(a);
+                    snprintf(a->nav_msg, sizeof(a->nav_msg),
+                             a->voice_on ? "语音播报：开" : "语音播报：关");
+                    a->need_redraw = 1;
+                }
                 break;
             case SDL_MOUSEBUTTONDOWN:
                 if (e.button.button == SDL_BUTTON_LEFT) {

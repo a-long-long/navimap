@@ -49,6 +49,9 @@ typedef struct {
     int32_t   bbox[4];      /* e7: lat0 lon0 lat1 lon1，来自 manifest；
                              * 旧目录没有 manifest 时置为全域（不做裁剪） */
     NamePool  np;           /* 该省的路名池（names.bin） */
+    NMBinFile lanes;        /* 每条边的车道转向串 id（lanes.bin，可选） */
+    NamePool  lnp;          /* 车道转向串池（lane_names.bin，可选） */
+    int       has_lanes;    /* lanes.bin + lane_names.bin 齐备 */
     int32_t  *area_bbox;    /* 面缓存（paint_areas 懒填，na*4 个 i32） */
     int32_t  *line_bbox;    /* 线缓存（paint_lines 懒填，nl*4 个 i32）。
                              * 线要素没有 tile 索引，缺了它每帧要白投影 10 万条线
@@ -110,6 +113,12 @@ int  mapset_ensure_display(MapSet *ms, int prov);
 
 /* 供状态栏/日志用的汇总：总节点数、总边数 */
 void mapset_totals(const MapSet *ms, uint64_t *nodes, uint64_t *edges);
+
+/* 车道转向指示（turn:lanes）：按 (省, 省内边下标) 取该边的车道串，
+ * 形如 "left|through|right"（按行进方向排列）。返回 NULL = 无车道信息
+ * （该省没有 lanes.bin，或这条边本来就没打 turn:lanes）。字符串属于该省
+ * 的池，生命周期同 MapSrc（省份被卸载后失效）。 */
+const char *mapset_edge_lanes(const MapSet *ms, int prov, uint32_t edge);
 
 /* 该坐标属于哪个省（用于显示）。被完全包含的小省优先：北京 ⊂ 河北，
    路由实际走的是 hebei 那份数据，但显示在北京市内就该说 beijing。

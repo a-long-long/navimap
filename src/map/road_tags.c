@@ -163,6 +163,7 @@ void road_tags_parse(const uint32_t *keys, size_t n_keys,
     const char *access = NULL, *motor = NULL, *vehicle = NULL;
     const char *surface = NULL;
     const char *lanes = NULL;
+    const char *tl = NULL, *tl_fwd = NULL, *tl_bwd = NULL;
     const char *railway = NULL, *waterway = NULL;
     const char *building = NULL;
     const char *landuse = NULL, *natural = NULL, *leisure = NULL, *amenity = NULL;
@@ -184,6 +185,9 @@ void road_tags_parse(const uint32_t *keys, size_t n_keys,
         else if (strcmp(k, "vehicle") == 0) vehicle = v;
         else if (strcmp(k, "surface") == 0) surface = v;
         else if (strcmp(k, "lanes") == 0) lanes = v;
+        else if (strcmp(k, "turn:lanes") == 0) tl = v;
+        else if (strcmp(k, "turn:lanes:forward") == 0) tl_fwd = v;
+        else if (strcmp(k, "turn:lanes:backward") == 0) tl_bwd = v;
         else if (strcmp(k, "railway") == 0)  railway = v;
         else if (strcmp(k, "waterway") == 0) waterway = v;
         else if (strcmp(k, "building") == 0) building = v;
@@ -199,6 +203,12 @@ void road_tags_parse(const uint32_t *keys, size_t n_keys,
 
     if (name_zh && *name_zh) { out->name = name_zh; out->name_len = strlen(name_zh); }
     else if (name && *name)  { out->name = name;    out->name_len = strlen(name); }
+
+    /* 车道转向指示：:forward 优先于 generic（generic 按节点顺序=正向）；
+       反向只认 :backward —— 把 generic 抄给反向会左右颠倒，宁可无。 */
+    if (tl_fwd && *tl_fwd) { out->turn_lanes_fwd = tl_fwd; out->turn_lanes_fwd_len = strlen(tl_fwd); }
+    else if (tl && *tl)    { out->turn_lanes_fwd = tl;     out->turn_lanes_fwd_len = strlen(tl); }
+    if (tl_bwd && *tl_bwd) { out->turn_lanes_bwd = tl_bwd; out->turn_lanes_bwd_len = strlen(tl_bwd); }
 
     if (!hw) {
         /* 不是路：可能是铁路线 / 水系线 / 面要素（也可能是 building 等纯面） */

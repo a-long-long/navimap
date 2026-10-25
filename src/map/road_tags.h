@@ -65,6 +65,14 @@ typedef struct {
     uint8_t  area_kind;       /* AK_*：闭合 way 可作为面要素（areas.bin） */
     const char *name;         /* 指向 block 的 stringtable，用完即弃 */
     size_t   name_len;
+    /* 车道转向指示（turn:lanes）。形如 "left|through|through|right"，
+     * 按行进方向（way 节点顺序）排列。正向/反向各一份；generic turn:lanes
+     * 只当正向用（OSM 里它描述节点顺序方向），反向要 :backward 才有。
+     * 指针指向 block 的 stringtable，用完即弃；建图时立刻 intern 进池。 */
+    const char *turn_lanes_fwd;
+    size_t   turn_lanes_fwd_len;
+    const char *turn_lanes_bwd;
+    size_t   turn_lanes_bwd_len;
 } RoadTags;
 
 /* 解析一个 Way 的 keys/vals（stringtable 下标）→ RoadTags。

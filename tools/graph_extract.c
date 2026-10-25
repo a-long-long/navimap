@@ -72,6 +72,8 @@ int main(int argc, char **argv)
     printf("dropped_missing_node %" PRIu64 "  (无坐标节点剔除 %" PRIu64 ")\n",
            st.dropped_missing_node, st.dead_nodes);
     printf("names          %" PRIu64 "\n", st.names);
+    printf("lanes_ways     %" PRIu64 "  (含 turn:lanes 的 way，写入车道指示)\n", st.ways_with_lanes);
+    printf("lane_strings   %" PRIu64 "  (去重后的车道转向串)\n", st.lane_strings);
     printf("rt_unknown_ways %" PRIu64 "  (白名单内 %" PRIu64 ", 闸门 rt_unknown_drivable=%" PRIu64 ")\n",
            st.rt_unknown_ways, st.rt_unknown_nondrivable, st.rt_unknown_drivable);
     printf("restrictions   written %" PRIu64 " / scanned %" PRIu64

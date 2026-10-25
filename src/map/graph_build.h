@@ -39,6 +39,8 @@ typedef struct {
     uint64_t tiles_written;            /* 空间索引 tile 数（0 = 未生成） */
 
     uint64_t names;                 /* 路名池条目数 */
+    uint64_t ways_with_lanes;       /* 带 turn:lanes 的可路由 way 数 */
+    uint64_t lane_strings;          /* 车道串池条目数 */
     int32_t  bbox[4];               /* lat_min lon_min lat_max lon_max，1e-7 度 */
     double   elapsed_sec;
 } GraphBuildStats;

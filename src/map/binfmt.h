@@ -35,6 +35,7 @@
 #define NMBIN_KIND_POLYREFS     8u   /* 线/面引用的节点内部下标（u32 序列） */
 #define NMBIN_KIND_EDGELIST    10u   /* {node_idx, edge_idx} 对，按 tile 排序 */
 #define NMBIN_KIND_TILES       11u   /* 瓦片目录（渲染空间索引） */
+#define NMBIN_KIND_LANES       12u   /* 每条边的车道转向串 id（u32，CSR 边序） */
 
 #define NMBIN_MAX_FIELDS 16
 #define NMBIN_HDR_BYTES  128
