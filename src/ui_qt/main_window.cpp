@@ -6,7 +6,6 @@
 #include "settings/settings.h"  /* settings_set_int：切基准后落盘 */
 
 #include <QMenuBar>
-#include <QGraphicsOpacityEffect>
 #include <QSlider>
 #include <QDialog>
 #include <QDialogButtonBox>
@@ -57,8 +56,9 @@ MainWindow::MainWindow(App *a, QWidget *parent)
     buildStepsDock();
 
     /* 浮层透明度：默认 75%（App::ovl_alpha 已由 app_init 从设置读好）。
-     * 每个浮层一份，用 QGraphicsOpacityEffect 作用到整个子树（底板 + 图标 +
-     * 文字一起淡）—— 只对顶层窗口有效的 setWindowOpacity 在这里没用。 */
+     * 每个浮层一份，**只淡底板**（图标与文字保持不透明）—— 作用在
+     * IconButton 的底板 alpha 与面板/输入框的 QSS rgba 背景上。
+     * 只对顶层窗口有效的 setWindowOpacity 在这里没用。 */
     applyOverlayAlpha();
 
     /* 两个浮层（搜索在左上、地图操作在右上）贴到画布上。
@@ -352,7 +352,9 @@ int MainWindow::runUiSelfTest()
 
     /* ⑫ 浮层透明度：默认 75%、且**每个浮层各一份**。
      *    只查"有个 effect"会漏掉"全都按同一个值设了"；这里成对验：
-     *    改搜索浮层 → 搜索的 effect 跟着变、**右栏的不许变**。 */
+     *    改搜索浮层 → 搜索的跟着变、**右栏的不许变**。
+     *    ★ 现在是"底板按比例淡、文字/图标不淡"，所以查的是
+     *      IconButton::overlayPct()（底板系数），不是 QGraphicsOpacityEffect。 */
     {
         const int keepS = m_a->ovl_alpha[OVL_SEARCH];
         const int keepR = m_a->ovl_alpha[OVL_RCOL];
@@ -360,20 +362,34 @@ int MainWindow::runUiSelfTest()
         check(keepR == OVL_ALPHA_DEFAULT && keepS == OVL_ALPHA_DEFAULT,
               "浮层默认透明度 75%");
 
-        auto opOf = [](QWidget *w) -> double {
-            if (!w) return -1.0;
-            auto *e = qobject_cast<QGraphicsOpacityEffect *>(w->graphicsEffect());
-            return e ? e->opacity() : -1.0;
+        /* 取浮层里第一个 IconButton 的底板系数（右栏 / 搜索各一个）
+         * ★ 用 dynamic_cast 而不是 qobject_cast：IconButton 没有 Q_OBJECT 宏
+         *   （它不参与 moc），qobject_cast 对没有 Q_OBJECT 的类型会直接
+         *   static_assert 失败。QObject 是多态类，dynamic_cast 可用。 */
+        auto pctOf = [](QWidget *w) -> int {
+            if (!w) return -1;
+            for (QAbstractButton *b : w->findChildren<QAbstractButton *>()) {
+                if (auto *ib = dynamic_cast<IconButton *>(b)) return ib->overlayPct();
+            }
+            return -1;
         };
-        check(qAbs(opOf(m_rightOverlay) - 0.75) < 1e-6,
-              "右栏浮层挂上了 75% 透明度效果");
+        check(pctOf(m_rightOverlay) == 75,
+              "右栏浮层底板按 75% 半透明");
+        check(pctOf(m_searchOverlay) == 75,
+              "搜索浮层底板按 75% 半透明");
 
         app_ovl_alpha_set(m_a, OVL_SEARCH, 40);
         applyOverlayAlpha();
-        check(qAbs(opOf(m_searchOverlay) - 0.40) < 1e-6,
-              "改搜索浮层：它的效果跟着变成 40%");
-        check(qAbs(opOf(m_rightOverlay) - 0.75) < 1e-6,
+        check(pctOf(m_searchOverlay) == 40,
+              "改搜索浮层：它的底板系数跟着变成 40%");
+        check(pctOf(m_rightOverlay) == 75,
               "改搜索浮层：右栏不受影响（逐浮层独立）");
+
+        /* ★ 0% ⇒ 该浮层整体隐藏（底板和前景都不画）：
+         *   否则文字会孤零零浮在底图上。 */
+        app_ovl_alpha_set(m_a, OVL_SEARCH, 0);
+        applyOverlayAlpha();
+        check(pctOf(m_searchOverlay) == 0, "搜索浮层设 0%：底板系数归 0");
 
         app_ovl_alpha_set(m_a, OVL_SEARCH, keepS);   /* 还原 */
         app_ovl_alpha_set(m_a, OVL_RCOL, keepR);
@@ -644,6 +660,8 @@ void MainWindow::buildSearchOverlay()
 /* 点搜索按钮 → 展开输入框并聚焦 */
 void MainWindow::showSearch()
 {
+    /* 该浮层被设成 0%（不显示）时不允许再展开 */
+    if (m_a->ovl_alpha[OVL_SEARCH] <= 0) return;
     m_searchBtn->hide();
     m_search->show();
     m_search->setFocus();
@@ -926,29 +944,83 @@ void MainWindow::updateDatumTip()
 /* ---------------- 浮层透明度 ---------------- */
 
 /* 把 App::ovl_alpha（百分比 0~100，默认 75）作用到 Qt 这边的浮层上。
- * ★ 用 QGraphicsOpacityEffect 而不是 QWidget::setWindowOpacity：后者只对
- *   顶层窗口有效，这几个浮层是画布的**子控件**，调了没有任何效果（也不报错）。
- * ★ 面板是按需创建的（toggleTrackPanel），所以那个浮层要等它建出来才有
- *   宿主 ⇒ applyOverlayAlpha 必须在面板创建后也调一次。
+ * ★★ 规则：**只淡底板，前景（文字 / 图标）保持清晰**。
+ *   ★ 不用 QGraphicsOpacityEffect：它会把图标和文字**一起**淡掉
+ *     （浅色底板上的文字糊成灰）。QWidget::setWindowOpacity 也不行 ——
+ *     它只对顶层窗口有效，这几个浮层是画布的**子控件**，调了没效果也不报错。
+ *   ★ 面板是按需创建的（toggleTrackPanel），所以那个浮层要等它建出来才有
+ *     宿主 ⇒ applyOverlayAlpha 必须在面板创建后也调一次。
  * ★ 本前端没有的浮层（标题栏/顶栏/…是 SDL 自绘的）在这里不生效，值照样存。 */
+/* 轨迹/收藏面板的样式表：**底板按 pct 淡，文字/图标保持不透明**。
+ * pct<=0 ⇒ 前景色 alpha 也归 0（整个面板不可见）。
+ * 与 C 侧 chrome.c / navdraw.c 的规则一致（"只淡底板、文字保持清晰"）。 */
+QString MainWindow::trackPanelStyle(int pct) const
+{
+    const double k = pct / 100.0;
+    const int bgA  = qBound(0, qRound(242 * k), 255);  /* 面板底板 */
+    const int bdA  = qBound(0, qRound(60 * k), 255);   /* 面板边框 */
+    const int btnA = qBound(0, qRound(238 * k), 255);  /* 按钮底板 */
+    const int bbdA = qBound(0, qRound(160 * k), 255);  /* 按钮边框 */
+    const int fgA  = (pct > 0) ? 255 : 0;              /* 前景：0 ⇒ 隐藏，否则不透明 */
+    return QStringLiteral(
+        "#trackPanel{background:rgba(250,250,252,%1);"
+        "border:1px solid rgba(60,70,90,%2);border-radius:8px;}"
+        "#trackPanel QScrollArea{background:transparent;border:none;}"
+        "#trackPanel QLabel{color:rgba(26,34,51,%6);}"
+        "#trackPanel QPushButton{padding:3px 10px;"
+        "background:rgba(238,241,247,%3);"
+        "border:1px solid rgba(120,130,145,%4);border-radius:4px;"
+        "color:rgba(26,34,51,%6);}")
+        .arg(bgA).arg(bdA).arg(btnA).arg(bbdA).arg(fgA);
+}
+
+/* ★★ 浮层透明度：**只淡底板，前景（文字 / 图标）保持清晰**。
+ *   之前是把 QGraphicsOpacityEffect 挂在浮层容器上 —— 那会把图标和文字
+ *   **一起**淡掉：浅色底板上的文字直接糊成灰，越设越看不清
+ *   （J 先生 2026-10-25 要求"只淡底板、文字保持清晰"）。
+ *   现在改成：
+ *     · IconButton（搜索按钮 + 右栏 7 个）：底板/边框的 alpha 乘系数，
+ *       图标与文字完全不透明（见 qt_icon_button.hpp）；
+ *     · 搜索输入框 / 轨迹面板：用 QSS 的 rgba 背景按系数算 alpha，
+ *       前景色保持不透明；
+ *     · pct<=0 ⇒ 该浮层整体不画（底板和前景都不画）。
+ *   与 C 侧 chrome.c / navdraw.c 的 ak()/afg() 是同一套规则。 */
 void MainWindow::applyOverlayAlpha()
 {
-    struct Item { QWidget *w; NmOverlay id; };
-    const Item items[] = {
-        { m_searchOverlay, OVL_SEARCH },
-        { m_rightOverlay,  OVL_RCOL   },
-        { m_trackPanel,    OVL_TRACK  },
-    };
-    for (const Item &it : items) {
-        if (!it.w) continue;
-        QGraphicsOpacityEffect *e =
-            qobject_cast<QGraphicsOpacityEffect *>(it.w->graphicsEffect());
-        if (!e) {
-            e = new QGraphicsOpacityEffect(it.w);
-            it.w->setGraphicsEffect(e);
+    const int ps = m_a->ovl_alpha[OVL_SEARCH];
+    const int pr = m_a->ovl_alpha[OVL_RCOL];
+    const int pt = m_a->ovl_alpha[OVL_TRACK];
+
+    /* --- 搜索浮层：图标按钮 + 输入框 --- */
+    if (m_searchBtn) {
+        if (auto *ib = dynamic_cast<IconButton *>(m_searchBtn)) ib->setOverlayPct(ps);
+    }
+    /* 0% ⇒ 整个搜索浮层不显示（否则输入框的文字会孤零零浮在底图上） */
+    if (m_searchOverlay) m_searchOverlay->setVisible(ps > 0);
+    if (m_search) {
+        const double k = ps / 100.0;
+        const int bgA = qBound(0, qRound(255 * k), 255);
+        const int bdA = qBound(0, qRound(160 * k), 255);
+        const int fgA = (ps > 0) ? 255 : 0;
+        m_search->setStyleSheet(
+            QStringLiteral("QLineEdit{background:rgba(255,255,255,%1);"
+                           "border:1px solid rgba(120,130,145,%2);border-radius:4px;"
+                           "color:rgba(26,34,51,%3);"
+                           "selection-background-color:#3c6edc;selection-color:#ffffff;}")
+                .arg(bgA).arg(bdA).arg(fgA));
+    }
+
+    /* --- 右栏：全部 IconButton --- */
+    if (m_rightOverlay) {
+        for (QAbstractButton *b : m_rightOverlay->findChildren<QAbstractButton *>()) {
+            if (auto *ib = dynamic_cast<IconButton *>(b)) ib->setOverlayPct(pr);
         }
-        const double op = m_a->ovl_alpha[it.id] / 100.0;
-        if (qAbs(e->opacity() - op) > 1e-6) e->setOpacity(op);
+    }
+
+    /* --- 轨迹 / 收藏面板 --- */
+    if (m_trackPanel) {
+        m_trackPanel->setStyleSheet(trackPanelStyle(pt));
+        m_trackPanel->setVisible(m_trackPanelOpen && pt > 0);
     }
 }
 
@@ -1035,11 +1107,9 @@ void MainWindow::toggleTrackPanel()
            宽度一飘面板就跑到屏幕左边去（实测：按钮行 + wordWrap 提示的
            sizeHint 能把面板撑到 800+ px）。340 刚好放得下按钮行。 */
         m_trackPanel->setFixedWidth(340);
-        m_trackPanel->setStyleSheet(
-            QStringLiteral("#trackPanel{background:rgba(250,250,252,242);"
-                           "border:1px solid rgba(60,70,90,60%);border-radius:8px;}"
-                           "#trackPanel QPushButton{padding:3px 10px;}"
-                           "#trackPanel QLabel{color:#1a2233;}"));
+        /* 样式表由 trackPanelStyle(pct) 生成（底板按浮层透明度淡、文字不透明），
+           这里先用当前设置里的值建一次，applyOverlayAlpha 会再刷新。 */
+        m_trackPanel->setStyleSheet(trackPanelStyle(m_a->ovl_alpha[OVL_TRACK]));
         QVBoxLayout *vl = new QVBoxLayout(m_trackPanel);
         vl->setContentsMargins(8, 8, 8, 8);
         vl->setSpacing(6);
@@ -1052,7 +1122,11 @@ void MainWindow::toggleTrackPanel()
         sa->setFrameShape(QFrame::NoFrame);
         sa->setMaximumHeight(360);
         sa->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
+        /* ★ 滚动区的 viewport 默认会用调色板画**不透明**底色 ⇒ 面板底板
+         *   淡下去之后这一块还是实心的 ⇒ 强制透明。 */
+        sa->viewport()->setAttribute(Qt::WA_TranslucentBackground, true);
         m_trackRows = new QWidget(sa);
+        m_trackRows->setAttribute(Qt::WA_TranslucentBackground, true);
         QVBoxLayout *rl = new QVBoxLayout(m_trackRows);
         rl->setContentsMargins(2, 2, 2, 2);
         rl->setSpacing(2);
@@ -1072,9 +1146,14 @@ void MainWindow::toggleTrackPanel()
         connect(bfav, &QPushButton::clicked, this, [this]() { favCenter(); });
         m_trackPanel->hide();
     }
-    bool show = !m_trackPanel->isVisible();
+    /* ★ 用 m_trackPanelOpen 记"逻辑上开没开"，而不是问 isVisible()：
+     *   浮层透明度设 0% 时面板**不真的显示**（底板和前景都不画），
+     *   若拿 isVisible() 当状态，0% 时再点一次会以为"没开"又去开一次，
+     *   开关就乱了。 */
+    bool show = !m_trackPanelOpen;
     if (show) refreshTrackPanel();
-    m_trackPanel->setVisible(show);
+    m_trackPanelOpen = show;
+    m_trackPanel->setVisible(show && m_a->ovl_alpha[OVL_TRACK] > 0);
     /* ★★ 同步按钮勾选态必须**堵信号**：m_trackBtn 是 checkable，且
      *   toggled → toggleTrackPanel（见 buildRightCol）。setChecked 会发 toggled
      *   ⇒ 又调一次 toggleTrackPanel ⇒ 里面再 setChecked（状态这次真变了）⇒
@@ -1087,7 +1166,7 @@ void MainWindow::toggleTrackPanel()
         QSignalBlocker blk(m_trackBtn);
         m_trackBtn->setChecked(show);
     }
-    applyOverlayAlpha();   /* 面板刚建好：把它的透明度挂上 */
+    applyOverlayAlpha();   /* 面板刚建好：按浮层透明度刷新底板 */
     layoutOverlays();   /* 面板贴到右栏左边 */
 }
 
@@ -1177,7 +1256,8 @@ void MainWindow::openTrackPanelForShot()
 {
     if (!m_trackPanel) toggleTrackPanel();   /* 建控件（会顺带把它显示出来） */
     refreshTrackPanel();
-    if (m_trackPanel) m_trackPanel->setVisible(true);
+    m_trackPanelOpen = true;
+    if (m_trackPanel) m_trackPanel->setVisible(m_a->ovl_alpha[OVL_TRACK] > 0);
     if (m_trackBtn) {
         QSignalBlocker blk(m_trackBtn);
         m_trackBtn->setChecked(true);

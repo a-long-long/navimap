@@ -10,6 +10,11 @@
  *   · 悬停：底色变亮 + 边框变蓝（鼠标悬停提示由 setToolTip 提供）；
  *   · 按下：底色变深；
  *   · 可选中（checkable）：选中态底色偏蓝。
+ *
+ * ★ 浮层透明度（setOverlayPct）：**只淡底板与边框，图标与文字保持不透明**
+ *   （与 C 侧 chrome.c / navdraw.c 的规则一致：J 先生 2026-10-25 要求
+ *   "只淡底板、文字保持清晰"）。pct<=0 ⇒ 整个按钮不画（该浮层隐藏）。
+ *   之前用的是 QGraphicsOpacityEffect，会把图标和文字一起淡掉。
  */
 #ifndef NAVIMAP_QT_ICON_BUTTON_HPP
 #define NAVIMAP_QT_ICON_BUTTON_HPP
@@ -37,9 +42,21 @@ public:
     static const int kSize = 36;        /* 纯图标按钮的边长（含边框） */
     static const int kIcon = 20;        /* 图标边长 */
 
+    /* 浮层透明度（0~100）。只影响底板/边框的 alpha。 */
+    void setOverlayPct(int pct)
+    {
+        if (m_ovlPct == pct) return;
+        m_ovlPct = pct;
+        update();
+    }
+    int overlayPct() const { return m_ovlPct; }
+
 protected:
     void paintEvent(QPaintEvent *) override
     {
+        /* 浮层整体隐藏（0%）：底板和前景都不画，否则图标会孤零零浮在底图上 */
+        if (m_ovlPct <= 0) return;
+
         QPainter p(this);
         p.setRenderHint(QPainter::Antialiasing, true);
 
@@ -56,6 +73,11 @@ protected:
             bg = QColor(255, 255, 255, 250);
             bd = QColor(60, 110, 200, 220);
         }
+        /* ★ 只有底板/边框按浮层透明度淡；图标与文字保持完全不透明。 */
+        const double k = m_ovlPct / 100.0;
+        bg.setAlpha(qBound(0, qRound(bg.alpha() * k), 255));
+        bd.setAlpha(qBound(0, qRound(bd.alpha() * k), 255));
+
         const qreal r = 6.0;
         QRectF box = QRectF(rect()).adjusted(0.5, 0.5, -0.5, -0.5);
         p.setPen(QPen(bd, 1.0));
@@ -95,6 +117,7 @@ protected:
 
 private:
     Qt::IconKind m_kind;
+    int m_ovlPct = 100;     /* 浮层透明度：只作用在底板/边框上 */
 };
 
 #endif

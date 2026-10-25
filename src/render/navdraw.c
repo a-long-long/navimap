@@ -16,13 +16,20 @@ typedef struct { int x0, y0, x1, y1, done; } RSeg;
 
 /* ---- 浮层透明度（本文件里那几个"浮在地图上的面板"共用）----
  * 指令条 / 搜索框 / 导航面板 / 无图提示都由 window.c 画，它们拿不到 App
- * ⇒ 由调用方把该浮层的 alpha 传进来（window.c 用 app_ovl_a()），
- * 再由 nfill/nrect/ntext/nline 统一乘到底板、描边、图标、文字上 ——
- * **整块一起淡**，而不是只淡底板（只淡底板会变成"实心字浮在屏幕上的鬼影"）。
+ * ⇒ 由调用方把该浮层的 alpha 传进来（window.c 用 app_ovl_a()）。
+ *
+ * ★★ 规则与 chrome.c 一致：**只淡底板，前景（文字 / 图标）保持清晰**。
+ *   · 底板、描边（nfill / nrect）：按 alpha 比例淡；
+ *   · 文字、图标（ntext / nline）：不参与线性淡出 ——
+ *     alpha=0 ⇒ 整个浮层隐藏（前景也不画）；alpha>0 ⇒ 前景完全不透明。
+ *   J 先生 2026-10-25 明确要求"只淡底板、文字保持清晰"：前景一起淡的话，
+ *   浅色底板上的文字会糊成灰，反而看不清。
  * ★ g_ovl_a 只在下面这几个 paint_* 的入口处设置；其余（路线、车头、图钉）
  *   是地图要素不是浮层，绝不能被它影响。 */
 static uint8_t g_ovl_a = 255;
 static uint8_t am(uint8_t a) { return (uint8_t)(((unsigned)a * g_ovl_a + 127u) / 255u); }
+/* 前景（文字 / 图标）：0 ⇒ 隐藏；否则原样不透明。 */
+static uint8_t fg(uint8_t a) { return (g_ovl_a == 0) ? 0 : a; }
 static void nfill(Raster *rs, int x, int y, int w, int h,
                   uint8_t r, uint8_t g, uint8_t b, uint8_t a)
 {
@@ -36,12 +43,12 @@ static void nrect(Raster *rs, int x, int y, int w, int h,
 static void ntext(Font *f, Raster *rs, int x, int y, const char *t,
                   uint8_t r, uint8_t g, uint8_t b, int shadow)
 {
-    font_draw_a(f, rs, x, y, t, r, g, b, shadow, am(255));
+    font_draw_a(f, rs, x, y, t, r, g, b, shadow, fg(255));
 }
 static void nline(Raster *rs, int x0, int y0, int x1, int y1,
                   uint8_t r, uint8_t g, uint8_t b)
 {
-    raster_line_rgba(rs, x0, y0, x1, y1, r, g, b, am(255));
+    raster_line_rgba(rs, x0, y0, x1, y1, r, g, b, fg(255));
 }
 
 int paint_route(Raster *rs, const MapView *v,

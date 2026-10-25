@@ -517,26 +517,39 @@ fi
 # 关系**：|M−H| / |O−H| == pct/100（M=该 pct、O=100%、H=0%=纯底图）。
 #   这个比值与元素底色的固有 alpha 无关（右栏按钮底色是 245 而非 255，
 #   按固定配色算就会假红）。判据实现在 scripts/ovl_px.py。
+# ★★ 规则是"**只淡底板，文字/图标保持清晰**"（J 先生 2026-10-25 要求），所以
+#   判据是两条：
+#     ① 底板像素（矩形内的**中位数**）比值 == pct/100
+#        —— 用中位数不用单点取样：底板像素占多数，单点很容易采到文字上；
+#     ② 必须有一批比值 == 1.0 的像素（文字/图标一点没淡）
+#        —— 前景不参与线性淡出 ⇒ 它在 100% 与 75% 两张图上逐像素相同。
+#   两条合起来才把"只淡底板"钉死：少了 ① 会把"整体不淡"放过去，
+#   少了 ② 会把"文字被一起淡掉"放过去。
 # 同时验"逐浮层独立"：改一个浮层的透明度，矩形外一个像素都不许跟着变。
-# ★ 负向对照已实证（两条，各自打到不同的一条判据上）：
+# ★ 负向对照已实证（三条，各自打到不同的一条判据上）：
 #   ① 把 chrome.c 的 ovl_begin() 改成 g_ovl_k = 1.0（压根不按浮层缩放）
 #      ⇒ 100% 与 0% 两张图完全相同 ⇒ "矩形内找不到明显不同的像素" FAIL；
 #   ② 把 draw_titlebar 的 ovl_begin(a, OVL_TITLE) 改成 OVL_RCOL（串浮层：
 #      改右栏的透明度连标题栏一起变）⇒ "矩形外有 24000 个像素跟着变了" FAIL
-#      （24000 = 800×30，正好是标题栏面积）。
+#      （24000 = 800×30，正好是标题栏面积）；
+#   ③ 把 chrome.c 的 rtext 改回乘系数（文字跟着一起淡）
+#      ⇒ "前景（文字/图标）没有保持清晰" FAIL。
 ovl_shot() {   # $1=key $2=pct $3=输出
     run "ovl_$1_$2" "ASSERT-OK" env SDL_VIDEODRIVER="${SDL_VIDEODRIVER:-dummy}" \
         "$BUILD/map_shot" --graph="$GRAPH" --lat=39.94 --lon=116.405 --zoom=13 \
         --w=800 --h=600 --ovl-alpha="$1=$2" --out="$3" > /dev/null 2>&1
 }
 # 标题栏矩形 0,0,800,30（CHROME_TITLE_H=30）；右栏四按钮 750,88,42,184
+# ★ 标题栏在 map_shot 里**只有底板没有文字**（map_shot 不加载字体，"NavMap"
+#   那行字不画）⇒ 这条只验底板比值 + 逐浮层独立，前景判据 --fg=0 跳过。
+#   前景（文字/图标）保持清晰由下面两条验：C 右栏（图标）与 Qt 搜索按钮（**文字**）。
 ovl_shot alpha_title 100 "$SHOTS/ovl_title_100.bmp"
 ovl_shot alpha_title 75  "$SHOTS/ovl_title_075.bmp"
 ovl_shot alpha_title 0   "$SHOTS/ovl_title_000.bmp"
 if python3 "$ROOT/scripts/ovl_px.py" "$SHOTS/ovl_title_100.bmp" \
         "$SHOTS/ovl_title_075.bmp" "$SHOTS/ovl_title_000.bmp" \
-        --rect=0,0,800,30 --pct=75 > "$SHOTS/ovl_title.log" 2>&1; then
-    pass=$((pass + 1)); printf '%-28s OK   (标题栏 75%%：混合比=75%%，矩形外零影响)\n' "ovl_alpha"
+        --rect=0,0,800,30 --pct=75 --fg=0 > "$SHOTS/ovl_title.log" 2>&1; then
+    pass=$((pass + 1)); printf '%-28s OK   (标题栏 75%%：底板混合比=75%%，矩形外零影响)\n' "ovl_alpha"
 else
     fail=$((fail + 1)); printf '%-28s FAIL 标题栏 75%% 不成立（见 ovl_title.log）\n' "ovl_alpha"
 fi
@@ -546,15 +559,18 @@ ovl_shot alpha_rcol 0   "$SHOTS/ovl_rcol_000.bmp"
 if python3 "$ROOT/scripts/ovl_px.py" "$SHOTS/ovl_rcol_100.bmp" \
         "$SHOTS/ovl_rcol_075.bmp" "$SHOTS/ovl_rcol_000.bmp" \
         --rect=750,88,42,184 --pct=75 > "$SHOTS/ovl_rcol.log" 2>&1; then
-    pass=$((pass + 1)); printf '%-28s OK   (右栏 75%%：混合比=75%%，矩形外零影响)\n' "ovl_alpha_rcol"
+    pass=$((pass + 1)); printf '%-28s OK   (右栏 75%%：底板 75%% + 图标保持清晰)\n' "ovl_alpha_rcol"
 else
     fail=$((fail + 1)); printf '%-28s FAIL 右栏 75%% 不成立（见 ovl_rcol.log）\n' "ovl_alpha_rcol"
 fi
 
-# ---- 浮层透明度（Qt 前端）：QGraphicsOpacityEffect 真的合成进截图 ----
-# Qt 侧是子控件浮层，setWindowOpacity 对它们无效（只对顶层窗口有效）⇒
-# 必须用 graphicsEffect。offscreen 下这条也要成立（实测混合比 0.7500）。
+# ---- 浮层透明度（Qt 前端）：底板真的合成进截图 ----
+# Qt 侧是子控件浮层：setWindowOpacity 对它们无效（只对顶层窗口有效），
+# QGraphicsOpacityEffect 有效但会把图标和文字**一起**淡掉 ⇒ 现在改成
+# IconButton 自绘底板时按系数算 alpha（qt_icon_button.hpp），
+# 面板/输入框用 QSS 的 rgba 背景（main_window.cpp 的 trackPanelStyle）。
 # 判据与 C 侧同一份脚本、同一个数学关系 ⇒ 两个前端口径一致。
+# offscreen 下这条也要成立（实测混合比 0.7500）。
 if [ -x "$BUILD/navmap_qt.exe" ] || [ -x "$BUILD/navmap_qt" ]; then
     QEXE=$(if [ -x "$BUILD/navmap_qt.exe" ]; then echo "$BUILD/navmap_qt.exe"; else echo "$BUILD/navmap_qt"; fi)
     CFGQ="$SHOTS/ovl_qt_cfg"
@@ -570,9 +586,37 @@ if [ -x "$BUILD/navmap_qt.exe" ] || [ -x "$BUILD/navmap_qt" ]; then
     if python3 "$ROOT/scripts/ovl_px.py" "$SHOTS/ovl_qt_100.bmp" \
             "$SHOTS/ovl_qt_75.bmp" "$SHOTS/ovl_qt_0.bmp" \
             --rect=740,0,60,420 --pct=75 > "$SHOTS/ovl_qt.log" 2>&1; then
-        pass=$((pass + 1)); printf '%-28s OK   (Qt 右栏 75%%：混合比=75%%，矩形外零影响)\n' "qt_ovl_alpha"
+        pass=$((pass + 1)); printf '%-28s OK   (Qt 右栏 75%%：底板 75%% + 图标清晰)\n' "qt_ovl_alpha"
     else
         fail=$((fail + 1)); printf '%-28s FAIL Qt 右栏 75%% 不成立（见 ovl_qt.log）\n' "qt_ovl_alpha"
+    fi
+
+    # ---- 浮层透明度（Qt 搜索按钮）：**文字**必须保持清晰 ----
+    # 这条直接验 J 先生 2026-10-25 提的核心诉求："只淡底板、文字保持清晰"。
+    # 搜索按钮是 IconButton（自绘底板 + 自绘图标 + 「搜索」二字），Qt 侧有
+    # 字体 ⇒ 文字真的画出来了（map_shot 不加载字体，C 侧截图里没有文字）。
+    # 判据：底板混合比 = 75%，且「搜索」二字的像素在 100% 与 75% 两张图上
+    # **没有被一起淡掉**。
+    # ★ --fgrect 单独框出文字区：图标在左、文字在右，不框的话图标会替文字
+    #   顶缸（口径 a 在整块按钮上只数到 3 个文字像素，抓不到）。
+    # ★ 14px 中文字形抗锯齿后没有 coverage=1 的纯色核 ⇒ 口径 a 数不到，
+    #   要靠口径 b（相对底图的偏离量没按 75% 缩小）—— 它只在框准前景时才有
+    #   判别力（文字区：正向 111 个 / 文字被淡后 39 个）。
+    # ★ 负向对照：把 IconButton 里画文字的 pen 颜色也乘上系数 ⇒ 文字被一起淡
+    #   ⇒ "前景（文字/图标）没有保持清晰" FAIL（实测过一次）。
+    for pv in 100 75 0; do
+        qt_run env APPDATA="$CFGQ" XDG_CONFIG_HOME="$CFGQ/xdg" \
+            "$QEXE" --graph="$GRAPH" --w=800 --h=600 \
+            --ovl-alpha=alpha_search=$pv --shot="$SHOTS/ovl_qts_$pv.bmp" \
+            > "$SHOTS/ovl_qts_$pv.log" 2>&1
+    done
+    if python3 "$ROOT/scripts/ovl_px.py" "$SHOTS/ovl_qts_100.bmp" \
+            "$SHOTS/ovl_qts_75.bmp" "$SHOTS/ovl_qts_0.bmp" \
+            --rect=10,31,74,36 --fgrect=37,38,32,18 --fg-min=60 --pct=75 \
+            > "$SHOTS/ovl_qts.log" 2>&1; then
+        pass=$((pass + 1)); printf '%-28s OK   (Qt 搜索按钮：底板 75%% + 「搜索」字清晰)\n' "qt_ovl_text"
+    else
+        fail=$((fail + 1)); printf '%-28s FAIL Qt 搜索按钮文字不清晰（见 ovl_qts.log）\n' "qt_ovl_text"
     fi
 fi
 

@@ -110,18 +110,27 @@ static void layout(App *a, CLay *L)
 
 /* ---- 浮层透明度 ----
  * 每个元素（标题栏 / 顶栏 / 右栏 / …）有自己的 alpha（百分比 → 0~255，
- * 存在 App::ovl_alpha[]，默认 75%）。绘制前调 ovl_begin() 设好系数，
- * 之后 rfill/rstroke/rline/rtext/rpoint 全部按它缩放 ⇒ **整块一起半透明**
- * （底板 + 描边 + 图标 + 文字），而不是只把底板调淡——只淡底板会变成
- * "实心字浮在屏幕上"的鬼影，比不透明更难看。
- * ★ 不这么做就要给每个元素开离屏缓冲再合成，1280×800 下每帧十几次
- *   malloc + 合成，成本远高于"画的时候顺手乘一下"。 */
+ * 存在 App::ovl_alpha[]，默认 75%）。绘制前调 ovl_begin() 设好系数。
+ *
+ * ★★ 规则：**只淡底板，前景（文字 / 图标）保持清晰**。
+ *   · 底板、描边（rfill / rstroke）：按 pct 线性缩放 alpha。
+ *   · 文字、图标（rtext / rline / rpoint）：**不参与线性淡出** ——
+ *     pct=0  ⇒ 整个浮层隐藏（前景也不画，否则文字会孤零零浮在底图上）；
+ *     pct>0  ⇒ 前景保持完全不透明。
+ *   理由：前景跟着一起淡的话，浅色底板上的文字直接糊成灰，反而看不清
+ *   （J 先生 2026-10-25 明确要求"只淡底板、文字保持清晰"）。
+ *   顺带白送一条好判据：前景像素在 100% 与 75% 两张图上**逐像素相同**。
+ * ★ 不给每个元素开离屏缓冲再合成：1280×800 下每帧十几次 malloc + 合成，
+ *   成本远高于"画的时候顺手乘一下"。 */
 static double g_ovl_k = 1.0;          /* 当前元素的 alpha 系数 0..1 */
 static void ovl_begin(const App *a, NmOverlay id)
 {
     g_ovl_k = app_ovl_a(a, id) / 255.0;
 }
+/* 底板 / 描边：按比例淡。 */
 static uint8_t ak(uint8_t a) { return (uint8_t)(a * g_ovl_k + 0.5); }
+/* 前景（文字 / 图标）：0 ⇒ 隐藏；否则原样不透明。 */
+static uint8_t afg(uint8_t a) { return (g_ovl_k <= 0.0) ? 0 : a; }
 
 static void rfill(Raster *rs, int x, int y, int w, int h,
                   uint8_t cr, uint8_t cg, uint8_t cb, uint8_t ca)
@@ -136,17 +145,17 @@ static void rstroke(Raster *rs, int x, int y, int w, int h,
 static void rline(Raster *rs, int x0, int y0, int x1, int y1,
                   uint8_t cr, uint8_t cg, uint8_t cb)
 {
-    raster_line_rgba(rs, x0, y0, x1, y1, cr, cg, cb, ak(255));
+    raster_line_rgba(rs, x0, y0, x1, y1, cr, cg, cb, afg(255));
 }
-/* 文字同样按当前元素的 alpha 淡出（font_draw_a 的 a=255 与原 font_draw 等价）。 */
+/* 文字：保持清晰（a=255 ⇒ 阴影 alpha 也不缩放，与原 font_draw 一致）。 */
 static void rtext(Font *f, Raster *rs, int x, int y, const char *t,
                   uint8_t cr, uint8_t cg, uint8_t cb, int shadow)
 {
-    font_draw_a(f, rs, x, y, t, cr, cg, cb, shadow, ak(255));
+    font_draw_a(f, rs, x, y, t, cr, cg, cb, shadow, afg(255));
 }
 static void rpoint(Raster *rs, int x, int y, uint8_t cr, uint8_t cg, uint8_t cb)
 {
-    raster_px_rgba(rs, x, y, cr, cg, cb, ak(255));
+    raster_px_rgba(rs, x, y, cr, cg, cb, afg(255));
 }
 
 /* ===================== 夜间蒙版 ===================== */

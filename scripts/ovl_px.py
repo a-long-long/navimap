@@ -1,6 +1,10 @@
 #!/usr/bin/env python3
 """浮层透明度的**像素级判据**：某个浮层设成 pct% 时，它在截图上到底透了没有。
 
+规则（2026-10-25 J 先生要求改成"只淡底板、文字保持清晰"）：
+    · **底板 / 描边**按 pct 线性半透明；
+    · **文字 / 图标**不参与线性淡出 —— pct=0 整个浮层隐藏，pct>0 前景完全不透明。
+
 为什么不能只判"两张图不一样"：那样"设 75% 结果画成 20%"也会判过。
 这里用的是**与 alpha 成正比的精确关系**：
 
@@ -12,10 +16,17 @@
     ⇒ |M − H| / |O − H| = pct / 100    （与元素自身 alpha 是多少无关！）
 
     所以"75% 真的是 75%"这条可以直接量出来，不必知道该浮层底色的固有 alpha
-    （右栏按钮本身是 245 不是 255，用固定配色算就会假红）。
+    （右栏按钮本身是 225 不是 255，用固定配色算就会假红）。
 
-★ 顺带判**逐浮层独立**：改一个浮层的透明度，截图上变化的像素必须**全部落在
-  该浮层的矩形内**（矩形外的变化 = 误伤别的浮层，或者根本没按浮层分开设）。
+★ 两条判据合起来才把"只淡底板"钉死：
+    1. **底板**（矩形内像素的中位数）比值 == pct/100
+       —— 中位数而不是单点取样：底板像素占多数，单点很容易采到文字/图标上。
+    2. **前景**（文字/图标）必须**有**一批像素比值 == 1.0（一点没淡）
+       —— 前景像素的比值是 1.0（100% 与 75% 两张图上逐像素相同），
+          底板像素是 pct/100。两者混在一起，中位数取底板那一簇，
+          前景那一簇用"数量"来判。
+    3. **逐浮层独立**：改一个浮层的透明度，截图上变化的像素必须全部落在
+       该浮层的矩形内（矩形外的变化 = 误伤别的浮层，或者根本没按浮层分开设）。
 
 用法:
   python3 scripts/ovl_px.py <100%.bmp> <pct%.bmp> <0%.bmp> \\
@@ -56,6 +67,14 @@ def read_bmp(path):
     return w, h, px
 
 
+def median(vals):
+    s = sorted(vals)
+    n = len(s)
+    if n == 0:
+        return None
+    return s[n // 2] if n % 2 else 0.5 * (s[n // 2 - 1] + s[n // 2])
+
+
 def main():
     argv = sys.argv[1:]
     pos = [arg for arg in argv if not arg.startswith('--')]
@@ -64,24 +83,34 @@ def main():
     f_opaque, f_mid, f_hidden = pos
 
     rect = None
+    fgrect = None
+    fg_min = 0
     pct = 75.0
     tol = 0.04
     strict_outside = 1
+    check_fg = 1
     for arg in argv:
         kv = arg.split('=', 1)
         key = kv[0]
         val = kv[1] if len(kv) > 1 else ''
         if key == '--rect':
             rect = tuple(int(v) for v in val.split(','))
+        elif key == '--fgrect':
+            fgrect = tuple(int(v) for v in val.split(','))
+        elif key == '--fg-min':
+            fg_min = int(val)
         elif key == '--pct':
             pct = float(val)
         elif key == '--tol':
             tol = float(val)
         elif key == '--strict-outside':
             strict_outside = int(val)
+        elif key == '--fg':
+            check_fg = int(val)
     if not rect or len(rect) != 4:
         raise SystemExit('需要 --rect=X,Y,W,H')
     rx, ry, rw, rh = rect
+    fx, fy, fw, fh = fgrect if fgrect else rect
 
     w1, h1, po = read_bmp(f_opaque)
     w2, h2, pm = read_bmp(f_mid)
@@ -95,42 +124,84 @@ def main():
 
     fails = 0
 
-    # ---- 取样点：矩形内 |O−H| 最大的那个像素（浮层确实覆盖、且对比明显）----
-    best = None
+    # ---- 收集矩形内每个像素的"透过比" r = |M−H| / |O−H| ----
+    #   底板像素 ⇒ r ≈ pct/100；前景（文字/图标）⇒ r = 1.0（一点没淡）。
+    #   只统计"确实变了"的像素（|O−H| 足够大），否则噪声会拉偏中位数。
+    ratios = []
+    changed = 0
     for y in range(ry, min(ry + rh, h1)):
         for x in range(rx, min(rx + rw, w1)):
-            o, h = at(po, x, y), at(ph, x, y)
-            d = abs(o[0] - h[0]) + abs(o[1] - h[1]) + abs(o[2] - h[2])
-            if best is None or d > best[0]:
-                best = (d, x, y)
-    if not best or best[0] < 24:
+            O, M, H = at(po, x, y), at(pm, x, y), at(ph, x, y)
+            ci = max(range(3), key=lambda c: abs(O[c] - H[c]))
+            denom = abs(O[ci] - H[ci])
+            if denom < 8:               # 没变（或变化太小，量不准）
+                continue
+            changed += 1
+            ratios.append(abs(M[ci] - H[ci]) / denom)
+
+    if not ratios:
         print('FAIL 矩形 %d,%d,%d,%d 内找不到"100%% 与 0%% 明显不同"的像素 '
               '(浮层没画出来？矩形给错了？)' % (rx, ry, rw, rh))
         return 1
-    _, sx, sy = best
-    O, M, H = at(po, sx, sy), at(pm, sx, sy), at(ph, sx, sy)
 
-    # ---- 判据 1：pct% 时该点确实处在 O 与 H 之间（透了一点，但没全透）----
-    moved = sum(abs(M[c] - H[c]) for c in range(3))
-    full = sum(abs(O[c] - H[c]) for c in range(3))
-    if moved > 0 and moved < full:
-        print('OK   pct=%g 时取样点 (%d,%d) 介于不透明与全透之间：%s → %s → %s'
-              % (pct, sx, sy, O, M, H))
-    else:
-        print('FAIL pct=%g 时取样点 (%d,%d) 不在 O 与 H 之间：O=%s M=%s H=%s'
-              % (pct, sx, sy, O, M, H))
+    want = pct / 100.0
+
+    # ---- 判据 1（核心）：底板像素的中位比值 == pct/100 ----
+    med = median(ratios)
+    ok = med is not None and abs(med - want) <= tol
+    print('%s 底板透过比中位数 |M−H|/|O−H| = %.4f（期望 %.4f ±%.2f，'
+          '变化像素 %d 个）'
+          % ('OK  ' if ok else 'FAIL', med if med is not None else -1,
+             want, tol, changed))
+    if not ok:
         fails += 1
 
-    # ---- 判据 2（核心）：|M−H| / |O−H| == pct/100 ----
-    # 取 |O−H| 最大的通道算比值（量纲最大、舍入影响最小）
-    ci = max(range(3), key=lambda c: abs(O[c] - H[c]))
-    denom = abs(O[ci] - H[ci])
-    ratio = abs(M[ci] - H[ci]) / denom if denom else 0.0
-    want = pct / 100.0
-    ok = abs(ratio - want) <= tol
-    print('%s 混合比 |M−H|/|O−H| = %.4f（期望 %.4f ±%.2f，通道 %s）'
-          % ('OK  ' if ok else 'FAIL', ratio, want, tol, 'RGB'[ci]))
-    if not ok:
+    # ---- 判据 2：前景（文字/图标）保持清晰 ----
+    #   前景**不参与线性淡出** ⇒ 它在 100% 与 pct% 两张图上应当**逐像素未变**。
+    #   口径 a（主判据）：M == O 且 O != H —— 覆盖**纯色**前景
+    #     （C 侧 rline 画的图标、Qt 1.8px 宽的矢量笔画）。
+    #     实测判别力：C 右栏正向 92 个 / 把前景一起淡掉后 **0 个**。
+    #   口径 b（仅在 --fgrect 明确框出前景时启用）：|e75| / |e100| > (1+k)/2，
+    #     e = 像素与"0% 时的底图"的差。
+    #     —— 覆盖**抗锯齿**前景（14px 中文笔画没有 coverage=1 的纯色核，
+    #     口径 a 数不到；实测 Qt 搜索按钮「搜索」二字：正向 111 个 /
+    #     文字被淡后 39 个）。
+    #     ★ 口径 b 必须框准前景区域才有判别力：不框的话它在底板边缘有 129 个
+    #       纯噪声（注入前后 129 vs 130，完全无判别力）。
+    fg = 0
+    fg_total = 0
+    thr = (1.0 + want) / 2.0
+    use_b = fgrect is not None
+    for y in range(fy, min(fy + fh, h1)):
+        for x in range(fx, min(fx + fw, w1)):
+            i = 3 * (y * w1 + x)
+            O = (po[i], po[i + 1], po[i + 2])
+            M = (pm[i], pm[i + 1], pm[i + 2])
+            H = (ph[i], ph[i + 1], ph[i + 2])
+            if O == H:
+                continue                       # 没被浮层覆盖，与前景无关
+            fg_total += 1
+            if M == O:
+                fg += 1                       # (a) 逐像素未变
+                continue
+            if not use_b:
+                continue
+            e100 = abs(O[0] - H[0]) + abs(O[1] - H[1]) + abs(O[2] - H[2])
+            if e100 < 20:
+                continue
+            e75 = abs(M[0] - H[0]) + abs(M[1] - H[1]) + abs(M[2] - H[2])
+            if e75 / e100 > thr:
+                fg += 1                       # (b) 偏离量没按比例缩小
+    need = fg_min if fg_min > 0 else 60
+    if not check_fg:
+        print('SKIP 前景判据（--fg=0：这个浮层在本图里没有前景可验）')
+    elif fg >= need:
+        print('OK   前景（文字/图标）保持清晰：%d/%d 个像素未被淡（>= %d%s）'
+              % (fg, fg_total, need,
+                 '，含抗锯齿口径' if use_b else ''))
+    else:
+        print('FAIL 前景（文字/图标）没有保持清晰：未被淡的像素只有 %d/%d 个'
+              '（需要 >= %d）—— 文字/图标被一起淡掉了？' % (fg, fg_total, need))
         fails += 1
 
     # ---- 判据 3：逐浮层独立 —— 矩形外一个像素都不许变 ----

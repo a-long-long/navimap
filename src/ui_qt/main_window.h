@@ -59,6 +59,7 @@ public:
     void setDatum(int id);
     void updateDatumTip();             /* 刷新坐标网按钮悬停提示里的"当前坐标系" */
     void applyOverlayAlpha();          /* 把 App::ovl_alpha 作用到本前端的浮层上 */
+    QString trackPanelStyle(int pct) const; /* 轨迹面板样式表：底板按 pct 淡、文字不透明 */
     void showOverlayAlphaDialog();     /*「浮层透明度…」对话框：每个浮层一根滑杆 */
 
     /* ---- GPX 轨迹 / 收藏 ----
@@ -137,6 +138,7 @@ private:
     QWidget      *m_trackPanel = nullptr;
     QWidget      *m_trackRows  = nullptr;   /* 滚动区里的行容器（每条轨迹/收藏一行） */
     QToolButton  *m_trackBtn   = nullptr;   /* 右栏「轨迹」按钮（可勾选，亮起=面板开） */
+    bool          m_trackPanelOpen = false;  /* 轨迹面板是否"逻辑上打开"（0% 时不真的显示） */
     QString       m_lastPick;            /* 最近一次选中的地点（按钮提示用） */
     int           m_step_count = -1;     /* 步骤面板增量刷新哨兵 */
 };
