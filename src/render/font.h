@@ -30,6 +30,11 @@ const char *font_default_path(void);
 void font_draw(Font *f, Raster *rs, int x, int y,
                const char *utf8, uint8_t cr, uint8_t cg, uint8_t cb,
                int shadow);
+/* 同上，但整行再乘一个 alpha（浮层半透明用：底板与文字一起淡）。
+   a=255 与 font_draw 完全等价。 */
+void font_draw_a(Font *f, Raster *rs, int x, int y,
+                 const char *utf8, uint8_t cr, uint8_t cg, uint8_t cb,
+                 int shadow, uint8_t a);
 
 /* 文本像素宽度（含字间距，不含阴影偏移） */
 int font_text_w(Font *f, const char *utf8);

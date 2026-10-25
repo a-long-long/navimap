@@ -108,20 +108,45 @@ static void layout(App *a, CLay *L)
 
 /* ===================== 小工具 ===================== */
 
+/* ---- 浮层透明度 ----
+ * 每个元素（标题栏 / 顶栏 / 右栏 / …）有自己的 alpha（百分比 → 0~255，
+ * 存在 App::ovl_alpha[]，默认 75%）。绘制前调 ovl_begin() 设好系数，
+ * 之后 rfill/rstroke/rline/rtext/rpoint 全部按它缩放 ⇒ **整块一起半透明**
+ * （底板 + 描边 + 图标 + 文字），而不是只把底板调淡——只淡底板会变成
+ * "实心字浮在屏幕上"的鬼影，比不透明更难看。
+ * ★ 不这么做就要给每个元素开离屏缓冲再合成，1280×800 下每帧十几次
+ *   malloc + 合成，成本远高于"画的时候顺手乘一下"。 */
+static double g_ovl_k = 1.0;          /* 当前元素的 alpha 系数 0..1 */
+static void ovl_begin(const App *a, NmOverlay id)
+{
+    g_ovl_k = app_ovl_a(a, id) / 255.0;
+}
+static uint8_t ak(uint8_t a) { return (uint8_t)(a * g_ovl_k + 0.5); }
+
 static void rfill(Raster *rs, int x, int y, int w, int h,
                   uint8_t cr, uint8_t cg, uint8_t cb, uint8_t ca)
 {
-    raster_fill_rect(rs, x, y, w, h, cr, cg, cb, ca);
+    raster_fill_rect(rs, x, y, w, h, cr, cg, cb, ak(ca));
 }
 static void rstroke(Raster *rs, int x, int y, int w, int h,
                     uint8_t cr, uint8_t cg, uint8_t cb, uint8_t ca)
 {
-    raster_rect(rs, x, y, w, h, cr, cg, cb, ca);
+    raster_rect(rs, x, y, w, h, cr, cg, cb, ak(ca));
 }
 static void rline(Raster *rs, int x0, int y0, int x1, int y1,
                   uint8_t cr, uint8_t cg, uint8_t cb)
 {
-    raster_line_rgba(rs, x0, y0, x1, y1, cr, cg, cb, 255);
+    raster_line_rgba(rs, x0, y0, x1, y1, cr, cg, cb, ak(255));
+}
+/* 文字同样按当前元素的 alpha 淡出（font_draw_a 的 a=255 与原 font_draw 等价）。 */
+static void rtext(Font *f, Raster *rs, int x, int y, const char *t,
+                  uint8_t cr, uint8_t cg, uint8_t cb, int shadow)
+{
+    font_draw_a(f, rs, x, y, t, cr, cg, cb, shadow, ak(255));
+}
+static void rpoint(Raster *rs, int x, int y, uint8_t cr, uint8_t cg, uint8_t cb)
+{
+    raster_px_rgba(rs, x, y, cr, cg, cb, ak(255));
 }
 
 /* ===================== 夜间蒙版 ===================== */
@@ -153,8 +178,9 @@ const char *chrome_menu_label(int i)
 
 static void draw_titlebar(Raster *rs, App *a, const CLay *L)
 {
+    ovl_begin(a, OVL_TITLE);
     rfill(rs, L->title.x, L->title.y, L->title.w, L->title.h, 28, 36, 56, 255);
-    if (a->font) font_draw(a->font, rs, 10, L->title.y + 6, "NavMap", 235, 240, 250, 0);
+    if (a->font) rtext(a->font, rs, 10, L->title.y + 6, "NavMap", 235, 240, 250, 0);
     /* 三个窗口按钮：红/黄/绿 小圆点（mac 风，跨平台通用） */
     const RectI *bs[3] = { &L->wclose, &L->wmax, &L->wmin };
     uint8_t col[3][3] = { {233,84,72}, {240,192,72}, {76,200,96} };
@@ -166,6 +192,7 @@ static void draw_titlebar(Raster *rs, App *a, const CLay *L)
 
 static void draw_topbar(Raster *rs, App *a, const CLay *L)
 {
+    ovl_begin(a, OVL_TOPBAR);
     rfill(rs, L->topbar.x, L->topbar.y, L->topbar.w, L->topbar.h, 245, 247, 250, 250);
     rstroke(rs, L->topbar.x, L->topbar.y + L->topbar.h - 1, L->topbar.w, 1, 200, 206, 214, 255);
 
@@ -180,7 +207,7 @@ static void draw_topbar(Raster *rs, App *a, const CLay *L)
         rfill(rs, L->search.x, L->search.y, L->search.w, L->search.h, 255, 255, 255, 255);
         rstroke(rs, L->search.x, L->search.y, L->search.w, L->search.h, 180, 188, 200, 255);
         if (a->font)
-            font_draw(a->font, rs, L->search.x + 10, L->search.y + 8,
+            rtext(a->font, rs, L->search.x + 10, L->search.y + 8,
                       "搜索地点、道路…", 150, 156, 168, 0);
     }
 
@@ -193,13 +220,14 @@ static void draw_topbar(Raster *rs, App *a, const CLay *L)
         if (on[i]) rfill(rs, tabs[i].x, tabs[i].y, tabs[i].w, tabs[i].h, 60, 110, 220, 255);
         else       rstroke(rs, tabs[i].x, tabs[i].y, tabs[i].w, tabs[i].h, 150, 160, 178, 255);
         if (a->font)
-            font_draw(a->font, rs, tabs[i].x + 22, tabs[i].y + 9, lab[i],
+            rtext(a->font, rs, tabs[i].x + 22, tabs[i].y + 9, lab[i],
                       on[i] ? 255 : 90, on[i] ? 255 : 100, on[i] ? 255 : 120, 0);
     }
 }
 
 static void draw_rcol(Raster *rs, App *a, const CLay *L)
 {
+    ovl_begin(a, OVL_RCOL);
     RectI bs[4] = { L->zin, L->zout, L->loc, L->day };
     for (int i = 0; i < 4; i++)
         rfill(rs, bs[i].x, bs[i].y, bs[i].w, bs[i].h, 250, 251, 253, 245);
@@ -214,10 +242,9 @@ static void draw_rcol(Raster *rs, App *a, const CLay *L)
     rline(rs, L->zout.x + 10, L->zout.y + BTN/2, L->zout.x + BTN-10, L->zout.y + BTN/2, 40, 50, 70);
     /* 定位：圆环 + 中心点 */
     int lcx = L->loc.x + BTN/2, lcy = L->loc.y + BTN/2;
-    uint32_t loc_c = raster_rgb(rs, 40, 50, 70);
     for (int t = 0; t < 360; t += 12)
-        raster_point(rs, (int)(lcx + 11*cos(t*M_PI/180.0)),
-                          (int)(lcy + 11*sin(t*M_PI/180.0)), loc_c);
+        rpoint(rs, (int)(lcx + 11*cos(t*M_PI/180.0)),
+                    (int)(lcy + 11*sin(t*M_PI/180.0)), 40, 50, 70);
     rfill(rs, lcx-3, lcy-3, 6, 6, 40, 50, 70, 255);
     /* 昼夜：日(黄)/夜(蓝) 圆 */
     if (a->day_night) rfill(rs, L->day.x + BTN/2 - 11, L->day.y + BTN/2 - 11, 22, 22, 60, 90, 200, 255);
@@ -226,6 +253,7 @@ static void draw_rcol(Raster *rs, App *a, const CLay *L)
 
 static void draw_navtop(Raster *rs, App *a, const CLay *L)
 {
+    ovl_begin(a, OVL_NAVTOP);
     if (!a->have_rr) return;
     rfill(rs, L->navtop.x, L->navtop.y, L->navtop.w, L->navtop.h, 30, 90, 200, 255);
     rfill(rs, L->nback.x, L->nback.y, L->nback.w, L->nback.h, 255, 255, 255, 255);
@@ -239,23 +267,25 @@ static void draw_navtop(Raster *rs, App *a, const CLay *L)
             snprintf(dst, sizeof(dst), "到 终点 (%.4f, %.4f)", a->pick_b.lat, a->pick_b.lon);
         else
             snprintf(dst, sizeof(dst), "导航中");
-        font_draw(a->font, rs, L->nex.x + 34, L->navtop.y + 9, dst, 255, 255, 255, 0);
+        rtext(a->font, rs, L->nex.x + 34, L->navtop.y + 9, dst, 255, 255, 255, 0);
     }
 }
 
 static void draw_navbottom(Raster *rs, App *a, const CLay *L)
 {
+    ovl_begin(a, OVL_NAVBOTTOM);
     (void)L;
     /* 偏航重算中 → 顶部弹出"重新规划中…" */
     if (!(a->sim_on && a->sim_paused && a->nav_busy && a->have_rr)) return;
     if (!a->font) return;
     int bw = 200, bh = 30, bx = (L->w - bw)/2, by = TH_TITLE + TH_TOP + 6;
     rfill(rs, bx, by, bw, bh, 232, 150, 40, 240);
-    font_draw(a->font, rs, bx + 30, by + 6, "重新规划中…", 255, 255, 255, 0);
+    rtext(a->font, rs, bx + 30, by + 6, "重新规划中…", 255, 255, 255, 0);
 }
 
 static void draw_steps(Raster *rs, App *a, const CLay *L)
 {
+    ovl_begin(a, OVL_STEPS);
     if (!a->have_rr || a->man.n == 0) return;
     int x = L->steps.x, y = L->steps.y, w = L->steps.w, h = L->steps.h;
     rfill(rs, x, y, w, h, 250, 251, 253, 246);
@@ -271,7 +301,7 @@ static void draw_steps(Raster *rs, App *a, const CLay *L)
         int ry = y + 4 + i * row_h;
         /* 同类指令用分隔感：奇数行浅底 */
         if (i & 1) rfill(rs, x + 2, ry, w - 4, row_h - 2, 238, 242, 248, 255);
-        font_draw(a->font, rs, x + 8, ry, t, 36, 42, 56, 0);
+        rtext(a->font, rs, x + 8, ry, t, 36, 42, 56, 0);
     }
 }
 
@@ -279,6 +309,7 @@ static void draw_steps(Raster *rs, App *a, const CLay *L)
  * 是否收费或走非铺装路，选中方案高亮。点击某行即切到该方案（chrome_act 派发）。 */
 static void draw_alts(Raster *rs, App *a, const CLay *L)
 {
+    ovl_begin(a, OVL_ALTS);
     if (!a->have_alts || L->alts.w == 0) return;
     int nfeas = 0;
     for (int k = 0; k < a->ralts.n; k++)
@@ -289,7 +320,7 @@ static void draw_alts(Raster *rs, App *a, const CLay *L)
     rfill(rs, x, y, w, h, 250, 251, 253, 248);
     rstroke(rs, x, y, w, h, 150, 158, 172, 255);
     if (a->font)
-        font_draw(a->font, rs, x + 12, y + 4, "备选方案（点击切换 / 按 1-4）", 40, 46, 60, 0);
+        rtext(a->font, rs, x + 12, y + 4, "备选方案（点击切换 / 按 1-4）", 40, 46, 60, 0);
 
     int rowh = 34, ry = y + 22;
     for (int k = 0; k < a->ralts.n; k++) {
@@ -299,18 +330,18 @@ static void draw_alts(Raster *rs, App *a, const CLay *L)
         else if (((k) & 1) == 0) rfill(rs, x + 2, ry, w - 4, rowh - 2, 240, 243, 248, 255);
         if (a->font) {
             int cy = ry + 4;
-            font_draw(a->font, rs, x + 10, cy, a->ralts.tag[k], sel ? 24 : 36, 42, 56, 0);
+            rtext(a->font, rs, x + 10, cy, a->ralts.tag[k], sel ? 24 : 36, 42, 56, 0);
             char buf[64];
             snprintf(buf, sizeof(buf), "约 %.0f 分 · %.1f 公里",
                      a->ralts.total_s[k] / 60.0, a->ralts.total_m[k] / 1000.0);
-            font_draw(a->font, rs, x + 10, cy + 18, buf, 90, 96, 110, 0);
+            rtext(a->font, rs, x + 10, cy + 18, buf, 90, 96, 110, 0);
             /* 特征标记：收费 / 非铺装 */
             int mx = x + w - 12;
             if (a->ralts.unpaved_m[k] > 0) {
-                font_draw(a->font, rs, mx - 72, cy + 4, "非铺装", 150, 90, 40, 0);
+                rtext(a->font, rs, mx - 72, cy + 4, "非铺装", 150, 90, 40, 0);
             }
             if (a->ralts.toll_m[k] > 0) {
-                font_draw(a->font, rs, mx - 36, cy + 4, "收费", 180, 60, 50, 0);
+                rtext(a->font, rs, mx - 36, cy + 4, "收费", 180, 60, 50, 0);
             }
         }
         ry += rowh;
@@ -319,6 +350,7 @@ static void draw_alts(Raster *rs, App *a, const CLay *L)
 
 static void draw_menu(Raster *rs, App *a, const CLay *L)
 {
+    ovl_begin(a, OVL_MENU);
     if (!a->menu_open) return;
     int x = L->menu.x, y = L->menu.y, w = L->menu.w, h = L->menu.h;
     rfill(rs, x, y, w, h, 252, 253, 255, 252);
@@ -329,27 +361,29 @@ static void draw_menu(Raster *rs, App *a, const CLay *L)
         int ry = y + 4 + i * 30;
         if (i == a->chrome_menu_item)
             rfill(rs, x + 2, ry, w - 4, 28, 214, 228, 250, 255);
-        font_draw(a->font, rs, x + 14, ry + 6, MENU_ITEMS[i], 40, 46, 60, 0);
+        rtext(a->font, rs, x + 14, ry + 6, MENU_ITEMS[i], 40, 46, 60, 0);
     }
 }
 
 static void draw_nomap(Raster *rs, App *a, const CLay *L)
 {
+    ovl_begin(a, OVL_NOMAP);
     (void)L;
     if (a->ms.n != 0) return;     /* 仅图集完全没加载时显示 */
     int w = 360, h = 96, x = (L->w - w)/2, y = (L->h - h)/2;
     rfill(rs, x, y, w, h, 252, 253, 255, 250);
     rstroke(rs, x, y, w, h, 230, 120, 90, 255);
     if (!a->font) return;
-    font_draw(a->font, rs, x + 20, y + 16, "未加载地图数据", 200, 70, 50, 0);
-    font_draw(a->font, rs, x + 20, y + 44,
+    rtext(a->font, rs, x + 20, y + 16, "未加载地图数据", 200, 70, 50, 0);
+    rtext(a->font, rs, x + 20, y + 44,
               "把 *.osm.pbf 放进 sources/ 后运行", 90, 96, 110, 0);
-    font_draw(a->font, rs, x + 20, y + 66,
+    rtext(a->font, rs, x + 20, y + 66,
               "scripts/sync_maps.sh", 90, 96, 110, 0);
 }
 
 static void draw_scale(Raster *rs, App *a, const CLay *L)
 {
+    ovl_begin(a, OVL_SCALE);
     /* 每像素米数（赤道周长 × cos(lat) / 像素/世界）。
        scale = 256 * 2^zoom 像素/世界；世界赤道周长 ≈ 40075016.686 m。 */
     double mpp = (40075016.686 * cos(a->view.lat * M_PI / 180.0)) /
@@ -373,27 +407,27 @@ static void draw_scale(Raster *rs, App *a, const CLay *L)
         char buf[32];
         if (dist >= 1000.0) snprintf(buf, sizeof(buf), "%.1f 公里", dist/1000.0);
         else                snprintf(buf, sizeof(buf), "%.0f 米", dist);
-        font_draw(a->font, rs, x, y - 2, buf, 30, 36, 48, 0);
+        rtext(a->font, rs, x, y - 2, buf, 30, 36, 48, 0);
     }
 }
 
 static void draw_compass(Raster *rs, App *a, const CLay *L)
 {
+    ovl_begin(a, OVL_COMPASS);
     if (a->view.rot == 0.0) return;
     int cx = L->compass.x + L->compass.w/2;
     int cy = L->compass.y + L->compass.h/2;
     int R = 18;
     /* 外圈 */
-    uint32_t cc = raster_rgb(rs, 70, 80, 100);
     for (int t = 0; t < 360; t += 8)
-        raster_point(rs, (int)(cx + R*cos(t*M_PI/180.0)),
-                          (int)(cy + R*sin(t*M_PI/180.0)), cc);
+        rpoint(rs, (int)(cx + R*cos(t*M_PI/180.0)),
+                    (int)(cy + R*sin(t*M_PI/180.0)), 70, 80, 100);
     /* N 指针：指向屏幕角 rot（顺时针） */
     double ang = a->view.rot * M_PI / 180.0;
     int nx = (int)(cx + R * sin(ang));
     int ny = (int)(cy - R * cos(ang));
     rline(rs, cx, cy, nx, ny, 210, 60, 50);
-    if (a->font) font_draw(a->font, rs, nx - 4, ny - 12, "N", 210, 60, 50, 0);
+    if (a->font) rtext(a->font, rs, nx - 4, ny - 12, "N", 210, 60, 50, 0);
 }
 
 void paint_chrome(Raster *rs, App *a)
@@ -544,11 +578,17 @@ void chrome_act(App *a, int id, int x, int y)
 
 /* ===================== 设置面板（完整设置系统） ===================== */
 
+/* 前向声明：主面板与浮层透明度子面板互相调用（谁先定义都得能编过）。 */
+static void draw_ovl_panel(Raster *rs, App *a);
+static int  ovl_hit(App *a, int x, int y);
+static void chrome_act_ovl(App *a);
+
 /* 面板整体矩形 */
 static void settings_panel_rect(const App *a, RectI *panel)
 {
     int W = 380;
-    int H = 40 + SETTINGS_SCHEMA_N * 34 + 52;
+    /* +1 行：末尾那行「浮层透明度…」是打开子面板的入口，不在 schema 里 */
+    int H = 40 + (SETTINGS_SCHEMA_N + 1) * 34 + 52;
     panel->x = (a->view.w - W) / 2;
     panel->y = (a->view.h - H) / 2;
     panel->w = W; panel->h = H;
@@ -590,50 +630,63 @@ static void settings_footer_rects(const RectI *panel, RectI *reset, RectI *close
 static void draw_settings_panel(Raster *rs, App *a)
 {
     if (!a->settings_open || !a->cfg) return;
+    ovl_begin(a, OVL_SETTINGS);
+    if (a->settings_ovl) { draw_ovl_panel(rs, a); return; }
     RectI panel; settings_panel_rect(a, &panel);
     rfill(rs, panel.x, panel.y, panel.w, panel.h, 250, 251, 253, 252);
     rstroke(rs, panel.x, panel.y, panel.w, panel.h, 120, 128, 144, 255);
     if (!a->font) return;
-    font_draw(a->font, rs, panel.x + 14, panel.y + 12, "设置", 30, 36, 48, 0);
+    rtext(a->font, rs, panel.x + 14, panel.y + 12, "设置", 30, 36, 48, 0);
 
     for (int i = 0; i < SETTINGS_SCHEMA_N; i++) {
         const SettingMeta *m = &SETTINGS_SCHEMA[i];
         RectI row; settings_row_rect(&panel, i, &row);
         int ry = row.y + 6;
-        font_draw(a->font, rs, row.x + 4, ry, m->label, 40, 46, 60, 0);
+        rtext(a->font, rs, row.x + 4, ry, m->label, 40, 46, 60, 0);
 
         RectI l, r; settings_control_rects(&row, m->type == ST_BOOL, &l, &r);
         if (m->type == ST_BOOL) {
             int on = settings_get_bool(a->cfg, m->key, (int)m->def);
             rfill(rs, l.x, l.y, l.w, l.h, on ? 200 : 96, on ? 205 : 150, on ? 215 : 160, 255);
             rfill(rs, r.x, r.y, r.w, r.h, on ? 96 : 200, on ? 150 : 205, on ? 160 : 215, 255);
-            font_draw(a->font, rs, l.x + l.w/2 - 8,  l.y + 5, "关", on?140:255, on?140:255, on?140:255, 0);
-            font_draw(a->font, rs, r.x + r.w/2 - 8,  r.y + 5, "开", on?255:140, on?255:140, on?255:140, 0);
+            rtext(a->font, rs, l.x + l.w/2 - 8,  l.y + 5, "关", on?140:255, on?140:255, on?140:255, 0);
+            rtext(a->font, rs, r.x + r.w/2 - 8,  r.y + 5, "开", on?255:140, on?255:140, on?255:140, 0);
         } else {
             int cur = settings_get_int(a->cfg, m->key, (int)m->def);
             rfill(rs, l.x, l.y, l.w, l.h, 150, 160, 175, 255);
             rfill(rs, r.x, r.y, r.w, r.h, 150, 160, 175, 255);
-            font_draw(a->font, rs, l.x + 9, l.y + 4, "-", 40, 40, 40, 0);
-            font_draw(a->font, rs, r.x + 8, r.y + 4, "+", 40, 40, 40, 0);
+            rtext(a->font, rs, l.x + 9, l.y + 4, "-", 40, 40, 40, 0);
+            rtext(a->font, rs, r.x + 8, r.y + 4, "+", 40, 40, 40, 0);
             char val[64];
             if (m->opts) snprintf(val, sizeof(val), "%s",
                                   m->opts + (cur ? (int)strlen(m->opts) + 1 : 0));
             else         snprintf(val, sizeof(val), "%d", cur);
-            font_draw(a->font, rs, l.x + l.w + 8, ry, val, 40, 46, 60, 0);
+            rtext(a->font, rs, l.x + l.w + 8, ry, val, 40, 46, 60, 0);
         }
+    }
+
+    /* 末行：浮层透明度（逐浮层设置，进子面板）。
+     * 16 个浮层塞进主面板会把面板撑到 800+ px（小窗口直接出屏）⇒ 单独开一页。 */
+    {
+        RectI row; settings_row_rect(&panel, SETTINGS_SCHEMA_N, &row);
+        rtext(a->font, rs, row.x + 4, row.y + 6, "浮层透明度…", 40, 46, 60, 0);
+        RectI l, r; settings_control_rects(&row, 0, &l, &r);
+        rfill(rs, l.x - 44, l.y, 108, l.h, 90, 130, 210, 255);
+        rtext(a->font, rs, l.x - 44 + 30, l.y + 4, "逐个设置", 255, 255, 255, 0);
     }
 
     RectI reset, close; settings_footer_rects(&panel, &reset, &close);
     rfill(rs, reset.x, reset.y, reset.w, reset.h, 220, 90, 80, 255);
     rfill(rs, close.x, close.y, close.w, close.h, 90, 130, 210, 255);
-    font_draw(a->font, rs, reset.x + reset.w/2 - 24, reset.y + 7, "重置全部", 255, 255, 255, 0);
-    font_draw(a->font, rs, close.x + close.w/2 - 16, close.y + 7, "关闭",    255, 255, 255, 0);
+    rtext(a->font, rs, reset.x + reset.w/2 - 24, reset.y + 7, "重置全部", 255, 255, 255, 0);
+    rtext(a->font, rs, close.x + close.w/2 - 16, close.y + 7, "关闭",    255, 255, 255, 0);
 }
 
 /* 设置面板命中：settings_open 时优先处理面板，吞掉地图平移。 */
 static int settings_hit(App *a, int x, int y)
 {
     if (!a->settings_open) return CH_NONE;
+    if (a->settings_ovl) return ovl_hit(a, x, y);
     RectI panel; settings_panel_rect(a, &panel);
     if (!IN(panel, x, y)) {
         /* 点在面板外：关闭面板并吞掉这次点击（不当成地图操作） */
@@ -643,11 +696,12 @@ static int settings_hit(App *a, int x, int y)
     RectI reset, close; settings_footer_rects(&panel, &reset, &close);
     if (IN(reset, x, y)) { a->settings_row = -2; a->settings_btn = 0; return CH_SETTINGS; }
     if (IN(close, x, y)) { a->settings_row = -1; a->settings_btn = 0; return CH_SETTINGS; }
-    for (int i = 0; i < SETTINGS_SCHEMA_N; i++) {
+    for (int i = 0; i < SETTINGS_SCHEMA_N + 1; i++) {
         RectI row; settings_row_rect(&panel, i, &row);
         if (IN(row, x, y)) {
-            RectI l, r; settings_control_rects(&row, SETTINGS_SCHEMA[i].type == ST_BOOL, &l, &r);
             a->settings_row = i;
+            if (i == SETTINGS_SCHEMA_N) { a->settings_btn = 2; return CH_SETTINGS; }
+            RectI l, r; settings_control_rects(&row, SETTINGS_SCHEMA[i].type == ST_BOOL, &l, &r);
             if (IN(l, x, y))      a->settings_btn = 0;
             else if (IN(r, x, y)) a->settings_btn = 1;
             else                  a->settings_btn = 2;
@@ -662,6 +716,13 @@ static int settings_hit(App *a, int x, int y)
 void chrome_act_settings(App *a)
 {
     if (!a->cfg) { a->settings_open = 0; a->need_redraw = 1; return; }
+    if (a->settings_ovl) { chrome_act_ovl(a); return; }
+    if (a->settings_row == SETTINGS_SCHEMA_N) {   /* 「浮层透明度…」→ 开子面板 */
+        a->settings_ovl = 1;
+        a->settings_row = -1;
+        a->need_redraw = 1;
+        return;
+    }
     if (a->settings_row >= 0 && a->settings_row < SETTINGS_SCHEMA_N) {
         const SettingMeta *m = &SETTINGS_SCHEMA[a->settings_row];
         if (m->type == ST_BOOL) {
@@ -692,6 +753,119 @@ void chrome_act_settings(App *a)
         a->need_redraw = 1;
     } else { /* -1 或越界：关闭面板 */
         a->settings_open = 0;
+        a->settings_ovl  = 0;
         a->need_redraw = 1;
     }
+}
+
+/* ===================== 浮层透明度子面板 =====================
+ * 16 个浮层各一行：− / 百分比 / +（步 5%）。
+ * ★ 本前端不画的浮层（ovl_frontends() 里没有 OVL_FE_C，例如只有 Qt 才有的
+ *   「轨迹/收藏面板」）标灰并注明"Qt 前端" —— 值照样存（换前端就生效），
+ *   但在这儿调它不会有视觉变化，不标出来用户会以为坏了。 */
+#define OVL_ROW_H 28
+
+static void ovl_panel_rect(const App *a, RectI *panel)
+{
+    int W = 380;
+    int H = 40 + ovl_count() * OVL_ROW_H + 52;
+    if (H > a->view.h - 20) H = a->view.h - 20;
+    if (H < 120) H = 120;
+    panel->x = (a->view.w - W) / 2;
+    panel->y = (a->view.h - H) / 2;
+    panel->w = W; panel->h = H;
+}
+
+static void ovl_row_rect(const RectI *panel, int i, RectI *row)
+{
+    row->x = panel->x + 12;
+    row->y = panel->y + 40 + i * OVL_ROW_H;
+    row->w = panel->w - 24;
+    row->h = OVL_ROW_H - 2;
+}
+
+static void ovl_control_rects(const RectI *row, RectI *l, RectI *r)
+{
+    int vx = row->x + row->w - 120, vy = row->y + 1, vw = 108, vh = 22;
+    l->x = vx;            l->y = vy; l->w = 28;      l->h = vh;
+    r->x = vx + vw - 28;  r->y = vy; r->w = 28;      r->h = vh;
+}
+
+static void draw_ovl_panel(Raster *rs, App *a)
+{
+    RectI panel; ovl_panel_rect(a, &panel);
+    rfill(rs, panel.x, panel.y, panel.w, panel.h, 250, 251, 253, 252);
+    rstroke(rs, panel.x, panel.y, panel.w, panel.h, 120, 128, 144, 255);
+    rtext(a->font, rs, panel.x + 14, panel.y + 12, "浮层透明度（%）", 30, 36, 48, 0);
+
+    int vis = (panel.h - 92) / OVL_ROW_H;         /* 窗口矮时能显示几行 */
+    if (vis > ovl_count()) vis = ovl_count();
+    for (int i = 0; i < vis; i++) {
+        RectI row; ovl_row_rect(&panel, i, &row);
+        int on = (ovl_frontends((NmOverlay)i) & OVL_FE_C) != 0;
+        rtext(a->font, rs, row.x + 4, row.y + 5, ovl_label((NmOverlay)i),
+              on ? 40 : 150, on ? 46 : 152, on ? 60 : 164, 0);
+        if (!on) {
+            rtext(a->font, rs, row.x + 110, row.y + 5, "（Qt 前端）",
+                  170, 172, 180, 0);
+            continue;                              /* 本前端没有 ⇒ 不给按钮 */
+        }
+        RectI l, r; ovl_control_rects(&row, &l, &r);
+        rfill(rs, l.x, l.y, l.w, l.h, 150, 160, 175, 255);
+        rfill(rs, r.x, r.y, r.w, r.h, 150, 160, 175, 255);
+        rtext(a->font, rs, l.x + 9, l.y + 3, "-", 40, 40, 40, 0);
+        rtext(a->font, rs, r.x + 8, r.y + 3, "+", 40, 40, 40, 0);
+        char val[32];
+        snprintf(val, sizeof(val), "%d", a->ovl_alpha[i]);
+        rtext(a->font, rs, l.x + l.w + 8, row.y + 5, val, 40, 46, 60, 0);
+    }
+
+    RectI reset, close; settings_footer_rects(&panel, &reset, &close);
+    rfill(rs, reset.x, reset.y, reset.w, reset.h, 220, 90, 80, 255);
+    rfill(rs, close.x, close.y, close.w, close.h, 90, 130, 210, 255);
+    rtext(a->font, rs, reset.x + reset.w/2 - 24, reset.y + 7, "全部默认", 255, 255, 255, 0);
+    rtext(a->font, rs, close.x + close.w/2 - 16, close.y + 7, "返回",    255, 255, 255, 0);
+}
+
+static int ovl_hit(App *a, int x, int y)
+{
+    RectI panel; ovl_panel_rect(a, &panel);
+    if (!IN(panel, x, y)) { a->ovl_row = -1; a->ovl_btn = 0; return CH_SETTINGS; }
+    RectI reset, close; settings_footer_rects(&panel, &reset, &close);
+    if (IN(reset, x, y)) { a->ovl_row = -2; a->ovl_btn = 0; return CH_SETTINGS; }
+    if (IN(close, x, y)) { a->ovl_row = -1; a->ovl_btn = 0; return CH_SETTINGS; }
+    int vis = (panel.h - 92) / OVL_ROW_H;
+    if (vis > ovl_count()) vis = ovl_count();
+    for (int i = 0; i < vis; i++) {
+        RectI row; ovl_row_rect(&panel, i, &row);
+        if (!IN(row, x, y)) continue;
+        if (!(ovl_frontends((NmOverlay)i) & OVL_FE_C)) {
+            a->ovl_row = -1; a->ovl_btn = 2; return CH_SETTINGS;   /* 点了也没用 */
+        }
+        RectI l, r; ovl_control_rects(&row, &l, &r);
+        a->ovl_row = i;
+        if (IN(l, x, y))      a->ovl_btn = 0;
+        else if (IN(r, x, y)) a->ovl_btn = 1;
+        else                  a->ovl_btn = 2;
+        return CH_SETTINGS;
+    }
+    a->ovl_row = -1; a->ovl_btn = 2;
+    return CH_SETTINGS;
+}
+
+void chrome_act_ovl(App *a)
+{
+    if (a->ovl_row >= 0 && a->ovl_row < ovl_count()) {
+        int dir = (a->ovl_btn == 0) ? -1 : (a->ovl_btn == 1) ? 1 : 0;
+        if (dir) app_ovl_alpha_set(a, (NmOverlay)a->ovl_row,
+                                   ovl_step_pct(a->ovl_alpha[a->ovl_row], dir));
+        /* 行体点击（btn==2）不改值：面板上只有 −/+ 两个明确入口，
+           免得"想看一眼结果却改了设置"。 */
+    } else if (a->ovl_row == -2) {
+        app_ovl_alpha_reset(a);
+    } else {
+        a->settings_ovl = 0;
+    }
+    if (a->cfg) settings_save(a->cfg);
+    a->need_redraw = 1;
 }

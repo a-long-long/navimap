@@ -180,7 +180,8 @@ set(RENDER_SRCS
     src/render/labels.c
     src/render/trackdraw.c)
 set(UI_SRCS
-    src/ui/window.c)
+    src/ui/window.c
+    src/ui/overlay.c)
 
 # 阶段 1 叶子库：把 src/utils 按模块拆成 4 个独立 STATIC 库（字面补全阶段1）。
 # 依赖关系：mem → plat；geo / strpool / plat 为纯叶子（零内部依赖）。

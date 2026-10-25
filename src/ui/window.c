@@ -70,6 +70,9 @@ int app_init(App *a, const char *graph_dir, int w, int h,
         int dv = settings_get_int(a->cfg, "datum", 0);
         a->datum = (dv >= 0 && dv < DATUM_COUNT) ? dv : DATUM_WGS84;
     }
+    /* 浮层透明度：逐浮层从设置读（键缺失 ⇒ 默认 75%）。同样必须在这里读一遍，
+     * app_apply_settings 只服务 SDL 设置面板的「应用/恢复默认」。 */
+    ovl_load_all(a->cfg, a->ovl_alpha);
     a->sim_speed_idx = SIM_SPEED_DEFAULT;
     a->sim_follow = 1;
     /* 互斥量用平台抽象层（不直接碰 pthread / CRITICAL_SECTION）。
@@ -272,6 +275,7 @@ void app_apply_settings(App *a)
     a->datum = (dv >= 0 && dv < DATUM_COUNT) ? dv : DATUM_WGS84;
     int fs = settings_get_int(a->cfg, "font_size", 14);
     if (fs != a->font_size) app_set_font_size(a, fs);
+    ovl_load_all(a->cfg, a->ovl_alpha);
 }
 
 void app_persist_settings(App *a)
@@ -286,11 +290,32 @@ void app_persist_settings(App *a)
     settings_set_int(a->cfg,  "font_size",   a->font_size);
     settings_set_int(a->cfg,  "max_class",   a->max_class);
     settings_set_int(a->cfg,  "datum",       a->datum);
+    ovl_store_all(a->cfg, a->ovl_alpha);
     /* 视图位置：记住上次退出时所在（下次启动直接回到这里） */
     settings_set_dbl(a->cfg, "view_lat",  a->view.lat);
     settings_set_dbl(a->cfg, "view_lon",  a->view.lon);
     settings_set_dbl(a->cfg, "view_zoom", a->view.zoom);
     settings_save(a->cfg);
+}
+
+/* 改某个浮层的透明度（百分比）。UI（SDL 设置子面板 / Qt 对话框）统一走这里：
+ * 改 App + 立即写设置 + 标红重绘；真正落盘仍在 app_persist_settings。 */
+void app_ovl_alpha_set(App *a, NmOverlay id, int pct)
+{
+    if (!a || id < 0 || id >= OVL_COUNT) return;
+    int v = ovl_clamp_pct(pct);
+    if (a->ovl_alpha[id] == v) return;
+    a->ovl_alpha[id] = v;
+    if (a->cfg) settings_set_int(a->cfg, ovl_key(id), v);
+    a->need_redraw = 1;
+}
+
+/* 全部浮层恢复默认（75%）。 */
+void app_ovl_alpha_reset(App *a)
+{
+    if (!a) return;
+    for (int i = 0; i < OVL_COUNT; i++) app_ovl_alpha_set(a, (NmOverlay)i,
+                                                          OVL_ALPHA_DEFAULT);
 }
 
 /* ---------------------------------------------------------------------------
@@ -1122,7 +1147,8 @@ static void paint_frame(Raster *rs, App *a, PaintStats *st)
         paint_nav_panel(rs, a->have_rr ? &a->rr : NULL,
                         a->man.n ? &a->man : NULL, a->font,
                         a->font_size + 8, 12, 12, 6,
-                        a->nav_msg[0] ? a->nav_msg : NULL);
+                        a->nav_msg[0] ? a->nav_msg : NULL,
+                        app_ovl_a(a, OVL_NAVPANEL));
 
     /* 底部指令条：模拟导航时才出现（静止看路线时用左上角面板就够了） */
     if (a->sim_on && a->font && !a->qt_ui) {
@@ -1174,7 +1200,8 @@ static void paint_frame(Raster *rs, App *a, PaintStats *st)
         b.remain = b_rem; b.eta = b_eta;
         b.lanes = b_lanes; b.turn_dir = b_turn_dir;
         paint_nav_banner(rs, &a->view, a->font, a->font_big,
-                         a->font_size + 8, app_big_size(a->font_size) + 8, &b);
+                         a->font_size + 8, app_big_size(a->font_size) + 8, &b,
+                         app_ovl_a(a, OVL_NAVBANNER));
     }
 
     /* 搜索结果图钉（路网之上才看得见）。SDL 自绘搜索框只在无 Qt 前端时画。 */
@@ -1196,7 +1223,8 @@ static void paint_frame(Raster *rs, App *a, PaintStats *st)
         sb.show_max = 8;
         sb.elapsed_ms = (int)a->su.elapsed_ms;
         paint_search_box(rs, &a->view, a->font, a->font_big,
-                         a->font_size + 8, app_big_size(a->font_size) + 8, &sb);
+                         a->font_size + 8, app_big_size(a->font_size) + 8, &sb,
+                         app_ovl_a(a, OVL_SEARCH));
         }
     }
 
@@ -1204,7 +1232,8 @@ static void paint_frame(Raster *rs, App *a, PaintStats *st)
        被面板或按钮压住就失去意义了。 */
     app_update_coverage(a);
     if (a->cov_state == COV_NONE || a->cov_state == COV_BBOX_ONLY)
-        paint_nomap_banner(rs, &a->view, a->font, a->font_size + 8, a->cov_state);
+        paint_nomap_banner(rs, &a->view, a->font, a->font_size + 8, a->cov_state,
+                           app_ovl_a(a, OVL_NOMAP));
 
     /* nav-desktop 风格 chrome（自绘标题栏 / 顶栏 / 右栏 / 导航栏 /
        步骤面板 / 主菜单 / 无图卡片 / 比例尺 / 指北针 / 昼夜）叠在最上层；

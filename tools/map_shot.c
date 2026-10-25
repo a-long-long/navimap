@@ -27,6 +27,7 @@
 
 #include "ui/window.h"
 #include "map/gpx.h"        /* --gpx：导入轨迹/收藏后渲染（只进内存） */
+#include "ui/overlay.h"     /* --ovl-alpha：逐浮层透明度 */
 #include <time.h>
 #include "render/paint.h"
 #include "render/navdraw.h"
@@ -93,6 +94,46 @@ static long count_color_pixels(SDL_Surface *s, int cr, int cg, int cb)
             if (row[x] == want) n++;
     }
     return n;
+}
+
+/* 数"接近某颜色"的像素（每通道容差 tol）。
+ * 为什么需要：浮层现在是**半透明**的（默认 75%），它画在画面上的颜色是
+ * "原色 × alpha + 底图色 × (1−alpha)" —— 用原色精确计数会数到 0。
+ * 实测：无图提示横幅改成 75% 后 nomap_banner_px 从 3489 掉到 0，
+ * 7 个省（没数据的那 7 个）渲染用例一起假红。 */
+static long count_near_color_pixels(SDL_Surface *s, int cr, int cg, int cb, int tol)
+{
+    if (s->format->BitsPerPixel != 32) return -1;
+    long n = 0;
+    for (int y = 0; y < s->h; y++) {
+        Uint32 *row = (Uint32 *)((Uint8 *)s->pixels + (size_t)y * s->pitch);
+        for (int x = 0; x < s->w; x++) {
+            Uint8 r, g, b, al;
+            SDL_GetRGBA(row[x], s->format, &r, &g, &b, &al);
+            if (abs((int)r - cr) <= tol && abs((int)g - cg) <= tol &&
+                abs((int)b - cb) <= tol)
+                n++;
+        }
+    }
+    return n;
+}
+
+/* 数某个**浮层元素**的像素：按它当前的透明度算出与底图背景混合后的实际颜色。
+ * ★ 判据随用户设置走 —— 用户把该浮层调成 30%，这条也不会假红（而不是
+ *   反过来把"用户改了设置"判成回归）。 */
+static long count_overlay_pixels(SDL_Surface *s, int cr, int cg, int cb,
+                                 int intrinsic_a, int ovl_a)
+{
+    const int BG[3] = { 244, 241, 234 };      /* paint_background 的底色 */
+    /* 有效 alpha = 元素自身底色 alpha × 浮层透明度（两层都是 0~255）。
+     * ★ 只按浮层 alpha 算会错：横幅边框 (255,186,64) 是画在**横幅填充**之上的，
+     *   不是画在底图上的 ⇒ 按底图混合算出来的期望色根本不存在（实测数到 0）。
+     *   所以这里数的是**填充**（它才直接压在底图上）。 */
+    const double k = (intrinsic_a / 255.0) * (ovl_a / 255.0);
+    int er = (int)(cr * k + BG[0] * (1.0 - k) + 0.5);
+    int eg = (int)(cg * k + BG[1] * (1.0 - k) + 0.5);
+    int eb = (int)(cb * k + BG[2] * (1.0 - k) + 0.5);
+    return count_near_color_pixels(s, er, eg, eb, 8);
 }
 
 /* 把一帧渲进调用方的 SDL_Surface。
@@ -196,6 +237,9 @@ int main(int argc, char **argv)
     const char *dmap_demo = NULL;   /* --dmap-demo=<省>:<pct>：强制某省进入"解码中"占位态，用于截图验证 overlay */
     int dmap_demo_pct = 0;
     const char *gpx_in[8] = {0};    /* --gpx=<文件>：导入轨迹/收藏后渲染（可多次） */
+    int settings_ovl = 0;            /* --settings-ovl：出图前打开浮层透明度子面板 */
+    struct { NmOverlay id; int pct; } ovl_set[OVL_COUNT] = {{OVL_TITLE,0}};
+    int n_ovl = 0;                   /* --ovl-alpha=<key>=<pct>：逐浮层透明度 */
     int n_gpx_in = 0;
 
     /* 启动自愈（同 navimap）：源 pbf 在、产物没了/坏了就重建。默认开。 */
@@ -265,6 +309,32 @@ int main(int argc, char **argv)
             else fprintf(stderr, "提示: --gpx 最多 %d 个，忽略 %s\n",
                          (int)(sizeof(gpx_in) / sizeof(gpx_in[0])), argv[i] + 6);
         }
+        /* --ovl-alpha=<key>=<pct>：单独设某个浮层的透明度（key 见 ui/overlay.h，
+         * 如 alpha_title / alpha_topbar），可重复（最多 OVL_COUNT 个）。
+         * 给无人值守截图的像素判据用：同一视角下 100% 与 75% 两张图，
+         * 浮层底板像素必须不同，且差值正好等于"底色按 pct 与地图色混合"。 */
+        else if (strcmp(argv[i], "--settings-ovl") == 0) {
+            /* 把「浮层透明度」子面板打开再出图：给"每个浮层都能单独设"留个
+             * 可视证据（面板本身也按 OVL_SETTINGS 的透明度画）。 */
+            settings_ovl = 1;
+        }
+        else if (strncmp(argv[i], "--ovl-alpha=", 12) == 0) {
+            if (n_ovl >= (int)(sizeof(ovl_set) / sizeof(ovl_set[0]))) {
+                fprintf(stderr, "提示: --ovl-alpha 最多 %d 个\n",
+                        (int)(sizeof(ovl_set) / sizeof(ovl_set[0])));
+            } else {
+                char spec[256];
+                snprintf(spec, sizeof(spec), "%s", argv[i] + 12);
+                char *eq = strchr(spec, '=');
+                if (!eq) { fprintf(stderr, "--ovl-alpha 格式: --ovl-alpha=<key>=<pct>\n"); return 2; }
+                *eq = '\0';
+                int id = ovl_by_key(spec);
+                if (id < 0) { fprintf(stderr, "未知浮层 %s\n", spec); return 2; }
+                ovl_set[n_ovl].id = (NmOverlay)id;
+                ovl_set[n_ovl].pct = atoi(eq + 1);
+                n_ovl++;
+            }
+        }
         else { fprintf(stderr, "未知参数 %s\n", argv[i]); return 2; }
     }
 
@@ -290,6 +360,10 @@ int main(int argc, char **argv)
     a.view.zoom = zoom;
     a.view.w = w; a.view.h = h;
     a.max_class = max_class;
+    if (settings_ovl) { a.settings_open = 1; a.settings_ovl = 1; }
+    /* --ovl-alpha：默认 75% 已在 app_init 里读好，这里再覆盖 */
+    for (int i = 0; i < n_ovl; i++)
+        app_ovl_alpha_set(&a, ovl_set[i].id, ovl_set[i].pct);
 
     /* --dmap-demo：强制某省进入"解码中"占位态，用于截图验证 overlay。
      * 把视图居中到该省并标出进度%，不真正解码（只是渲染层占位）。 */
@@ -600,15 +674,19 @@ int main(int argc, char **argv)
             printf("ASSERT-FAIL    一帧都没画出来（视口里没有路？）\n");
             fail = 1;
         }
-        long bp = count_color_pixels(surf, 255, 186, 64);
-        if (bp > 0) {
+        long bp = count_overlay_pixels(surf, 48, 34, 8, 232,
+                                           app_ovl_a(&a, OVL_NOMAP));
+        /* 阈值 200：半透明后"近色"容差会撞上路网的零星像素（实测 22~33 px），
+         * 判 >0 会假红；横幅本体是几万像素，200 足够把两者分开。 */
+        if (bp > 200) {
             printf("ASSERT-FAIL    有地图却画出了无地图提示横幅（%ld px）\n", bp);
             fail = 1;
         }
     } else {
-        long bp = count_color_pixels(surf, 255, 186, 64);
+        long bp = count_overlay_pixels(surf, 48, 34, 8, 232,
+                                           app_ovl_a(&a, OVL_NOMAP));
         printf("nomap_banner_px %ld\n", bp);
-        if (bp <= 0) {
+        if (bp <= 200) {
             printf("ASSERT-FAIL    无地图区域却没有提示横幅（用户会以为程序坏了）\n");
             fail = 1;
         }
@@ -617,9 +695,12 @@ int main(int argc, char **argv)
     if (have_search) {
         /* 输入框是 (250,250,250) 的白底：框没画出来时会是 0。
            几何算对了但忘了调 paint_search_box 的话，只有这条能抓住。 */
-        long boxpix = count_color_pixels(surf, 250, 250, 250);
+        /* 数边框 (110,170,255) 而不是白底 (250,250,250)：
+         * 白底混完是 249，离背景色 244 太近，容差一放宽就把背景也算进来了。 */
+        long boxpix = count_overlay_pixels(surf, 20, 28, 44, 236,
+                                           app_ovl_a(&a, OVL_SEARCH));
         printf("search_box_px  %ld\n", boxpix);
-        if (boxpix <= 0) { printf("ASSERT-FAIL    画面里没有搜索框\n"); fail = 1; }
+        if (boxpix <= 200) { printf("ASSERT-FAIL    画面里没有搜索框\n"); fail = 1; }
     }
 
     if (have_route) {

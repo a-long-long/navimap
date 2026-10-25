@@ -6,6 +6,11 @@
 #include "settings/settings.h"  /* settings_set_int：切基准后落盘 */
 
 #include <QMenuBar>
+#include <QGraphicsOpacityEffect>
+#include <QSlider>
+#include <QDialog>
+#include <QDialogButtonBox>
+#include <QPushButton>
 #include <QMenu>
 #include <QToolBar>
 #include <functional>
@@ -50,6 +55,11 @@ MainWindow::MainWindow(App *a, QWidget *parent)
     buildSearchOverlay();
     buildRightCol();
     buildStepsDock();
+
+    /* 浮层透明度：默认 75%（App::ovl_alpha 已由 app_init 从设置读好）。
+     * 每个浮层一份，用 QGraphicsOpacityEffect 作用到整个子树（底板 + 图标 +
+     * 文字一起淡）—— 只对顶层窗口有效的 setWindowOpacity 在这里没用。 */
+    applyOverlayAlpha();
 
     /* 两个浮层（搜索在左上、地图操作在右上）贴到画布上。
      * 必须在浮层都建好之后、resize 之前做 —— resize 会触发画布 Resize
@@ -340,6 +350,36 @@ int MainWindow::runUiSelfTest()
         setDatum(keep);                          /* 还原，别把自检结果写进设置 */
     }
 
+    /* ⑫ 浮层透明度：默认 75%、且**每个浮层各一份**。
+     *    只查"有个 effect"会漏掉"全都按同一个值设了"；这里成对验：
+     *    改搜索浮层 → 搜索的 effect 跟着变、**右栏的不许变**。 */
+    {
+        const int keepS = m_a->ovl_alpha[OVL_SEARCH];
+        const int keepR = m_a->ovl_alpha[OVL_RCOL];
+        check(ovl_count() == (int)OVL_COUNT, "浮层清单完整（枚举与表一致）");
+        check(keepR == OVL_ALPHA_DEFAULT && keepS == OVL_ALPHA_DEFAULT,
+              "浮层默认透明度 75%");
+
+        auto opOf = [](QWidget *w) -> double {
+            if (!w) return -1.0;
+            auto *e = qobject_cast<QGraphicsOpacityEffect *>(w->graphicsEffect());
+            return e ? e->opacity() : -1.0;
+        };
+        check(qAbs(opOf(m_rightOverlay) - 0.75) < 1e-6,
+              "右栏浮层挂上了 75% 透明度效果");
+
+        app_ovl_alpha_set(m_a, OVL_SEARCH, 40);
+        applyOverlayAlpha();
+        check(qAbs(opOf(m_searchOverlay) - 0.40) < 1e-6,
+              "改搜索浮层：它的效果跟着变成 40%");
+        check(qAbs(opOf(m_rightOverlay) - 0.75) < 1e-6,
+              "改搜索浮层：右栏不受影响（逐浮层独立）");
+
+        app_ovl_alpha_set(m_a, OVL_SEARCH, keepS);   /* 还原 */
+        app_ovl_alpha_set(m_a, OVL_RCOL, keepR);
+        applyOverlayAlpha();
+    }
+
     /* GPX 轨迹链路：导入（内嵌 GPX，不依赖外部文件）→ 面板出现条目 →
      * 删除 → 条目消失。这条链把 C 模块（gpx.c）、App 入口
      * （app_gpx_import/del）和 UI 面板（refreshTrackPanel）全串起来。
@@ -498,6 +538,9 @@ void MainWindow::buildMenus()
            [this]() { app_set_font_size(m_a, m_a->font_size + 1); m_a->need_redraw = 1; });
     addAct(mview, QStringLiteral("字号减小"), QKeySequence(Qt::Key_BracketLeft), this,
            [this]() { app_set_font_size(m_a, m_a->font_size - 1); m_a->need_redraw = 1; });
+    mview->addSeparator();
+    addAct(mview, QStringLiteral("浮层透明度…"), QKeySequence(), this,
+           [this]() { showOverlayAlphaDialog(); });
 
     /* 坐标系（大地基准）：切基准后经纬网与读数按该基准呈现。勾选态与右栏
      * 坐标网按钮悬停提示里的"当前坐标系"同步（右栏没有下拉框了）。 */
@@ -880,6 +923,99 @@ void MainWindow::updateDatumTip()
     m_gridBtn->setToolTip(tip);
 }
 
+/* ---------------- 浮层透明度 ---------------- */
+
+/* 把 App::ovl_alpha（百分比 0~100，默认 75）作用到 Qt 这边的浮层上。
+ * ★ 用 QGraphicsOpacityEffect 而不是 QWidget::setWindowOpacity：后者只对
+ *   顶层窗口有效，这几个浮层是画布的**子控件**，调了没有任何效果（也不报错）。
+ * ★ 面板是按需创建的（toggleTrackPanel），所以那个浮层要等它建出来才有
+ *   宿主 ⇒ applyOverlayAlpha 必须在面板创建后也调一次。
+ * ★ 本前端没有的浮层（标题栏/顶栏/…是 SDL 自绘的）在这里不生效，值照样存。 */
+void MainWindow::applyOverlayAlpha()
+{
+    struct Item { QWidget *w; NmOverlay id; };
+    const Item items[] = {
+        { m_searchOverlay, OVL_SEARCH },
+        { m_rightOverlay,  OVL_RCOL   },
+        { m_trackPanel,    OVL_TRACK  },
+    };
+    for (const Item &it : items) {
+        if (!it.w) continue;
+        QGraphicsOpacityEffect *e =
+            qobject_cast<QGraphicsOpacityEffect *>(it.w->graphicsEffect());
+        if (!e) {
+            e = new QGraphicsOpacityEffect(it.w);
+            it.w->setGraphicsEffect(e);
+        }
+        const double op = m_a->ovl_alpha[it.id] / 100.0;
+        if (qAbs(e->opacity() - op) > 1e-6) e->setOpacity(op);
+    }
+}
+
+/* 「浮层透明度…」对话框：每个浮层一根滑杆（0~100%，步 5），拖动即时生效。
+ * 本前端不画的浮层（ovl_frontends() 里没有 OVL_FE_QT）滑杆置灰并注明
+ * 「SDL 前端」——值照样存（换前端就生效），但不标出来用户会以为坏了。 */
+void MainWindow::showOverlayAlphaDialog()
+{
+    QDialog dlg(this);
+    dlg.setWindowTitle(QStringLiteral("浮层透明度"));
+    QVBoxLayout *vlay = new QVBoxLayout(&dlg);
+
+    QList<QSlider *> sliders;
+    QList<QLabel *>  vals;
+    for (int i = 0; i < ovl_count(); i++) {
+        const NmOverlay id = (NmOverlay)i;
+        QHBoxLayout *row = new QHBoxLayout();
+        QString name = QString::fromUtf8(ovl_label(id));
+        const bool inQt = (ovl_frontends(id) & OVL_FE_QT) != 0;
+        if (!inQt) name += QStringLiteral("（SDL 前端）");
+        QLabel *lab = new QLabel(name);
+        lab->setFixedWidth(150);
+        QSlider *sl = new QSlider(Qt::Horizontal);
+        sl->setRange(OVL_ALPHA_MIN, OVL_ALPHA_MAX);
+        sl->setSingleStep(OVL_ALPHA_STEP);
+        sl->setPageStep(OVL_ALPHA_STEP);
+        sl->setValue(m_a->ovl_alpha[i]);
+        sl->setEnabled(inQt);
+        QLabel *val = new QLabel(QString::number(m_a->ovl_alpha[i]) + QStringLiteral("%"));
+        val->setFixedWidth(48);
+        QPushButton *def = new QPushButton(QStringLiteral("默认"));
+        def->setFixedWidth(52);
+        connect(sl, &QSlider::valueChanged, this, [this, id, val](int v) {
+            app_ovl_alpha_set(m_a, id, v);
+            applyOverlayAlpha();          /* 拖动即时预览 */
+            val->setText(QString::number(m_a->ovl_alpha[id]) + QStringLiteral("%"));
+        });
+        connect(def, &QPushButton::clicked, this, [this, id, sl](bool) {
+            app_ovl_alpha_set(m_a, id, OVL_ALPHA_DEFAULT);
+            { QSignalBlocker blk(sl); sl->setValue(OVL_ALPHA_DEFAULT); }
+            applyOverlayAlpha();
+        });
+        row->addWidget(lab); row->addWidget(sl, 1); row->addWidget(val); row->addWidget(def);
+        vlay->addLayout(row);
+        sliders.append(sl); vals.append(val);
+    }
+
+    QHBoxLayout *foot = new QHBoxLayout();
+    QPushButton *resetAll = new QPushButton(QStringLiteral("全部恢复默认（75%）"));
+    QPushButton *close = new QPushButton(QStringLiteral("关闭"));
+    connect(resetAll, &QPushButton::clicked, this, [this, &sliders](bool) {
+        app_ovl_alpha_reset(m_a);
+        for (int i = 0; i < sliders.size(); i++) {
+            QSignalBlocker blk(sliders[i]);
+            sliders[i]->setValue(m_a->ovl_alpha[i]);
+        }
+        applyOverlayAlpha();
+    });
+    connect(close, &QPushButton::clicked, &dlg, &QDialog::accept);
+    foot->addWidget(resetAll); foot->addStretch(1); foot->addWidget(close);
+    vlay->addLayout(foot);
+
+    dlg.exec();
+    /* 值已经随拖动写进 App + settings（app_ovl_alpha_set 里），
+     * 真正落盘由 app_persist_settings 在退出时统一做。 */
+}
+
 /* ---------------- GPX 轨迹 / 收藏 ---------------- */
 
 /* 面板：右栏「轨迹」按钮弹出的浮层（挂在画布上，和右栏按钮同一层）。
@@ -893,6 +1029,8 @@ void MainWindow::toggleTrackPanel()
     if (!m_trackPanel) {
         m_trackPanel = new QWidget(m_canvas);
         m_trackPanel->setObjectName(QStringLiteral("trackPanel"));
+        /* 面板是按需创建的 ⇒ 建出来之后才能给它挂透明度效果
+         * （applyOverlayAlpha 会按 m_a->ovl_alpha[OVL_TRACK] 设好）。 */
         /* ★ 定宽而不是最小宽：layoutOverlays 用「右栏 x - 面宽 - 6」定位，
            宽度一飘面板就跑到屏幕左边去（实测：按钮行 + wordWrap 提示的
            sizeHint 能把面板撑到 800+ px）。340 刚好放得下按钮行。 */
@@ -949,6 +1087,7 @@ void MainWindow::toggleTrackPanel()
         QSignalBlocker blk(m_trackBtn);
         m_trackBtn->setChecked(show);
     }
+    applyOverlayAlpha();   /* 面板刚建好：把它的透明度挂上 */
     layoutOverlays();   /* 面板贴到右栏左边 */
 }
 

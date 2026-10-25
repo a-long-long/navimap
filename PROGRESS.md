@@ -18,7 +18,7 @@
 
 | 维度            | 状态                                                                                                           |
 | ------------- | ------------------------------------------------------------------------------------------------------------ |
-| **验收门禁**      | ✅ **67 用例 / 本机 43 通过 + 24 项环境缺失** + **编译零警告**（详见第十一节）                                                    |
+| **验收门禁**      | ✅ **76 用例 / 本机 52 通过 + 24 项环境缺失** + **编译零警告**（详见第十一节）                                                    |
 | **代码规模**      | **127 个源文件 / 35 800 行**（src 81 文件 24 635 行 + ui_qt 9 文件 2 627 行 + tools 37 文件 8 520 行）                      |
 | **模块化**       | ✅ **12 个 STATIC 库**（4 叶子 + pbf + 5 模块 + sdl + 聚合层），链接器强制边界；`route.c` 1856→**928 行**拆 6 子模块（详见第四节）            |
 | **数据规模**      | 8 省 / **5 228 万节点** / **4 072 万边** / 去重后 4 560 万唯一坐标                                                         |
@@ -26,6 +26,7 @@
 | **路由**        | ✅ 双向加权 A* + ALT 地标下界 + 三类转向限制 + 跨省缝合                                                                         |
 | **搜索/导航**     | ✅ 地名/POI 检索、偏航重算、ETA、转向指令                                                                                    |
 | **GPX / 收藏**   | ✅ 轨迹导入导出、收藏夹、Qt 轨迹面板、`tracks.db` 持久化（详见第十一·六节）                                                      |
+| **浮层透明度**     | ✅ 16 个浮层默认 75% 半透明、逐个可调并持久化（详见第十一·七节）                                                                    |
 | **跨平台**       | ✅ Linux / macOS / Windows：平台差异统一收进 `src/utils/plat.{h,c}`，业务代码零 `#ifdef`                                     |
 | **核心去 SDL 化** | ✅ `navimap_core` 不链 SDL；SDL 仅留 `navmap_sdl`（window_sdl.c）+ `map_shot` 两个适配层；字体改走 `stb_truetype`（去掉 SDL2_ttf） |
 | **未做**        | 3D / 地形（GPX 轨迹与收藏夹已完成，见第十一·六节）                                                                                              |
@@ -150,7 +151,7 @@
 - `plat_selftest` **平台抽象层契约**正/负双向验收
 - `core_no_sdl` **架构边界门禁**：`navmap_core` 不得传递 SDL
 - `blend_equiv` / `clip_equiv` 自写光栅 ↔ SDL 逐像素等价 ｜ `font_cjk_check` CJK 字形能力
-- `qt_ui_test` Qt 前端 UI 交互自检（**33 项**，含 GPX 导入/面板几何/坐标系读数与悬停提示）
+- `qt_ui_test` Qt 前端 UI 交互自检（**38 项**，含 GPX 导入/面板几何/坐标系悬停提示/浮层透明度）
 - `tts_selftest` **离线语音播报**自检（TTS-OK）｜ `alts_selftest` **多方案对比**自检（ALTS-OK）｜ `lane_selftest` **车道指示**数据链路自检（LANE-OK）
 - `gpx_selftest` **GPX 解析/往返/边界/持久化**自检（GPX-OK，45 条断言，含收藏查重与孤儿点删除）
 
@@ -330,17 +331,19 @@ SDL 自绘 chrome 在 Wayland 下呈现异常，界面层迁移 Qt：**Qt 只管
 
 ## 十一、验收门禁（regress.sh）
 
-- **67 个用例**；全数据基线（Linux，8 省 PBF + `places_auto.db` + `lm.bin` 齐全）
-  **59 通过 / 0 失败**。
-- **本机（Windows，仅有 beijing 一省数据）实测 67 项 = 43 通过 / 24 失败**
-  （2026-10-25 GPX 收尾后复测）。24 项失败**全部**是环境缺失，与代码无关：
+- **76 个用例**（用例总数以脚本末尾自报的 `通过 + 失败` 为准；regress.sh 里
+  `run` / `shot` / `run_neg` 是**间接调用**，手工点行数会数漏，别再手数）。
+  全数据基线（Linux，8 省 PBF + `places_auto.db` + `lm.bin` 齐全）**59 通过 / 0 失败**。
+- **本机（Windows，仅有 beijing 一省数据）实测 76 项 = 52 通过 / 24 失败**
+  （2026-10-25 浮层透明度收尾后复测）。24 项失败**全部**是环境缺失，与代码无关：
   7 省 PBF 无源 ⇒ 跨省算路 / 反向索引 / `navsim_tj` / `navsim_xa` / `tile_xcheck`（天津瓦片）；
   `products/places_auto.db` 未建 ⇒ `search` / `places_selftest`；
   `lm.bin` 未建 ⇒ `lm_loaded` / `lm_nlm` / `lm_admissible` / `lmdist*`；
   `core_no_sdl_sdl` 找不到 `build/navimap`（无 `.exe` 后缀）给 `objdump` 提取依赖。
-  ⇒ **见到 43/67 即视为无回归**。
+  ⇒ **见到 24 项失败且名单与上面一致，即视为无回归**（通过数会随新增用例增长）。
   `gpx_selftest`（GPX-OK）/ `gpx_render` / `gpx_trk_px` / `gpx_fav_px` /
-  `qt_ui_test`（QT-UI-OK，31 项）均在新通过之列。
+  `qt_ui_test`（QT-UI-OK，**38 项**）/ `ovl_alpha` / `ovl_alpha_rcol` /
+  `qt_ovl_alpha` 均在新通过之列。
   - 2026-10-25 顺手修掉一项**假红**：`dmap_selftest` 打印完 `DMAP-OK` 就 `return`，
     而 `MapSet ms` 是 main 的栈变量、后台 worker 仍在解码 ⇒ 退出期回调命中已销毁
     的栈，`rc=139` 却因判据只 grep 标记行而显示"通过"。补 `mapset_free(&ms)`
@@ -356,7 +359,7 @@ SDL 自绘 chrome 在 Wayland 下呈现异常，界面层迁移 Qt：**Qt 只管
 
 ```bash
 source env.sh                  # 修正 PKG_CONFIG_PATH / LD_LIBRARY_PATH
-./scripts/regress.sh --build   # 构建 + 67 项回归 + 零警告门禁
+./scripts/regress.sh --build   # 构建 + 76 项回归 + 零警告门禁
 ./scripts/sync_maps.sh         # 重建 products/ 产物
 ```
 
@@ -540,7 +543,8 @@ CLI 端到端：`--datum=xa80 --datum-grid=demo.txt`（北 +100 / 东 +200）⇒
   `gpx_db_find_fav` 按 (name,lat,lon) 查重（两侧边界 5e-8 / 1e-4）。
 - `map_shot --gpx`：`gpx_trk_px` / `gpx_fav_px` **与"可见条数"挂钩**（裁剪口径与实现逐字一致），
   不是简单 >0 —— 否则视口外轨迹画没画都判绿。
-- Qt `--ui-test`（**31 项**）：GPX 导入 4 条 + 面板条目同步 2 条 + **4 条几何断言**。
+- Qt `--ui-test`（**38 项**，浮层透明度段再加 5 条）：GPX 导入 4 条 + 面板条目同步 2 条 +
+  **4 条几何断言** + 坐标系悬停提示 2 条 + **浮层透明度 5 条**。
 - 三组负向对照：① 注掉 `paint_tracks` ⇒ `gpx_trk_px 0` FAIL；
   ② 注掉 `paint_favorites` ⇒ `gpx_fav_px 0` FAIL；
   ③ `layoutOverlays` 把 `!isHidden()` 改回 `isVisible()` ⇒ `--shot-track` 报
@@ -572,6 +576,98 @@ CLI 端到端：`--datum=xa80 --datum-grid=demo.txt`（北 +100 / 东 +200）⇒
    ⇒ **一条也不落库、零提示**，重启后全丢。修：`gpx_db_default_path` 里先 `nm_mkdir_p`。
    门禁 `gpx_persist`（把配置目录指到全新路径，断言 tracks.db 真被建出来）；
    负向对照：注掉 `nm_mkdir_p` ⇒ 该例 FAIL。
+
+---
+
+## 十一·七、浮层透明度（2026-10-25 新增）
+
+> **需求**：本项目中的所有浮层均改为半透明 **75%** 显示，并可由用户**逐个**设置透明度。
+
+### 模块设计（`src/ui/overlay.{h,c}`，新建）
+
+一张 `OVL_TAB[OVL_COUNT]` 表管 **16 个浮层**，每项含 `key` / 中文 `label` /
+**前端掩码**（`OVL_FE_C` = C 自绘前端、`OVL_FE_QT` = Qt 前端；两者都画的是 `C|QT`）：
+
+| key | 浮层 | 前端 | key | 浮层 | 前端 |
+| --- | --- | --- | --- | --- | --- |
+| `alpha_title` | 标题栏 | C | `alpha_menu` | 主菜单 | C |
+| `alpha_topbar` | 顶栏 | C | `alpha_settings` | 设置面板 | C |
+| `alpha_rcol` | 右栏按钮 | C + Qt | `alpha_nomap` | 无图提示 | C |
+| `alpha_navtop` | 导航顶栏 | C | `alpha_scale` | 比例尺 | C |
+| `alpha_navbottom` | 重新规划提示 | C | `alpha_compass` | 指北针 | C |
+| `alpha_navpanel` | 导航信息面板 | C | `alpha_search` | 搜索浮层 | C + Qt |
+| `alpha_navbanner` | 底部指令条 | C | `alpha_track` | 轨迹/收藏面板 | Qt |
+| `alpha_steps` | 步骤列表 | C | `alpha_alts` | 备选方案 | C |
+
+- 默认 `OVL_ALPHA_DEFAULT = 75`，范围 **0~100**、步进 **5**，`ovl_clamp_pct` 夹值。
+- `ovl_load_all` / `ovl_store_all` 走 settings 持久化（键即上表 key）。
+- `App::ovl_alpha[OVL_COUNT]`，`window.h` 的 `app_ovl_a()` 把 pct 转 `uint8_t`
+  （`0 ⇒ 0`、`100 ⇒ 255`，其余 `pct*255/100` 四舍五入）。
+- 三处接线（`SETTINGS_SCHEMA` + `app_init` + `app_persist_settings`，见 MEMORY.md 的
+  "新设置项三处都改"）：`app_init` 与 `app_apply_settings` 各读一遍，
+  `app_persist_settings` 调 `ovl_store_all`。
+- 运行期改值：`app_ovl_alpha_set()`（夹值 + 写 settings + `need_redraw`）、
+  `app_ovl_alpha_reset()`（全部回 75）。
+
+### 三个前端怎么淡
+
+- **C / SDL 自绘**：不开离屏缓冲，改为**绘制时顺手乘系数**——`chrome.c` 的
+  `g_ovl_k` + `ak()`，`navdraw.c` 的 `g_ovl_a` + `am()`；`rfill/rstroke/rline/rtext/rpoint`
+  统一走系数。★ **整块元素一起淡**（底板 + 描边 + 图标 + 文字）：只淡底板会变成
+  "实心字浮在屏幕上"的鬼影，比不透明更难看。为此给 `font.c` 加了
+  `font_draw_a(..., a)`（`a=255` 与原 `font_draw` **逐像素等价**，阴影 alpha 也按
+  `200*a/255` 缩放）。
+- **Qt**：★ `QWidget::setWindowOpacity()` **只对顶层窗口有效**，对画布子控件浮层调它
+  **完全没效果也不报错** ⇒ 必须挂 `QGraphicsOpacityEffect`（`m_searchOverlay` /
+  `m_rightOverlay` / `m_trackPanel`），`applyOverlayAlpha()` 统一刷新。
+- **设置入口**：SDL 是设置面板里新增「浮层透明度…」子面板（16 行 `−` / 百分比 / `+`，
+  步 5，本前端不画的标"（Qt 前端）"灰字，底部"全部默认"+"返回"）；
+  Qt 是「视图」菜单的「浮层透明度…」对话框（16 根滑杆，拖动即时预览，非 Qt 浮层置灰）。
+- **CLI**：`--ovl-alpha=<key>=<pct>`（`qt_main` / `map_shot` 都有，可重复）；
+  `map_shot --settings-ovl` 可把子面板画进截图。
+
+### 判据（`scripts/ovl_px.py`，三条新用例）
+
+出三张图：100% / pct% / 0%（`ovl_shot()` helper），按**合成是线性的**判：
+
+1. 取样点必须落在 O 与 H 之间（否则该点压根没被浮层覆盖 ⇒ 判据空转）；
+2. **核心**：`|M − H| / |O − H| == pct / 100`
+   （M = 该 pct、O = 100%、H = 0% 纯底图）。★ **这个比值与元素底色的固有 alpha 无关**
+   （右栏按钮底色是 245 不是 255，按固定配色算期望色就会假红）；
+3. 矩形内有变化，且**矩形外零影响**（证明是"逐浮层独立"而不是全局一刀切）。
+
+实测混合比：标题栏 **0.7546** / C 右栏 **0.7549** / Qt 右栏 **0.7500**（期望 0.7500，容差 0.04）。
+
+### 踩的坑（4 个）
+
+1. **BMP 行序**：`h > 0` 是**自下而上**存储，按绝对坐标取像素必须 `rows.reverse()`。
+   第一版 `ovl_px.py` 没翻 ⇒ 取样全是背景色 (244,241,234)，报"矩形内找不到不同像素"。
+2. **半透明让"精确颜色计数"判据全失效**：`count_color_pixels(255,186,64)` 改 75% 后
+   数到 0 ⇒ 9 个既有用例一起假红。新增 `count_overlay_pixels`：有效 alpha =
+   元素自身 alpha/255 × 浮层 alpha/255，对背景 (244,241,234) 混合，容差 8。
+3. **边框 vs 填充的 alpha 基准不同**：无图横幅的边框 (255,186,64) 画在**横幅填充之上**、
+   不是压在底图上 ⇒ 按底图混合算出的期望色根本不存在（数到 0），且容差 8 会撞上路网
+   零星像素（22~33 px）。改数**填充** (48,34,8,232)，阈值 `> 200` / `<= 200`。
+4. **右栏 rect 要取整列**：只框一个按钮 (750,88,42,40) 时报"矩形外有 5040 个像素跟着变"
+   （`OVL_RCOL` 覆盖 4 个按钮）⇒ 改整体 `750,88,42,184` 后矩形外 0。
+
+### 负向对照（3 组，全部实证能 FAIL）
+
+| 注入 | 实测报错 |
+| --- | --- |
+| `ovl_begin()` 里强制 `g_ovl_k = 1.0` | `矩形内找不到明显不同的像素` FAIL |
+| 把 `draw_titlebar` 的 `ovl_begin` 串到 `OVL_RCOL` | `矩形外有 24000 个像素跟着变` FAIL（24000 = 800×30 正是标题栏面积） |
+| 判据修复前的 9 项假红 | 本身就是"判据没跟上实现"的实证 |
+
+### 验收
+
+- 全量回归 **76 项 = 52 通过 / 24 失败**，24 项失败与上一节记录的环境缺失名单**完全一致**
+  （未新增任何失败）；编译零警告。
+- `navmap_qt --ui-test` **33 → 38 项**：新增浮层清单完整 / 默认 75% / 右栏挂上 75% /
+  改搜索变 40% / 右栏不受影响。
+- 交付截图（仓库根 `shots/ovl/`，`*.png` 已被 .gitignore 排除、不入库）：
+  `ovl_sdl_panel.png`（SDL 浮层透明度子面板）、
+  `ovl_sdl_plain.png`（同视角无面板对照）、`ovl_qt_panel.png`（Qt 轨迹面板 75%）。
 
 ---
 

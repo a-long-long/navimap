@@ -14,6 +14,36 @@
 /* 段的两端点 + 颜色。0 = 未走（蓝），1 = 已走过（灰） */
 typedef struct { int x0, y0, x1, y1, done; } RSeg;
 
+/* ---- 浮层透明度（本文件里那几个"浮在地图上的面板"共用）----
+ * 指令条 / 搜索框 / 导航面板 / 无图提示都由 window.c 画，它们拿不到 App
+ * ⇒ 由调用方把该浮层的 alpha 传进来（window.c 用 app_ovl_a()），
+ * 再由 nfill/nrect/ntext/nline 统一乘到底板、描边、图标、文字上 ——
+ * **整块一起淡**，而不是只淡底板（只淡底板会变成"实心字浮在屏幕上的鬼影"）。
+ * ★ g_ovl_a 只在下面这几个 paint_* 的入口处设置；其余（路线、车头、图钉）
+ *   是地图要素不是浮层，绝不能被它影响。 */
+static uint8_t g_ovl_a = 255;
+static uint8_t am(uint8_t a) { return (uint8_t)(((unsigned)a * g_ovl_a + 127u) / 255u); }
+static void nfill(Raster *rs, int x, int y, int w, int h,
+                  uint8_t r, uint8_t g, uint8_t b, uint8_t a)
+{
+    raster_fill_rect(rs, x, y, w, h, r, g, b, am(a));
+}
+static void nrect(Raster *rs, int x, int y, int w, int h,
+                  uint8_t r, uint8_t g, uint8_t b, uint8_t a)
+{
+    raster_rect(rs, x, y, w, h, r, g, b, am(a));
+}
+static void ntext(Font *f, Raster *rs, int x, int y, const char *t,
+                  uint8_t r, uint8_t g, uint8_t b, int shadow)
+{
+    font_draw_a(f, rs, x, y, t, r, g, b, shadow, am(255));
+}
+static void nline(Raster *rs, int x0, int y0, int x1, int y1,
+                  uint8_t r, uint8_t g, uint8_t b)
+{
+    raster_line_rgba(rs, x0, y0, x1, y1, r, g, b, am(255));
+}
+
 int paint_route(Raster *rs, const MapView *v,
                 const int32_t *lat_e7, const int32_t *lon_e7, uint32_t n,
                 int width, int done_seg, double done_t)
@@ -266,9 +296,11 @@ static void paint_lane_arrows(Raster *rs, const MapView *v,
 /* 底部导航条：左边大字号转向 + 小字号"多远/进哪条路"，右边剩余里程与 ETA。
    高度固定，宽度按内容取（上限 760），屏幕窄时自动收窄。 */
 void paint_nav_banner(Raster *rs, const MapView *v, Font *f, Font *fbig,
-                      int line_h, int line_h_big, const NavBanner *b)
+                      int line_h, int line_h_big, const NavBanner *b,
+                      uint8_t ovl_a)
 {
     if (!rs || !f || !b) return;
+    g_ovl_a = ovl_a;   /* 整条指令条（含上方车道指示）按该浮层的透明度画 */
     const char *turn = b->turn ? b->turn : "";
     const char *dist = b->dist ? b->dist : "";
     const char *road = b->road ? b->road : "";
@@ -302,24 +334,26 @@ void paint_nav_banner(Raster *rs, const MapView *v, Font *f, Font *fbig,
     /* 车道指示画在指令条上方（有 turn:lanes 才出现） */
     paint_lane_arrows(rs, v, b->lanes, b->turn_dir, by);
 
-    raster_fill_rect(rs, bx, by, bw, bh, 18, 26, 42, 232);
-    raster_rect(rs, bx, by, bw, bh, 90, 160, 255, 255);
+    nfill(rs, bx, by, bw, bh, 18, 26, 42, 232);
+    nrect(rs, bx, by, bw, bh, 90, 160, 255, 255);
 
     int ty = by + 10;
-    font_draw(fb, rs, bx + 20, ty, turn, 255, 255, 255, 0);
-    font_draw(f,  rs, bx + 20, ty + lhb + 4, sub, 198, 210, 228, 0);
+    ntext(fb, rs, bx + 20, ty, turn, 255, 255, 255, 0);
+    ntext(f,  rs, bx + 20, ty + lhb + 4, sub, 198, 210, 228, 0);
 
     int rx = bx + bw - 20;
-    if (*rem) font_draw(f, rs, rx - w_rem, ty + 2, rem, 150, 220, 160, 0);
-    if (*eta) font_draw(f, rs, rx - w_eta, ty + 2 + line_h + 2, eta, 150, 220, 160, 0);
+    if (*rem) ntext(f, rs, rx - w_rem, ty + 2, rem, 150, 220, 160, 0);
+    if (*eta) ntext(f, rs, rx - w_eta, ty + 2 + line_h + 2, eta, 150, 220, 160, 0);
 }
 
 /* 搜索框：顶栏居中。输入框一行（大字号）+ 结果列表。
    宽度按最长的一行结果收，上限 560，屏幕窄时自动让位。 */
 void paint_search_box(Raster *rs, const MapView *v, Font *f, Font *fbig,
-                      int line_h, int line_h_big, const SearchBoxView *sb)
+                      int line_h, int line_h_big, const SearchBoxView *sb,
+                      uint8_t ovl_a)
 {
     if (!rs || !f || !sb || !sb->active) return;
+    g_ovl_a = ovl_a;   /* 搜索框 + 结果列表整体半透明 */
     const char *text    = sb->text    ? sb->text    : "";
     const char *editing = sb->editing ? sb->editing : "";
     int show = sb->n_hits;
@@ -359,33 +393,33 @@ void paint_search_box(Raster *rs, const MapView *v, Font *f, Font *fbig,
     int bx = (v->w - bw) / 2, by = 12;
     int bh = box_h + show * row_h + 8;
 
-    raster_fill_rect(rs, bx, by, bw, bh, 20, 28, 44, 236);
-    raster_rect(rs, bx, by, bw, bh, 110, 170, 255, 255);
+    nfill(rs, bx, by, bw, bh, 20, 28, 44, 236);
+    nrect(rs, bx, by, bw, bh, 110, 170, 255, 255);
 
     /* 输入框：白底 + 已提交文本（黑）+ 组合中文本（灰，带下划线感） */
-    raster_fill_rect(rs, bx + 12, by + 8, bw - 24, lhb + 6, 250, 250, 250, 255);
+    nfill(rs, bx + 12, by + 8, bw - 24, lhb + 6, 250, 250, 250, 255);
     int tw = font_text_w(fb, text);
-    font_draw(fb, rs, bx + 18, by + 11, text, 20, 24, 34, 0);
+    ntext(fb, rs, bx + 18, by + 11, text, 20, 24, 34, 0);
     if (*editing)
-        font_draw(fb, rs, bx + 18 + tw, by + 11, editing, 90, 120, 190, 0);
+        ntext(fb, rs, bx + 18 + tw, by + 11, editing, 90, 120, 190, 0);
     /* 光标 */
-    raster_fill_rect(rs, bx + 18 + tw + font_text_w(fb, editing) + 1, by + 12,
-                     2, lhb, 40, 90, 190, 255);
+    nfill(rs, bx + 18 + tw + font_text_w(fb, editing) + 1, by + 12,
+          2, lhb, 40, 90, 190, 255);
 
     for (int i = 0; i < show; i++) {
         int ry = by + box_h + i * row_h;
         if (i == sb->sel)
-            raster_fill_rect(rs, bx + 6, ry - 2, bw - 12, row_h, 44, 92, 190, 235);
-        font_draw(f, rs, bx + 20, ry, rows[i], 236, 240, 248, 0);
+            nfill(rs, bx + 6, ry - 2, bw - 12, row_h, 44, 92, 190, 235);
+        ntext(f, rs, bx + 20, ry, rows[i], 236, 240, 248, 0);
         if (dists[i][0]) {
             int wd = font_text_w(f, dists[i]);
-            font_draw(f, rs, bx + bw - 16 - wd, ry, dists[i], 160, 200, 255, 0);
+            ntext(f, rs, bx + bw - 16 - wd, ry, dists[i], 160, 200, 255, 0);
         }
     }
     if (sb->n_hits > show) {
         char more[48];
         snprintf(more, sizeof(more), "…还有 %d 条", sb->n_hits - show);
-        font_draw(f, rs, bx + 20, by + box_h + show * row_h, more, 150, 165, 190, 0);
+        ntext(f, rs, bx + 20, by + box_h + show * row_h, more, 150, 165, 190, 0);
     }
 }
 
@@ -452,9 +486,11 @@ int zoom_button_hit(const MapView *v, int px, int py)
 
 void paint_nav_panel(Raster *rs, const RouteResult *rr,
                      const ManeuverList *ml, Font *f, int line_h,
-                     int x, int y, int max_lines, const char *status)
+                     int x, int y, int max_lines, const char *status,
+                     uint8_t ovl_a)
 {
     if (!rs || !f) return;
+    g_ovl_a = ovl_a;   /* 左上导航信息面板整体半透明 */
     if (max_lines < 1) max_lines = 1;
     if (max_lines > 12) max_lines = 12;
 
@@ -496,22 +532,23 @@ void paint_nav_panel(Raster *rs, const RouteResult *rr,
     int bw = wmax + 20, bh = n_lines * (line_h + 4) + 12;
     if (bw > 520) bw = 520;
 
-    raster_fill_rect(rs, x, y, bw, bh, 24, 32, 48, 225);
-    raster_rect(rs, x, y, bw, bh, 235, 200, 90, 255);
+    nfill(rs, x, y, bw, bh, 24, 32, 48, 225);
+    nrect(rs, x, y, bw, bh, 235, 200, 90, 255);
 
     for (int i = 0; i < n_lines; i++) {
         int ly = y + 6 + i * (line_h + 4);
-        if (i == 0) font_draw(f, rs, x + 10, ly, lines[i], 255, 214, 102, 0);
-        else        font_draw(f, rs, x + 10, ly, lines[i], 238, 240, 245, 0);
+        if (i == 0) ntext(f, rs, x + 10, ly, lines[i], 255, 214, 102, 0);
+        else        ntext(f, rs, x + 10, ly, lines[i], 238, 240, 245, 0);
     }
     (void)rr;
 }
 
 void paint_nomap_banner(Raster *rs, const MapView *v, Font *f, int line_h,
-                        int cov_state)
+                        int cov_state, uint8_t ovl_a)
 {
     if (!rs || !v) return;
     if (cov_state != COV_NONE && cov_state != COV_BBOX_ONLY) return;
+    g_ovl_a = ovl_a;   /* 顶部无图提示条整体半透明 */
 
     const char *lines[3];
     int n = 3;
@@ -539,13 +576,13 @@ void paint_nomap_banner(Raster *rs, const MapView *v, Font *f, int line_h,
     int bx = (v->w - bw) / 2;
     int by = 12;
 
-    raster_fill_rect(rs, bx, by, bw, bh, 48, 34, 8, 232);
-    raster_rect(rs, bx, by, bw, bh, 255, 186, 64, 255);
+    nfill(rs, bx, by, bw, bh, 48, 34, 8, 232);
+    nrect(rs, bx, by, bw, bh, 255, 186, 64, 255);
 
     if (!f) return;
     for (int i = 0; i < n; i++) {
         int ly = by + 7 + i * (line_h + 4);
-        if (i == 0) font_draw(f, rs, bx + 12, ly, lines[0], 255, 208, 96, 0);
-        else        font_draw(f, rs, bx + 12, ly, lines[i], 238, 240, 245, 0);
+        if (i == 0) ntext(f, rs, bx + 12, ly, lines[0], 255, 208, 96, 0);
+        else        ntext(f, rs, bx + 12, ly, lines[i], 238, 240, 245, 0);
     }
 }

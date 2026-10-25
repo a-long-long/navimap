@@ -51,13 +51,14 @@ typedef struct {
 } NavBanner;
 
 void paint_nav_banner(Raster *rs, const MapView *v, Font *f, Font *fbig,
-                      int line_h, int line_h_big, const NavBanner *b);
+                      int line_h, int line_h_big, const NavBanner *b,
+                      uint8_t ovl_a);
 
 /* 顶部横幅："这里没有地图数据" + 去哪下载、下载后怎么办。
  * cov_state 取自 mapset_coverage（COV_NONE / COV_BBOX_ONLY 才值得画）。
  * f 为 NULL 时（--font=none）只画色条，不画字——提示不能因为没字体就消失。 */
 void paint_nomap_banner(Raster *rs, const MapView *v, Font *f, int line_h,
-                        int cov_state);
+                        int cov_state, uint8_t ovl_a);
 
 /* 右下角缩放按钮。返回 0/1 表示 (px,py) 是否落在按钮里，供窗口命中测试；
    画和判定用同一份坐标，避免"画在这、点在那"。 */
@@ -80,7 +81,8 @@ typedef struct {
 } SearchBoxView;
 
 void paint_search_box(Raster *rs, const MapView *v, Font *f, Font *fbig,
-                      int line_h, int line_h_big, const SearchBoxView *sb);
+                      int line_h, int line_h_big, const SearchBoxView *sb,
+                      uint8_t ovl_a);
 
 /* 搜索结果在图上的钉子：白底方块 + 蓝芯（选中）或灰芯（未选中） */
 void paint_search_pin(Raster *rs, const MapView *v,
@@ -97,6 +99,7 @@ void paint_nav_marker(Raster *rs, const MapView *v,
    line_h 由调用方给（字号 + 行距），因为 Font 不暴露字号。 */
 void paint_nav_panel(Raster *rs, const RouteResult *rr,
                      const ManeuverList *ml, Font *f, int line_h,
-                     int x, int y, int max_lines, const char *status);
+                     int x, int y, int max_lines, const char *status,
+                     uint8_t ovl_a);
 
 #endif

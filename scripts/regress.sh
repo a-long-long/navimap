@@ -512,6 +512,70 @@ if [ -f "$SHOTS/gpx_render.log" ]; then
     fi
 fi
 
+# ---- 浮层透明度：默认 75%，且**每个浮层各自独立** ----
+# 判据不是"两张图不一样"（那样设成 20% 也会过），而是**与 alpha 成正比的精确
+# 关系**：|M−H| / |O−H| == pct/100（M=该 pct、O=100%、H=0%=纯底图）。
+#   这个比值与元素底色的固有 alpha 无关（右栏按钮底色是 245 而非 255，
+#   按固定配色算就会假红）。判据实现在 scripts/ovl_px.py。
+# 同时验"逐浮层独立"：改一个浮层的透明度，矩形外一个像素都不许跟着变。
+# ★ 负向对照已实证（两条，各自打到不同的一条判据上）：
+#   ① 把 chrome.c 的 ovl_begin() 改成 g_ovl_k = 1.0（压根不按浮层缩放）
+#      ⇒ 100% 与 0% 两张图完全相同 ⇒ "矩形内找不到明显不同的像素" FAIL；
+#   ② 把 draw_titlebar 的 ovl_begin(a, OVL_TITLE) 改成 OVL_RCOL（串浮层：
+#      改右栏的透明度连标题栏一起变）⇒ "矩形外有 24000 个像素跟着变了" FAIL
+#      （24000 = 800×30，正好是标题栏面积）。
+ovl_shot() {   # $1=key $2=pct $3=输出
+    run "ovl_$1_$2" "ASSERT-OK" env SDL_VIDEODRIVER="${SDL_VIDEODRIVER:-dummy}" \
+        "$BUILD/map_shot" --graph="$GRAPH" --lat=39.94 --lon=116.405 --zoom=13 \
+        --w=800 --h=600 --ovl-alpha="$1=$2" --out="$3" > /dev/null 2>&1
+}
+# 标题栏矩形 0,0,800,30（CHROME_TITLE_H=30）；右栏四按钮 750,88,42,184
+ovl_shot alpha_title 100 "$SHOTS/ovl_title_100.bmp"
+ovl_shot alpha_title 75  "$SHOTS/ovl_title_075.bmp"
+ovl_shot alpha_title 0   "$SHOTS/ovl_title_000.bmp"
+if python3 "$ROOT/scripts/ovl_px.py" "$SHOTS/ovl_title_100.bmp" \
+        "$SHOTS/ovl_title_075.bmp" "$SHOTS/ovl_title_000.bmp" \
+        --rect=0,0,800,30 --pct=75 > "$SHOTS/ovl_title.log" 2>&1; then
+    pass=$((pass + 1)); printf '%-28s OK   (标题栏 75%%：混合比=75%%，矩形外零影响)\n' "ovl_alpha"
+else
+    fail=$((fail + 1)); printf '%-28s FAIL 标题栏 75%% 不成立（见 ovl_title.log）\n' "ovl_alpha"
+fi
+ovl_shot alpha_rcol 100 "$SHOTS/ovl_rcol_100.bmp"
+ovl_shot alpha_rcol 75  "$SHOTS/ovl_rcol_075.bmp"
+ovl_shot alpha_rcol 0   "$SHOTS/ovl_rcol_000.bmp"
+if python3 "$ROOT/scripts/ovl_px.py" "$SHOTS/ovl_rcol_100.bmp" \
+        "$SHOTS/ovl_rcol_075.bmp" "$SHOTS/ovl_rcol_000.bmp" \
+        --rect=750,88,42,184 --pct=75 > "$SHOTS/ovl_rcol.log" 2>&1; then
+    pass=$((pass + 1)); printf '%-28s OK   (右栏 75%%：混合比=75%%，矩形外零影响)\n' "ovl_alpha_rcol"
+else
+    fail=$((fail + 1)); printf '%-28s FAIL 右栏 75%% 不成立（见 ovl_rcol.log）\n' "ovl_alpha_rcol"
+fi
+
+# ---- 浮层透明度（Qt 前端）：QGraphicsOpacityEffect 真的合成进截图 ----
+# Qt 侧是子控件浮层，setWindowOpacity 对它们无效（只对顶层窗口有效）⇒
+# 必须用 graphicsEffect。offscreen 下这条也要成立（实测混合比 0.7500）。
+# 判据与 C 侧同一份脚本、同一个数学关系 ⇒ 两个前端口径一致。
+if [ -x "$BUILD/navmap_qt.exe" ] || [ -x "$BUILD/navmap_qt" ]; then
+    QEXE=$(if [ -x "$BUILD/navmap_qt.exe" ]; then echo "$BUILD/navmap_qt.exe"; else echo "$BUILD/navmap_qt"; fi)
+    CFGQ="$SHOTS/ovl_qt_cfg"
+    /bin/rm -rf "$CFGQ" 2>/dev/null
+    mkdir -p "$CFGQ/navimap"
+    printf 'day_night=0\nshow_panel=1\nshow_poi=1\nshow_labels=1\nvoice_on=1\nmode=0\nfont_size=14\nmax_class=4\nview_lat=39.94\nview_lon=116.405\nview_zoom=13\ndatum=0\n' > "$CFGQ/navimap/settings.ini"
+    for pv in 100 75 0; do
+        qt_run env APPDATA="$CFGQ" XDG_CONFIG_HOME="$CFGQ/xdg" \
+            "$QEXE" --graph="$GRAPH" --w=800 --h=600 \
+            --ovl-alpha=alpha_rcol=$pv --shot="$SHOTS/ovl_qt_$pv.bmp" \
+            > "$SHOTS/ovl_qt_$pv.log" 2>&1
+    done
+    if python3 "$ROOT/scripts/ovl_px.py" "$SHOTS/ovl_qt_100.bmp" \
+            "$SHOTS/ovl_qt_75.bmp" "$SHOTS/ovl_qt_0.bmp" \
+            --rect=740,0,60,420 --pct=75 > "$SHOTS/ovl_qt.log" 2>&1; then
+        pass=$((pass + 1)); printf '%-28s OK   (Qt 右栏 75%%：混合比=75%%，矩形外零影响)\n' "qt_ovl_alpha"
+    else
+        fail=$((fail + 1)); printf '%-28s FAIL Qt 右栏 75%% 不成立（见 ovl_qt.log）\n' "qt_ovl_alpha"
+    fi
+fi
+
 # ---- GPX 持久化：配置目录不存在时必须自己建出来 ----
 # 失效模式很阴：sqlite3_open **不建父目录**，打不开只返回 NULL ⇒ 导入照常
 # 打印"1 条轨迹"（内存侧成功了），但一条也不落库、**没有任何提示**，

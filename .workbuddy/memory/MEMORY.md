@@ -30,6 +30,8 @@
 - ★ `isVisible()` 对"父窗口还没 show() 的子控件"恒 false ⇒ 浮层贴位用 `!isHidden()`
   （`--shot-*` 正是这个时序）。顶栏控件切换会改顶栏高度 ⇒ 画布整体移动 ⇒ 浮层跟着挪
   ⇒ **不要顶栏**（已取消 QToolBar），按钮一律画布子浮层。
+- ★★ **`QWidget::setWindowOpacity()` 只对顶层窗口有效**：对画布子控件浮层调它**完全没
+  效果也不报错** ⇒ 子控件要淡必须用 `QGraphicsOpacityEffect`。
 - 图标符号（＋◎☰🔍）不能用字体字符（`inFont()` 全 false）⇒ `qt_icons.cpp` 自绘；
   `drawPixmap` 在 DPR≠1 下画到矩形一角 ⇒ 直接 paintEvent 画路径。控件中文要把
   `nm_font_candidates()` 字体 `addApplicationFont` 注册进 Qt；判"能否画中文"别用 Qt
@@ -53,6 +55,16 @@
   栈上 `MapSet` 被后台 worker 回调命中 ⇒ rc=139 却显示"通过"。收尾必须 `mapset_free(&ms)`。
 - 等价性判据套路："参数从模块读 + 另一条路径独立复算"；跟外部公布值比用外部口径
   （ENU 111320 vs 模块真实 M/N，中纬度差 0.4%）。
+- ★★ **浮层半透明后，`count_color_pixels`（精确配色计数）判据全失效**：原来数 255,186,64
+  改 75% 后数到 0 ⇒ 9 个用例一起假红。改数**混合后**的颜色：有效 alpha = 元素自身
+  alpha/255 × 浮层 alpha/255，对背景 (244,241,234) 混合 + 容差 8（见
+  `tools/map_shot.c` 的 `count_overlay_pixels`）。
+  ★ 数哪个元素要看它的**alpha 基准**：无图横幅的边框画在横幅**填充**之上、不是压在
+  底图上 ⇒ 按底图混合的期望色根本不存在，必须数填充。
+- ★ 判半透明比率：合成是线性的 ⇒ `|M−H| / |O−H| == pct/100`（M 该 pct / O 100% / H 0%
+  三张图）。**这个比值与元素底色的固有 alpha 无关**（右栏底色 245 不是 255）。
+  脚本 `scripts/ovl_px.py`。★ 读 BMP 按绝对坐标取像素：`h>0` 是自下而上存储，必须
+  `rows.reverse()`，否则取样全是背景色。
 
 ## 设置项与 C/C++
 

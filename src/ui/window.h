@@ -16,6 +16,7 @@
 #include "route/navsim.h"
 #include "search/search.h"
 #include "map/gpx.h"
+#include "ui/overlay.h"
 
 /* 设置持久化（完整设置系统）：前向声明，避免 window.h 直接依赖 settings 头。 */
 typedef struct Settings Settings;
@@ -158,7 +159,15 @@ typedef struct {
     int           settings_open;   /* 设置面板是否展开（仅 SDL 自绘 chrome） */
     int           settings_row;    /* 面板命中行：>=0 schema 下标，-1 关闭，-2 重置全部 */
     int           settings_btn;    /* 命中按钮：0=左/− 1=右/+ 2=行体（切换） */
+    int           settings_ovl;    /* 浮层透明度子面板是否展开（主面板里点「浮层透明度…」进入） */
+    int           ovl_row;         /* 子面板命中行：>=0 浮层下标，-1 关闭，-2 全部恢复默认 */
+    int           ovl_btn;         /* 子面板命中按钮：0=− 1=+ 2=行体（本前端不画的浮层=无效） */
     Settings     *cfg;             /* 配置文件（NULL=未启用） */
+
+    /* ---- 浮层透明度（每个浮层一份，百分比 0~100，默认 75）----
+     * 全部由 ui/overlay.c 的表驱动读写；绘制侧（render/chrome.c、navdraw.c）与
+     * Qt 前端都从这儿取。百分比 → 0~255 用 app_ovl_a()（×255/100，100% 恒为 255）。 */
+    int           ovl_alpha[OVL_COUNT];
 
     /* ---- 语音播报（离线 TTS）----
      * voice_on 受设置面板 / V 键控制；ann_tier 是 per-maneuver 的"已播报层级"位图，
@@ -177,6 +186,19 @@ typedef struct {
 int  app_init(App *a, const char *graph_dir, int w, int h,
               const char *font_path, int font_size, const AutoBuildOpt *ab);
 
+/* 浮层透明度 → 0~255 的 alpha（绘制侧统一走它，别各写一遍换算）。
+ * ★ 用 pct*255/100 而不是 pct*2.55：关键是 **100 必须严格等于 255**（不透明），
+ *   否则"调回不透明"会残留一层灰；0 必须严格是 0（完全隐藏该浮层）。
+ *   中间值按四舍五入（+50 再整除），75% → 191。 */
+static inline uint8_t app_ovl_a(const App *a, NmOverlay id)
+{
+    if (!a || id < 0 || id >= OVL_COUNT) return 255;
+    int pct = a->ovl_alpha[id];
+    if (pct <= OVL_ALPHA_MIN) return 0;
+    if (pct >= OVL_ALPHA_MAX) return 255;
+    return (uint8_t)((pct * 255 + 50) / 100);
+}
+
 /* "关注点"：模拟导航开着时是车头（人跟着车走），否则是视口中心。
  * 无地图区域提示按它判断，无头验收的判据也必须按它——两处各写一遍的话，
  * 出现"视口有图、车头无图"这种混合情况时就会一边弹提示一边判失败。 */
@@ -190,6 +212,9 @@ void app_shutdown(App *a);
 /* 设置持久化：app_apply_settings 把配置(cfg)→App 字段；app_persist_settings
  * 把 App→配置并写盘。面板编辑 / 键位 / 菜单切换后调用后者即时落盘。 */
 void app_apply_settings(App *a);
+/* 浮层透明度：改单个（pct 会被夹到 0~100）/ 全部恢复默认 75%。 */
+void app_ovl_alpha_set(App *a, NmOverlay id, int pct);
+void app_ovl_alpha_reset(App *a);
 void app_persist_settings(App *a);
 
 /* 状态栏文本（窗口标题栏用）。实现留在 window.c（Qt 前端也可用）。 */

@@ -25,6 +25,7 @@ extern "C" {
 #include "ui/window.h"
 #include "map/mapset.h"     /* mapset_enable_pbf_display / mapset_totals */
 #include "utils/datum.h"     /* DatumId / DATUM_*：--datum 解析 */
+#include "ui/overlay.h"     /* NmOverlay / ovl_by_key：--ovl-alpha 解析 */
 }
 
 #include "main_window.h"
@@ -49,6 +50,10 @@ int main(int argc, char **argv)
     const char *gpx_in[8] = {0};      /* --gpx=<file>：启动即导入（可多次，最多 8 个） */
     int n_gpx_in = 0;
     const char *gpx_out = NULL;       /* --export-gpx=<file>：退出时导出全部轨迹+收藏 */
+    /* --ovl-alpha=<key>=<pct>：逐浮层透明度（与 map_shot 同名同语义），
+     * 给无人值守截图做像素判据用。key 见 ui/overlay.h（alpha_search 等）。 */
+    struct { NmOverlay id; int pct; } ovl_set[OVL_COUNT] = {{OVL_TITLE,0}};
+    int n_ovl = 0;
 
     AutoBuildOpt ab;
     memset(&ab, 0, sizeof(ab));
@@ -75,6 +80,23 @@ int main(int argc, char **argv)
                          (int)(sizeof(gpx_in) / sizeof(gpx_in[0])), argv[i] + 6);
         }
         else if (strncmp(argv[i], "--export-gpx=", 13) == 0) gpx_out = argv[i] + 13;
+        else if (strncmp(argv[i], "--ovl-alpha=", 12) == 0) {
+            if (n_ovl >= (int)(sizeof(ovl_set) / sizeof(ovl_set[0]))) {
+                fprintf(stderr, "提示: --ovl-alpha 最多 %d 个\n",
+                        (int)(sizeof(ovl_set) / sizeof(ovl_set[0])));
+            } else {
+                char spec[256];
+                snprintf(spec, sizeof(spec), "%s", argv[i] + 12);
+                char *eq = strchr(spec, '=');
+                if (!eq) { fprintf(stderr, "--ovl-alpha 格式: --ovl-alpha=<key>=<pct>\n"); return 2; }
+                *eq = '\0';
+                int id = ovl_by_key(spec);
+                if (id < 0) { fprintf(stderr, "未知浮层 %s\n", spec); return 2; }
+                ovl_set[n_ovl].id = (NmOverlay)id;
+                ovl_set[n_ovl].pct = atoi(eq + 1);
+                n_ovl++;
+            }
+        }
         else if (strcmp(argv[i], "--ui-test") == 0) ui_test = 1;
         else if (strcmp(argv[i], "--shot-search") == 0) shot_search = 1;
         else if (strcmp(argv[i], "--shot-track") == 0) shot_track = 1;
@@ -119,6 +141,10 @@ int main(int argc, char **argv)
     App a;
     if (app_init(&a, graph, w, h, font, font_size, &ab) != 0) return 1;
     a.qt_ui = 1;
+    /* --ovl-alpha：默认 75% 已在 app_init 里读好，这里再覆盖（先于窗口构造，
+     * 这样 MainWindow 一建好浮层就按这个值挂 QGraphicsOpacityEffect）。 */
+    for (int i = 0; i < n_ovl; i++)
+        app_ovl_alpha_set(&a, ovl_set[i].id, ovl_set[i].pct);
 
     /* 坐标系：命令行优先于设置文件（app_init 已按 settings.ini 设过 a.datum）。 */
     if (datum) {

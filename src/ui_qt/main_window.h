@@ -58,6 +58,8 @@ public:
      * 撤掉后留下的坐标网按钮悬停提示里显示"当前坐标系"（updateDatumTip） */
     void setDatum(int id);
     void updateDatumTip();             /* 刷新坐标网按钮悬停提示里的"当前坐标系" */
+    void applyOverlayAlpha();          /* 把 App::ovl_alpha 作用到本前端的浮层上 */
+    void showOverlayAlphaDialog();     /*「浮层透明度…」对话框：每个浮层一根滑杆 */
 
     /* ---- GPX 轨迹 / 收藏 ----
      * 面板是右栏左侧的浮层（和右栏按钮同一层，不参与布局 ⇒ 不影响按钮坐标）。

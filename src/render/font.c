@@ -286,9 +286,12 @@ static void blit_glyph(Raster *rs, const Glyph *gl, int px, int py,
     }
 }
 
-void font_draw(Font *f, Raster *rs, int x, int y,
-               const char *utf8, uint8_t cr, uint8_t cg, uint8_t cb,
-               int shadow)
+/* 带整体 alpha 的文本：浮层半透明时**文字也要跟着淡**，否则底板透了、
+   字还是实心，看着像"字浮在屏幕上"而不是"整块面板半透明"。
+   a=255 与 font_draw 逐像素等价（阴影 alpha 也是 200*255/255=200）。 */
+void font_draw_a(Font *f, Raster *rs, int x, int y,
+                 const char *utf8, uint8_t cr, uint8_t cg, uint8_t cb,
+                 int shadow, uint8_t a)
 {
     if (!f || !utf8 || !rs) return;
     const char *p = utf8;
@@ -300,12 +303,20 @@ void font_draw(Font *f, Raster *rs, int x, int y,
         Glyph *g = glyph_get(f, cp);
         if (g && g->alpha && g->w && g->h) {
             if (shadow)
-                blit_glyph(rs, g, cx + 1, y + 1, 0, 0, 0, 200);
-            blit_glyph(rs, g, cx, y, cr, cg, cb, 255);
+                blit_glyph(rs, g, cx + 1, y + 1, 0, 0, 0,
+                           (uint8_t)((200u * a) / 255u));
+            blit_glyph(rs, g, cx, y, cr, cg, cb, a);
         }
         cx += g ? g->advance : (f->ptsize / 2);
         p += len;
     }
+}
+
+void font_draw(Font *f, Raster *rs, int x, int y,
+               const char *utf8, uint8_t cr, uint8_t cg, uint8_t cb,
+               int shadow)
+{
+    font_draw_a(f, rs, x, y, utf8, cr, cg, cb, shadow, 255);
 }
 
 int font_text_w(Font *f, const char *utf8)
