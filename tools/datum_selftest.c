@@ -10,12 +10,18 @@
  *      "1980西安坐标系下的 X 平移量为 −9~+43 m，Y 方向的平移量为 +76~+119 m"
  *      （X=北向、Y=东向）。取 6 个分布点全中 ⇒ 同时钉住数值与方向。
  *   6) 北京54 产生合理非零偏移（量级判据；它与官方口径的偏差如实打印）。
+ *   7) ★ 西安80 的**实现**必须与《国土资源数据 2000 国家大地坐标系转换技术要求》
+ *      （国土资源部/国家测绘地理信息局 2017-02）附录 B 的改正量公式等价（< 0.05 m，
+ *      实测 0.001 m）。这是第三方交叉验证：两条独立算法路径一致 ⇒ 平移符号、
+ *      椭球、正/反算都没搞反。参数从模块读出，故调参数不会误报。
  *
  * 负向对照（都必须能失败）：
  *   - 若把 XA80 的平移参数清零（退化成"仅换椭球"——踩过这个坑）⇒ 东向掉到
  *     ~0.02 m，第 5 条立刻越界 FAIL。
  *   - 若把 XA80 / BJ54 的参数抄成同一份 ⇒「两者位移显著不同」FAIL。
  *   - 若给 WGS84 也错误地加了平移 ⇒「WGS84 偏移 ≈ 0」FAIL。
+ *   - 若在 datum.c 里把「加平移」那一步去掉（apply_fwd 退化成恒等）⇒ 第 7 条
+ *     两侧差出 ~114 m，立刻 FAIL（第 5 条也会跟着 FAIL）。
  *
  * 用法：datum_selftest
  */
@@ -159,8 +165,78 @@ int main(void)
         check(dw < 1e-6, "负向对照: WGS84 偏移 ≈ 0（< 1 µm）");
     }
 
+    /* 7) ★ 第三方等价性：用**国标算法**独立复算西安80 → 地心系，与本模块比对。
+     *    依据《国土资源数据 2000 国家大地坐标系转换技术要求》（国土资源部 /
+     *    国家测绘地理信息局，2017-02）附录 B「坐标转换改正量计算」：
+     *        dB = −(Δx/M)·sinB·cosL − (Δy/M)·sinB·sinL + (Δz/M)·cosB
+     *             + (1/M)·[ (e²/W)·Δa + N/(2W²)·(2 − e²sin²B)·Δe² ]·sinB·cosB
+     *        dL = −(1/(N·cosB))·(Δx·sinL − Δy·cosL)
+     *        W = sqrt(1 − e²sin²B),  N = a/W,  M = a(1−e²)/W³
+     *        Δa = a_2000 − a_80,  Δe² = e²_2000 − e²_80
+     *    这是"我的严格 ECEF 实现" vs "国标线性化公式"两条独立路径的等价判据
+     *    （与渲染侧的 blend_equiv / clip_equiv 同类）——比自测自己强得多：
+     *    两条路径一致 ⇒ 平移符号、椭球、正/反算都没搞反。
+     *    ★ 参数从模块里读（datum_translation / datum_ellipsoid），不是抄一份常数
+     *      ⇒ 以后调参数不会误报，只有**算法**错才 FAIL。
+     *    实测 9 点最大差 0.001 m（= 线性化残差 + CGCS2000/WGS84 椭球末位差）。
+     *    容差取 0.05 m：宽松到不测浮点噪声，严到足以抓住符号/椭球/漏平移的错误。 */
+    {
+        double dx, dy, dz, a80, f80;
+        datum_translation(DATUM_XA80, &dx, &dy, &dz);
+        datum_ellipsoid(DATUM_XA80, &a80, &f80);
+        const double A00 = 6378137.0, F00 = 1.0 / 298.257222101;  /* CGCS2000 */
+
+        static const struct { const char *name; double la, lo; } PTS[] = {
+            { "泾阳/大地原点", 34.5333, 108.9167 },
+            { "北京",          39.9042, 116.4074 },
+            { "广州",          23.1291, 113.2644 },
+            { "上海",          31.2304, 121.4737 },
+            { "乌鲁木齐",      43.8256,  87.6168 },
+            { "成都",          30.5728, 104.0668 },
+            { "哈尔滨",        45.8038, 126.5349 },
+            { "拉萨",          29.6520,  91.1721 },
+            { "三亚",          18.2528, 109.5119 },
+        };
+        const int NPT = (int)(sizeof(PTS) / sizeof(PTS[0]));
+        double worst = 0.0;
+
+        for (int i = 0; i < NPT; i++) {
+            const double B = PTS[i].la, L = PTS[i].lo;
+            /* (a) 本模块：严格 ECEF —— IAG75 正算 → 加平移 → WGS84 椭球反算 */
+            double b1, l1;
+            datum_to_wgs84(DATUM_XA80, B, L, 0, &b1, &l1, NULL);
+
+            /* (b) 国标：线性化改正量公式（XA80 → CGCS2000） */
+            const double la = B * M_PI / 180.0, lo = L * M_PI / 180.0;
+            const double E00 = F00 * (2.0 - F00);
+            const double E80 = f80 * (2.0 - f80);
+            const double sl = sin(la), cl = cos(la);
+            const double W = sqrt(1.0 - E00 * sl * sl);
+            const double N = A00 / W, M = A00 * (1.0 - E00) / (W * W * W);
+            const double da = A00 - a80, de2 = E00 - E80;
+            const double dB = -dx / M * sl * cos(lo) - dy / M * sl * sin(lo)
+                              + dz / M * cl
+                              + (1.0 / M) * ((E00 / W) * da
+                                             + N / (2.0 * W * W)
+                                               * (2.0 - E00 * sl * sl) * de2)
+                                * sl * cl;
+            const double dL = -(1.0 / (N * cl)) * (dx * sin(lo) - dy * cos(lo));
+            const double b2 = B + dB * 180.0 / M_PI, l2 = L + dL * 180.0 / M_PI;
+
+            /* 两套结果都换算成当地东/北米数再比（口径同 #5） */
+            double e1 = (l1 - L) * 111320.0 * cos((B + b1) * 0.5 * M_PI / 180.0);
+            double n1 = (b1 - B) * 111320.0;
+            double e2 = (l2 - L) * 111320.0 * cos((B + b2) * 0.5 * M_PI / 180.0);
+            double n2 = (b2 - B) * 111320.0;
+            double d = sqrt((e1 - e2) * (e1 - e2) + (n1 - n2) * (n1 - n2));
+            if (d > worst) worst = d;
+        }
+        printf("    西安80 严格ECEF vs 国标附录B公式: 9 点最大差 %.4f m\n", worst);
+        check(worst < 0.05, "西安80: 实现与国标附录B改正量公式等价（< 0.05 m）");
+    }
+
     if (g_fail == 0) {
-        printf("DATUM-OK  枚举/恒等/往返/偏移全部通过\n");
+        printf("DATUM-OK  枚举/恒等/往返/偏移/国标等价 全部通过\n");
         return 0;
     }
     printf("DATUM-FAIL  %d 项未通过\n", g_fail);

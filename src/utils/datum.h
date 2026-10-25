@@ -44,6 +44,12 @@ void datum_wgs84_to(DatumId id, double lat, double lon, double h,
 void datum_to_wgs84(DatumId id, double lat, double lon, double h,
                     double *out_lat, double *out_lon, double *out_h);
 
+/* 只读访问参数表（便于自测/UI 显示，不必把常数抄一份到别处）。
+ * ★ datum_selftest 的「国标公式等价性」判据就靠它们：参数从**模块里读出来**，
+ *   再由测试用另一条独立公式复算 ⇒ 以后改参数不会误报，只有算法错才 FAIL。 */
+void datum_translation(DatumId id, double *dx, double *dy, double *dz);  /* 米 */
+void datum_ellipsoid(DatumId id, double *a, double *f);                  /* 米 / 扁率 */
+
 #ifdef __cplusplus
 }
 #endif
