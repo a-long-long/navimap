@@ -43,6 +43,7 @@ int main(int argc, char **argv)
     int ui_test = 0;                  /* --ui-test：跑无头 UI 自检后退出 */
     int shot_search = 0;              /* --shot-search：截图前先展开搜索框 */
     const char *datum = NULL;         /* --datum=wgs84|cgcs2000|bj54|xa80：坐标系（命令行优先） */
+    const char *datum_grid = NULL;    /* --datum-grid=<file>：图幅改正量格网（入口②） */
 
     AutoBuildOpt ab;
     memset(&ab, 0, sizeof(ab));
@@ -61,6 +62,7 @@ int main(int argc, char **argv)
         else if (strncmp(argv[i], "--shot=", 7) == 0) shot = argv[i] + 7;
         else if (strcmp(argv[i], "--grid") == 0) grid = 1;
         else if (strncmp(argv[i], "--datum=", 8) == 0) datum = argv[i] + 8;
+        else if (strncmp(argv[i], "--datum-grid=", 13) == 0) datum_grid = argv[i] + 13;
         else if (strcmp(argv[i], "--ui-test") == 0) ui_test = 1;
         else if (strcmp(argv[i], "--shot-search") == 0) shot_search = 1;
         else if (strncmp(argv[i], "--pbf-display=", 14) == 0) {
@@ -118,6 +120,18 @@ int main(int argc, char **argv)
                  !strcmp(datum, "西安80") || !strcmp(datum, "西安1980"))
             did = DATUM_XA80;
         a.datum = did;
+    }
+
+    /* 图幅改正量格网（入口②）：拿到测绘部门的 1:5万 改正量后转成文本即可直接挂上，
+     * 不用改代码。格式见 utils/datum.h 的 datum_grid_load。 */
+    if (datum_grid) {
+        int rc = datum_grid_load((DatumId)a.datum, datum_grid);
+        if (rc != 0) {
+            fprintf(stderr, "提示: 改正量格网加载失败（%s，错误码 %d），按无格网继续\n",
+                    datum_grid, rc);
+        } else {
+            fprintf(stderr, "已挂改正量格网: %s -> %s\n", datum_grid, datum_short((DatumId)a.datum));
+        }
     }
 
     if (pbf_display) {

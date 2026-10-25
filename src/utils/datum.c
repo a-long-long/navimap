@@ -54,6 +54,9 @@
 #include "utils/datum.h"
 
 #include <math.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
 
 #ifndef M_PI
 #define M_PI 3.14159265358979323846
@@ -69,11 +72,13 @@ typedef struct {
 typedef struct {
     Ellipsoid ell;
     double dx, dy, dz;     /* 米 */
-    double rx, ry, rz;     /* 角秒（本项目恒 0） */
-    double ds;             /* ppm（本项目恒 0） */
+    double rx, ry, rz;     /* 角秒（出厂值恒 0；可通过 datum_set_seven_param 填） */
+    double ds;             /* ppm（出厂值恒 0，同上） */
 } DatumDef;
 
-static const DatumDef DATUMS[DATUM_COUNT] = {
+/* 出厂参数表（供 datum_reset_params 用）。DATUMS 本身是可变的：三个扩展入口
+ * 都是往里写值，写完立即生效。 */
+static const DatumDef DATUMS_FACTORY[DATUM_COUNT] = {
     /* WGS84：恒等 */
     { {6378137.0, 1.0 / 298.257223563}, 0, 0, 0, 0, 0, 0, 0 },
     /* CGCS2000：椭球与 WGS84 近等，平移 0 ⇒ 与 WGS84 差 < 2 m */
@@ -103,6 +108,27 @@ static const DatumDef DATUMS[DATUM_COUNT] = {
      *   XA80 是参心坐标系，原点偏离地心**接近 200 m**，必须靠平移参数体现。 */
     { {6378140.0, 1.0 / 298.257}, -104.57, -45.94, 5.30, 0, 0, 0, 0 },
 };
+
+/* 运行期参数表（初始 = 出厂值，可被 datum_set_seven_param / datum_set_local_offset 改） */
+static DatumDef DATUMS[DATUM_COUNT] = {
+    { {6378137.0, 1.0 / 298.257223563}, 0, 0, 0, 0, 0, 0, 0 },
+    { {6378137.0, 1.0 / 298.257222101}, 0, 0, 0, 0, 0, 0, 0 },
+    { {6378245.0, 1.0 / 298.3}, 15.8, -154.4, -82.3, 0, 0, 0, 0 },
+    { {6378140.0, 1.0 / 298.257}, -104.57, -45.94, 5.30, 0, 0, 0, 0 },
+};
+
+/* ---- 图幅改正量格网（入口②）。每个基准各挂一个，进程内可变 ---- */
+typedef struct {
+    int    active;
+    double lat0, lon0, dlat, dlon;
+    int    nrows, ncols;
+    float *dn, *de;
+} DatumGrid;
+
+static DatumGrid GRIDS[DATUM_COUNT];
+
+static const double ARCSEC_TO_RAD = (M_PI / 180.0) / 3600.0;
+static const double RAD_TO_ARCSEC = (180.0 / M_PI) * 3600.0;
 
 /* 大地坐标 → ECEF（在给定椭球上） */
 static void geod_to_ecef(double lat_deg, double lon_deg, double h,
@@ -135,26 +161,116 @@ static void ecef_to_geod(double X, double Y, double Z,
     *lon_deg *= 180.0 / M_PI;
 }
 
-/* 基准 → WGS84：Xw = (1+ds)·R·Xs + T；本项目 R=I, ds=0 ⇒ Xw = Xs + T */
+/* 构造完整 7 参数矩阵 M = (1+ds)·(I + Ω)，Ω 为 (rx,ry,rz) 的反对称阵。
+ * ★ rx=ry=rz=0、ds=0 时 M 精确等于单位阵（k=1.0、非对角 ±0.0）
+ *   ⇒ 结果与"只加平移"的旧实现**逐位一致**，不引入回归。 */
+static void helmert_matrix(const DatumDef *d, double m[9])
+{
+    double rx = d->rx * ARCSEC_TO_RAD;
+    double ry = d->ry * ARCSEC_TO_RAD;
+    double rz = d->rz * ARCSEC_TO_RAD;
+    double k  = 1.0 + d->ds * 1e-6;
+    m[0] = k;        m[1] = -k * rz;  m[2] = k * ry;
+    m[3] = k * rz;   m[4] = k;        m[5] = -k * rx;
+    m[6] = -k * ry;  m[7] = k * rx;   m[8] = k;
+}
+
+/* 3x3 精确求逆（Cramer）。用于逆变换，保证正/反严格互逆（不是"减平移"近似）。 */
+static int inv3(const double m[9], double out[9])
+{
+    const double c00 = m[4] * m[8] - m[5] * m[7];
+    const double c01 = m[5] * m[6] - m[3] * m[8];
+    const double c02 = m[3] * m[7] - m[4] * m[6];
+    const double det = m[0] * c00 + m[1] * c01 + m[2] * c02;
+    if (!(fabs(det) > 1e-30)) return -1;
+    const double id = 1.0 / det;
+    out[0] = c00 * id;
+    out[1] = (m[2] * m[7] - m[1] * m[8]) * id;
+    out[2] = (m[1] * m[5] - m[2] * m[4]) * id;
+    out[3] = c01 * id;
+    out[4] = (m[0] * m[8] - m[2] * m[6]) * id;
+    out[5] = (m[2] * m[3] - m[0] * m[5]) * id;
+    out[6] = c02 * id;
+    out[7] = (m[1] * m[6] - m[0] * m[7]) * id;
+    out[8] = (m[0] * m[4] - m[1] * m[3]) * id;
+    return 0;
+}
+
+/* 基准 → WGS84：Xw = T + M·Xs */
 static void apply_fwd(const DatumDef *d,
                       double Xs, double Ys, double Zs,
                       double *Xw, double *Yw, double *Zw)
 {
-    (void)d; /* 旋转/尺度字段预留，当前恒 0 */
-    *Xw = Xs + d->dx;
-    *Yw = Ys + d->dy;
-    *Zw = Zs + d->dz;
+    double m[9];
+    helmert_matrix(d, m);
+    *Xw = d->dx + m[0] * Xs + m[1] * Ys + m[2] * Zs;
+    *Yw = d->dy + m[3] * Xs + m[4] * Ys + m[5] * Zs;
+    *Zw = d->dz + m[6] * Xs + m[7] * Ys + m[8] * Zs;
 }
 
-/* WGS84 → 基准：逆变换 Xs = Xw - T */
+/* WGS84 → 基准：Xs = M⁻¹·(Xw − T)。★ 用真正的矩阵逆，而不是"减平移"——
+ * 一旦将来填了旋转/尺度，"减平移"就不成立；这里无论参数如何都严格互逆。 */
 static void apply_inv(const DatumDef *d,
                       double Xw, double Yw, double Zw,
                       double *Xs, double *Ys, double *Zs)
 {
-    (void)d;
-    *Xs = Xw - d->dx;
-    *Ys = Yw - d->dy;
-    *Zs = Zw - d->dz;
+    double m[9], mi[9];
+    helmert_matrix(d, m);
+    const double px = Xw - d->dx, py = Yw - d->dy, pz = Zw - d->dz;
+    if (inv3(m, mi) != 0) {   /* 实际不会发生（det≈1）；兜底退化成纯平移 */
+        *Xs = px; *Ys = py; *Zs = pz;
+        return;
+    }
+    *Xs = mi[0] * px + mi[1] * py + mi[2] * pz;
+    *Ys = mi[3] * px + mi[4] * py + mi[5] * pz;
+    *Zs = mi[6] * px + mi[7] * py + mi[8] * pz;
+}
+
+/* 双线性内插取改正量（附录 C 的做法）。格网外的点取边缘格值（clamp），
+ * 不返回失败 —— 改正量本来就是"图幅内的经验值"，外推没有意义。
+ * ★ 行列号用 floor + clamp，nrows/ncols 为 1 的退化格网也能正确工作。 */
+static int grid_sample(const DatumGrid *g, double lat, double lon,
+                       double *dn, double *de)
+{
+    double v = (lat - g->lat0) / g->dlat;   /* 行方向（纬度） */
+    double u = (lon - g->lon0) / g->dlon;   /* 列方向（经度） */
+    if (u < 0.0) u = 0.0; else if (u > (double)(g->ncols - 1)) u = (double)(g->ncols - 1);
+    if (v < 0.0) v = 0.0; else if (v > (double)(g->nrows - 1)) v = (double)(g->nrows - 1);
+
+    int i0 = (int)floor(v), j0 = (int)floor(u);
+    double tv = v - i0, tu = u - j0;
+    if (i0 > g->nrows - 2) { i0 = g->nrows - 1; tv = 0.0; }
+    if (j0 > g->ncols - 2) { j0 = g->ncols - 1; tu = 0.0; }
+    if (i0 < 0) { i0 = 0; tv = 0.0; }
+    if (j0 < 0) { j0 = 0; tu = 0.0; }
+    const int i1 = (i0 + 1 <= g->nrows - 1) ? i0 + 1 : i0;
+    const int j1 = (j0 + 1 <= g->ncols - 1) ? j0 + 1 : j0;
+
+    const size_t r0 = (size_t)i0 * (size_t)g->ncols, r1 = (size_t)i1 * (size_t)g->ncols;
+    const double n0 = g->dn[r0 + (size_t)j0] * (1.0 - tu) + g->dn[r0 + (size_t)j1] * tu;
+    const double n1 = g->dn[r1 + (size_t)j0] * (1.0 - tu) + g->dn[r1 + (size_t)j1] * tu;
+    const double e0 = g->de[r0 + (size_t)j0] * (1.0 - tu) + g->de[r0 + (size_t)j1] * tu;
+    const double e1 = g->de[r1 + (size_t)j0] * (1.0 - tu) + g->de[r1 + (size_t)j1] * tu;
+    *dn = n0 * (1.0 - tv) + n1 * tv;
+    *de = e0 * (1.0 - tv) + e1 * tv;
+    return 0;
+}
+
+/* 把经纬度点沿北/东方向平移 dn/de 米（在 WGS84 椭球上用曲率半径换算）。 */
+static void shift_by_meters(double lat, double lon, double dn, double de,
+                            double *olat, double *olon)
+{
+    const Ellipsoid *e = &DATUMS[DATUM_WGS84].ell;
+    const double e2 = e->f * (2.0 - e->f);
+    const double la = lat * M_PI / 180.0;
+    const double sl = sin(la), cl = cos(la);
+    const double W = sqrt(1.0 - e2 * sl * sl);
+    const double N = e->a / W;                       /* 卯酉圈曲率半径 */
+    const double M = e->a * (1.0 - e2) / (W * W * W);/* 子午圈曲率半径 */
+    double den = N * cl;
+    if (fabs(den) < 1e-6) den = (den >= 0) ? 1e-6 : -1e-6;   /* 极点保护 */
+    *olat = lat + (dn / M) * (180.0 / M_PI);
+    *olon = lon + (de / den) * (180.0 / M_PI);
 }
 
 void datum_to_wgs84(DatumId id, double lat, double lon, double h,
@@ -167,6 +283,12 @@ void datum_to_wgs84(DatumId id, double lat, double lon, double h,
     geod_to_ecef(lat, lon, h, &d->ell, &Xs, &Ys, &Zs);
     apply_fwd(d, Xs, Ys, Zs, &Xw, &Yw, &Zw);
     ecef_to_geod(Xw, Yw, Zw, &w->ell, olat, olon, oh);
+    /* 叠加图幅改正量（入口②）。格网以**源基准坐标**索引（与国标同口径）。 */
+    if (GRIDS[id].active && olat && olon) {
+        double dn, de;
+        if (grid_sample(&GRIDS[id], lat, lon, &dn, &de) == 0)
+            shift_by_meters(*olat, *olon, dn, de, olat, olon);
+    }
 }
 
 void datum_wgs84_to(DatumId id, double lat, double lon, double h,
@@ -179,6 +301,14 @@ void datum_wgs84_to(DatumId id, double lat, double lon, double h,
     geod_to_ecef(lat, lon, h, &w->ell, &Xw, &Yw, &Zw);
     apply_inv(d, Xw, Yw, Zw, &Xs, &Ys, &Zs);
     ecef_to_geod(Xs, Ys, Zs, &d->ell, olat, olon, oh);
+    /* 反向：减去同一份改正量。★ 索引用的是 **WGS84 坐标**而不是基准坐标 ——
+     * 二者相差 ~100 m，相对格网步长（1:5万图幅 ≈ 十几 km）造成的改正量差异
+     * 远小于改正量本身的空间变化率 ⇒ 正/反仍然自洽（自测按 1e-7 度验收）。 */
+    if (GRIDS[id].active && olat && olon) {
+        double dn, de;
+        if (grid_sample(&GRIDS[id], lat, lon, &dn, &de) == 0)
+            shift_by_meters(*olat, *olon, -dn, -de, olat, olon);
+    }
 }
 
 const char *datum_short(DatumId id)
@@ -246,4 +376,258 @@ void datum_ellipsoid(DatumId id, double *a, double *f)
     if (id < 0 || id >= DATUM_COUNT) id = DATUM_WGS84;
     if (a) *a = DATUMS[id].ell.a;
     if (f) *f = DATUMS[id].ell.f;
+}
+
+/* ==========================================================================
+ * 三个扩展入口的实现
+ * ========================================================================== */
+
+void datum_get_seven_param(DatumId id, DatumSevenParam *out)
+{
+    if (!out) return;
+    if (id < 0 || id >= DATUM_COUNT) id = DATUM_WGS84;
+    const DatumDef *d = &DATUMS[id];
+    out->dx = d->dx; out->dy = d->dy; out->dz = d->dz;
+    out->rx = d->rx; out->ry = d->ry; out->rz = d->rz;
+    out->ds = d->ds;
+}
+
+int datum_set_seven_param(DatumId id, const DatumSevenParam *p)
+{
+    if (!p || id < 0 || id >= DATUM_COUNT) return -1;
+    if (id == DATUM_WGS84) return -1;   /* WGS84 是恒等基准，不许改 */
+    DatumDef *d = &DATUMS[id];
+    d->dx = p->dx; d->dy = p->dy; d->dz = p->dz;
+    d->rx = p->rx; d->ry = p->ry; d->rz = p->rz;
+    d->ds = p->ds;
+    return 0;
+}
+
+void datum_reset_params(DatumId id)
+{
+    if (id < 0 || id >= DATUM_COUNT) return;
+    DATUMS[id] = DATUMS_FACTORY[id];
+}
+
+/* 入口③：已知某点处的北/东偏移（米）⇒ 反算地心三参数。
+ * 东向单位向量 ê = (−sinλ, cosλ, 0)
+ * 北向单位向量 n̂ = (−sinφ·cosλ, −sinφ·sinλ, cosφ)
+ * 两者正交，故 d = de·ê + dn·n̂ 就是能让该点恰好位移 (dn 北, de 东) 的 ECEF 平移。 */
+int datum_set_local_offset(DatumId id, double lat, double lon,
+                           double dnorth, double deast)
+{
+    if (id < 0 || id >= DATUM_COUNT) return -1;
+    if (id == DATUM_WGS84) return -1;
+    const double la = lat * M_PI / 180.0, lo = lon * M_PI / 180.0;
+    const double sl = sin(la), cl = cos(la), slo = sin(lo), clo = cos(lo);
+    const double ex = -slo,          ey = clo,           ez = 0.0;
+    const double nx = -sl * clo,     ny = -sl * slo,     nz = cl;
+    DatumDef *d = &DATUMS[id];
+    d->dx = deast * ex + dnorth * nx;
+    d->dy = deast * ey + dnorth * ny;
+    d->dz = deast * ez + dnorth * nz;
+    d->rx = d->ry = d->rz = d->ds = 0.0;
+    return 0;
+}
+
+/* 7x7 线性方程组求解（高斯消元 + 部分选主元）。返回 0 成功，奇异返回 -1。 */
+static int solve_lin7(double A[49], double b[7], double x[7])
+{
+    for (int c = 0; c < 7; c++) {
+        int piv = c;
+        double best = fabs(A[c * 7 + c]);
+        for (int r = c + 1; r < 7; r++) {
+            double v = fabs(A[r * 7 + c]);
+            if (v > best) { best = v; piv = r; }
+        }
+        if (!(best > 1e-12)) return -1;
+        if (piv != c) {
+            for (int k = c; k < 7; k++) {
+                double t = A[c * 7 + k]; A[c * 7 + k] = A[piv * 7 + k]; A[piv * 7 + k] = t;
+            }
+            double t = b[c]; b[c] = b[piv]; b[piv] = t;
+        }
+        const double dg = A[c * 7 + c];
+        for (int r = c + 1; r < 7; r++) {
+            const double f = A[r * 7 + c] / dg;
+            if (f == 0.0) continue;
+            for (int k = c; k < 7; k++) A[r * 7 + k] -= f * A[c * 7 + k];
+            b[r] -= f * b[c];
+        }
+    }
+    for (int r = 6; r >= 0; r--) {
+        double s = b[r];
+        for (int k = r + 1; k < 7; k++) s -= A[r * 7 + k] * x[k];
+        x[r] = s / A[r * 7 + r];
+    }
+    return 0;
+}
+
+/* 入口①：重合点最小二乘解 7 参数（官方附录 A「重合点法」）。
+ *
+ * 模型（Bursa-Wolf，与 apply_fwd 完全一致）：
+ *     X_wgs = T + (1+s)·(I+Ω)·X_src
+ * 线性化（忽略 s·Ω 二阶项）：
+ *     ΔX = dx            − rz·Ys + ry·Zs + s·Xs
+ *     ΔY = dy + rz·Xs            − rx·Zs + s·Ys
+ *     ΔZ = dz − ry·Xs + rx·Ys            + s·Zs
+ * 每点 3 个方程、7 个未知数 ⇒ n≥3 可解，n 越大越稳。
+ *
+ * ★ 列均衡：旋转列按 µrad、尺度列按 ppm 计（未知数乘了 1e-6），
+ *   否则设计矩阵里"平移列 ≈ 1"与"旋转列 ≈ 6.4e6"量级差 7 个数量级，
+ *   法方程条件数会差到 1e13，double 下平移解会被污染到毫米以上。
+ *   缩放后各列量级都在 O(1~10)，条件数降到几十。 */
+int datum_solve_seven_param(DatumId id, const DatumTie *ties, int n,
+                            DatumSevenParam *out, double *out_rms)
+{
+    if (!ties || !out || n < 3) return -1;
+    if (id < 0 || id >= DATUM_COUNT) id = DATUM_WGS84;
+    const Ellipsoid *es = &DATUMS[id].ell;
+    const Ellipsoid *ew = &DATUMS[DATUM_WGS84].ell;
+
+    double N[49], b[7];
+    memset(N, 0, sizeof N);
+    memset(b, 0, sizeof b);
+
+    for (int i = 0; i < n; i++) {
+        double X1, Y1, Z1, X2, Y2, Z2;
+        geod_to_ecef(ties[i].lat_src, ties[i].lon_src, ties[i].h_src, es, &X1, &Y1, &Z1);
+        geod_to_ecef(ties[i].lat_wgs, ties[i].lon_wgs, ties[i].h_wgs, ew, &X2, &Y2, &Z2);
+        const double r[3] = { X2 - X1, Y2 - Y1, Z2 - Z1 };
+        const double row[3][7] = {
+            { 1, 0, 0,       0.0,  Z1 * 1e-6, -Y1 * 1e-6,  X1 * 1e-6 },
+            { 0, 1, 0, -Z1 * 1e-6,      0.0,   X1 * 1e-6,  Y1 * 1e-6 },
+            { 0, 0, 1,  Y1 * 1e-6, -X1 * 1e-6,      0.0,   Z1 * 1e-6 },
+        };
+        for (int p = 0; p < 3; p++) {
+            for (int q = 0; q < 7; q++) {
+                for (int k = 0; k < 7; k++) N[q * 7 + k] += row[p][q] * row[p][k];
+                b[q] += row[p][q] * r[p];
+            }
+        }
+    }
+
+    double t[7];
+    if (solve_lin7(N, b, t) != 0) return -2;
+
+    out->dx = t[0]; out->dy = t[1]; out->dz = t[2];
+    /* 解出的旋转单位是 µrad、尺度单位是 ppm */
+    out->rx = t[3] * 1e-6 * RAD_TO_ARCSEC;
+    out->ry = t[4] * 1e-6 * RAD_TO_ARCSEC;
+    out->rz = t[5] * 1e-6 * RAD_TO_ARCSEC;
+    out->ds = t[6];
+
+    if (out_rms) {
+        double ss = 0.0;
+        int m = 0;
+        for (int i = 0; i < n; i++) {
+            double X1, Y1, Z1, X2, Y2, Z2;
+            geod_to_ecef(ties[i].lat_src, ties[i].lon_src, ties[i].h_src, es, &X1, &Y1, &Z1);
+            geod_to_ecef(ties[i].lat_wgs, ties[i].lon_wgs, ties[i].h_wgs, ew, &X2, &Y2, &Z2);
+            /* 用解出的参数预测：Δ = A·t，其中旋转/尺度项要还原 1e-6 */
+            const double rx = t[3] * 1e-6, ry = t[4] * 1e-6, rz = t[5] * 1e-6, s = t[6] * 1e-6;
+            const double pX = out->dx        - rz * Y1 + ry * Z1 + s * X1;
+            const double pY = out->dy + rz * X1        - rx * Z1 + s * Y1;
+            const double pZ = out->dz - ry * X1 + rx * Y1        + s * Z1;
+            const double eX = (X2 - X1) - pX, eY = (Y2 - Y1) - pY, eZ = (Z2 - Z1) - pZ;
+            ss += eX * eX + eY * eY + eZ * eZ;
+            m += 3;
+        }
+        *out_rms = (m > 0) ? sqrt(ss / m) : 0.0;
+    }
+    return 0;
+}
+
+/* ---- 入口②：格网 ---- */
+
+int datum_grid_set(DatumId id, const DatumGridDesc *g)
+{
+    if (!g || id < 0 || id >= DATUM_COUNT) return -1;
+    if (g->nrows < 1 || g->ncols < 1 || g->dlat <= 0.0 || g->dlon <= 0.0) return -1;
+    if (!g->dn || !g->de) return -1;
+    const size_t cnt = (size_t)g->nrows * (size_t)g->ncols;
+    float *ndn = (float *)malloc(cnt * sizeof(float));
+    float *nde = (float *)malloc(cnt * sizeof(float));
+    if (!ndn || !nde) { free(ndn); free(nde); return -2; }
+    memcpy(ndn, g->dn, cnt * sizeof(float));
+    memcpy(nde, g->de, cnt * sizeof(float));
+
+    DatumGrid *G = &GRIDS[id];
+    free(G->dn);
+    free(G->de);
+    G->dn = ndn;
+    G->de = nde;
+    G->lat0 = g->lat0; G->lon0 = g->lon0;
+    G->dlat = g->dlat; G->dlon = g->dlon;
+    G->nrows = g->nrows; G->ncols = g->ncols;
+    G->active = 1;
+    return 0;
+}
+
+void datum_grid_clear(DatumId id)
+{
+    if (id < 0 || id >= DATUM_COUNT) return;
+    DatumGrid *G = &GRIDS[id];
+    free(G->dn);
+    free(G->de);
+    G->dn = NULL;
+    G->de = NULL;
+    G->active = 0;
+}
+
+int datum_grid_active(DatumId id)
+{
+    if (id < 0 || id >= DATUM_COUNT) return 0;
+    return GRIDS[id].active;
+}
+
+int datum_grid_load(DatumId id, const char *path)
+{
+    if (id < 0 || id >= DATUM_COUNT) return -5;
+    if (!path) return -1;
+    FILE *f = fopen(path, "r");
+    if (!f) return -1;
+
+    double lat0 = 0, lon0 = 0, dlat = 0, dlon = 0;
+    int nrows = 0, ncols = 0, hdr = 0;
+    long need = 0, got = 0;
+    float *dn = NULL, *de = NULL;
+    char line[512];
+    int rc = 0;
+
+    while (fgets(line, (int)sizeof line, f)) {
+        char *s = line;
+        while (*s == ' ' || *s == '\t') s++;
+        if (*s == '#' || *s == '\n' || *s == '\r' || *s == '\0') continue;
+        if (!hdr) {
+            if (sscanf(s, "%lf %lf %lf %lf %d %d", &lat0, &lon0, &dlat, &dlon,
+                       &nrows, &ncols) != 6) { rc = -2; break; }
+            if (nrows <= 0 || ncols <= 0 || dlat <= 0.0 || dlon <= 0.0) { rc = -2; break; }
+            need = (long)nrows * (long)ncols;
+            dn = (float *)malloc((size_t)need * sizeof(float));
+            de = (float *)malloc((size_t)need * sizeof(float));
+            if (!dn || !de) { rc = -4; break; }
+            hdr = 1;
+            continue;
+        }
+        if (got >= need) break;
+        float a = 0, b = 0;
+        if (sscanf(s, "%f %f", &a, &b) != 2) { rc = -3; break; }
+        dn[got] = a;
+        de[got] = b;
+        got++;
+    }
+    fclose(f);
+
+    if (rc == 0 && !hdr) rc = -2;
+    if (rc == 0 && got < need) rc = -3;
+    if (rc == 0) {
+        DatumGridDesc gd;
+        gd.lat0 = lat0; gd.lon0 = lon0; gd.dlat = dlat; gd.dlon = dlon;
+        gd.nrows = nrows; gd.ncols = ncols; gd.dn = dn; gd.de = de;
+        rc = datum_grid_set(id, &gd);
+    }
+    free(dn);
+    free(de);
+    return rc;
 }

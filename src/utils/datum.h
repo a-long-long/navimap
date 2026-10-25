@@ -50,6 +50,88 @@ void datum_to_wgs84(DatumId id, double lat, double lon, double h,
 void datum_translation(DatumId id, double *dx, double *dy, double *dz);  /* 米 */
 void datum_ellipsoid(DatumId id, double *a, double *f);                  /* 米 / 扁率 */
 
+/* ==========================================================================
+ * 三个扩展入口：现在没有数据，但**接口做实并可验证**，将来拿到数据直接喂进来
+ * 即可生效，不需要再改 datum.c 的算法部分。
+ *
+ *   入口①  有重合点（同一物理点在两套坐标下的成果）  → datum_solve_seven_param
+ *           （即官方《2000国家大地坐标系转换技术要求》附录 A 的"重合点法"）
+ *   入口②  有 1:5万 图幅改正量（测绘部门按图幅分发）  → datum_grid_load / datum_grid_set
+ *           （官方 1:5万 及以下的正解：改正量 + 双线性内插，附录 B/C）
+ *   入口③  只有局部经验值（"我们这儿东偏 110 m"）      → datum_set_local_offset
+ *           （或直接 datum_set_seven_param 填已知三/七参数）
+ *
+ * 三者都通过 datum_set_seven_param / datum_grid_set 落到模块里，
+ * datum_wgs84_to / datum_to_wgs84 立即生效 ⇒ 经纬网与读数随之变化，无需改 UI。
+ * 所有设置都是**进程内的**，不落盘；重启回到出厂值（要持久化再接 settings）。
+ * ========================================================================== */
+
+/* 完整 7 参数（Bursa-Wolf / EPSG:9606 Position Vector 约定，与 +towgs84 同向）：
+ *     X_wgs = T + (1 + ds)·(I + Ω)·X_src
+ * 其中 T=(dx,dy,dz) 米、Ω 由 (rx,ry,rz) 构成（角秒）、ds 为尺度（ppm）。
+ * 当前出厂值只有平移（旋转/尺度恒 0）⇒ 退化为三参数；字段与算法都支持全 7 参数。 */
+typedef struct {
+    double dx, dy, dz;   /* 平移，米 */
+    double rx, ry, rz;   /* 旋转，角秒 */
+    double ds;           /* 尺度，ppm */
+} DatumSevenParam;
+
+void datum_get_seven_param(DatumId id, DatumSevenParam *out);
+/* 运行时替换参数（入口①解出的结果 / 入口③的已知参数，填进来即生效）。
+ * 返回 0 成功，id 越界或不许改（WGS84）返回 -1。 */
+int  datum_set_seven_param(DatumId id, const DatumSevenParam *p);
+void datum_reset_params(DatumId id);   /* 恢复内置出厂参数（不影响已挂的格网） */
+
+/* 入口①：重合点（同一物理点在"源基准"与 WGS84 下的大地坐标，单位度/米）。 */
+typedef struct {
+    double lat_src, lon_src, h_src;   /* 源基准（id 指定的那个）下 */
+    double lat_wgs, lon_wgs, h_wgs;   /* WGS84 下 */
+} DatumTie;
+
+/* 用重合点最小二乘解 7 参数（官方附录 A「重合点法」）。
+ *   n < 3 返回 -1；法方程奇异（点分布退化，如全部共线/重合）返回 -2。
+ *   成功返回 0：out 为解出的参数，out_rms（可 NULL）为残差 RMS（米）。
+ * ★ 实践提醒：3 点刚好解、但无冗余 ⇒ 残差恒为 0，看不出数据质量；
+ *   建议 ≥5 个分布均匀的点，用 out_rms 判断（米级说明参数可信，十米级说明
+ *   该区域不适合单一 Helmert —— BJ54 尤其如此，它是分区平差的、不是刚体）。
+ * ★ 解出来后调用 datum_set_seven_param 装回去即生效；自测 datum_selftest
+ *   用"模块自己正算生成的合成点"验证解算能还原出厂参数。 */
+int datum_solve_seven_param(DatumId id, const DatumTie *ties, int n,
+                            DatumSevenParam *out, double *out_rms);
+
+/* 入口③（最省事）：已知某点处"基准相对 WGS84"的北/东偏移（米），反算地心三参数。
+ * 适用于"我们测区西安80 比 WGS84 东偏 110 m、北偏 8 m"这类局部经验值。
+ * 内部按该点的东/北单位向量把米数转成 ECEF 平移；旋转/尺度清零。
+ * 返回 0 成功；id 越界或 id==DATUM_WGS84（恒等，不许改）返回 -1。 */
+int datum_set_local_offset(DatumId id, double lat, double lon,
+                           double dnorth, double deast);
+
+/* 入口②：图幅改正量格网（规则经纬网格 + 双线性内插，即官方附录 C 的做法）。
+ * 语义：dn/de 是"**基准 → WGS84**"方向上的北向/东向改正量（米），
+ *       与国标「XA80→CGCS2000 图幅改正量」同向；要反方向就传负值。
+ * 格网原点在西南角 (lat0,lon0)，沿纬度方向 nrows 行、沿经度方向 ncols 列，
+ * 步长 dlat/dlon（度）。dn/de 行优先（lat 递增在外、lon 递增在内）。 */
+typedef struct {
+    double lat0, lon0;    /* 西南角经纬度，度 */
+    double dlat, dlon;    /* 步长，度（必须 > 0） */
+    int    nrows, ncols;  /* 行数 / 列数（必须 >= 1） */
+    const float *dn;      /* 北向改正量（米），nrows*ncols 个 */
+    const float *de;      /* 东向改正量（米），nrows*ncols 个 */
+} DatumGridDesc;
+
+/* 挂格网（内部复制一份数据，调用方可立即释放）。返回 0 成功；
+ * 参数不合法返回 -1；内存不足返回 -2。挂上后该基准的换算自动叠加改正量。 */
+int  datum_grid_set(DatumId id, const DatumGridDesc *g);
+void datum_grid_clear(DatumId id);   /* 卸下格网并释放内存 */
+int  datum_grid_active(DatumId id);  /* 是否已挂格网 */
+
+/* 从文本文件加载格网并挂到指定基准 —— 拿到改正量数据后转成这个格式即可用。
+ * 格式（'#' 开头为注释，空行忽略；第一行有效数据是表头）：
+ *     lat0 lon0 dlat dlon nrows ncols
+ *     dn de          ← 共 nrows*ncols 行，行优先
+ * 返回 0 成功；-1 打不开 / -2 表头错 / -3 数据行数不足 / -4 内存不足 / -5 id 越界。 */
+int datum_grid_load(DatumId id, const char *path);
+
 #ifdef __cplusplus
 }
 #endif
