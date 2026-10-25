@@ -29,7 +29,6 @@
  */
 #include <QMainWindow>
 #include <QMenu>
-#include <QComboBox>
 #include <QList>
 
 extern "C" {
@@ -55,8 +54,10 @@ public:
     /* 坐标网叠加层开关（右栏「坐标网」按钮 / --grid 用） */
     void setShowGrid(bool v);
 
-    /* 坐标系（大地基准）切换：连到右栏「坐标网」按钮旁的下拉框与 ☰ 菜单 */
+    /* 坐标系（大地基准）切换：☰ 菜单 / 菜单栏「坐标系(C)」；右栏只在下拉框
+     * 撤掉后留下的坐标网按钮悬停提示里显示"当前坐标系"（updateDatumTip） */
     void setDatum(int id);
+    void updateDatumTip();             /* 刷新坐标网按钮悬停提示里的"当前坐标系" */
 
     /* ---- GPX 轨迹 / 收藏 ----
      * 面板是右栏左侧的浮层（和右栏按钮同一层，不参与布局 ⇒ 不影响按钮坐标）。
@@ -128,8 +129,8 @@ private:
     QTimer       *m_timer  = nullptr;
     QMenu        *m_menuMain = nullptr;  /* 右栏「菜单」按钮弹出的主菜单（同时挂在菜单栏） */
     QWidget      *m_rightOverlay = nullptr; /* 右上角浮层容器（挂在画布上） */
-    QComboBox    *m_datumCombo = nullptr;   /* 右栏坐标网按钮旁的坐标系下拉框 */
-    QList<QAction*> m_datumActs;           /* ☰ 菜单里的坐标系动作（与下拉框同步） */
+    QToolButton  *m_gridBtn = nullptr;    /* 右栏「坐标网」按钮（悬停提示带当前坐标系） */
+    QList<QAction*> m_datumActs;           /* ☰ 菜单里的坐标系动作（与悬停提示同步） */
     /* GPX 轨迹/收藏面板（右栏「轨迹」按钮弹出；挂在画布上的浮层） */
     QWidget      *m_trackPanel = nullptr;
     QWidget      *m_trackRows  = nullptr;   /* 滚动区里的行容器（每条轨迹/收藏一行） */

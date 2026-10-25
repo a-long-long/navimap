@@ -3,7 +3,12 @@ build/
 build-san/
 build-*/
 build2/
+build_test/
 cmake-build-*/
+
+# 仓库根目录的 settings.ini 是跑测试时生成的临时配置，真实配置在
+# %APPDATA%/navimap/（Windows）或 $XDG_CONFIG_HOME/navimap（Linux）。
+/settings.ini
 
 # ===== 地图数据产物：4.2 GB，全部可重建，不入库 =====
 # 路由图 + 显示瓦片 + 地标表 + 反向索引 + 地名库，全部由 sync_maps.sh 生成。

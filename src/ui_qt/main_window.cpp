@@ -301,23 +301,35 @@ int MainWindow::runUiSelfTest()
         check(before != after, "鼠标移动后：右下角坐标随之更新");
     }
 
-    /* ⑪ 坐标系（大地基准）：下拉框存在且项数与枚举一致；切基准后
-     *    右下角读数**真的变**（前缀换成基准短名），切回去能**原样恢复**。
-     *    这条是成对的：只查"变了"会漏掉抖动，只查"恢复"会漏掉根本没生效。 */
+    /* ⑪ 坐标系（大地基准）：右栏**没有下拉框**了，"当前基准"只剩坐标网按钮
+     *    悬停提示这一处常驻显示 ⇒ 提示必须带上当前基准标签与来源说明，
+     *    且切基准后**随之更新**（否则用户看到的是过期基准）。
+     *    同时验读数**真的变**（前缀换成基准短名）、切回去能**原样恢复**：
+     *    只查"变了"会漏掉抖动，只查"恢复"会漏掉根本没生效。 */
     {
         const int keep = m_a->datum;
-        check(m_datumCombo && m_datumCombo->count() == (int)DATUM_COUNT,
-              "坐标系下拉框存在且项数与枚举一致");
+        check(m_gridBtn != nullptr, "坐标网按钮存在（悬停提示的宿主）");
+
+        setDatum(DATUM_WGS84);
+        QString tip = m_gridBtn->toolTip();
+        check(tip.contains(QStringLiteral("当前坐标系：") +
+                           QString::fromUtf8(datum_label(DATUM_WGS84))) &&
+              tip.contains(QString::fromUtf8(datum_note(DATUM_WGS84))),
+              "悬停提示带当前坐标系（WGS84）标签与来源说明");
 
         m_canvas->update();   /* 光标位置沿用上一条断言里那次 MouseMove，保持固定 */
-        setDatum(DATUM_WGS84);
         const QString t_wgs = m_canvas->cursorCoordsText();
         setDatum(DATUM_BJ54);
         const QString t_bj = m_canvas->cursorCoordsText();
+        const QString tip_bj = m_gridBtn->toolTip();   /* 提示要跟手变，当场取样 */
         setDatum(DATUM_XA80);
         const QString t_xa = m_canvas->cursorCoordsText();
         setDatum(DATUM_WGS84);
         const QString t_back = m_canvas->cursorCoordsText();
+
+        check(tip_bj.contains(QStringLiteral("当前坐标系：") +
+                              QString::fromUtf8(datum_label(DATUM_BJ54))),
+              "切到北京54：悬停提示里的当前坐标系随之更新");
 
         check(t_bj != t_wgs && t_bj.startsWith(QString::fromUtf8("北京54")),
               "切到北京54：读数变化且带基准前缀");
@@ -487,7 +499,8 @@ void MainWindow::buildMenus()
     addAct(mview, QStringLiteral("字号减小"), QKeySequence(Qt::Key_BracketLeft), this,
            [this]() { app_set_font_size(m_a, m_a->font_size - 1); m_a->need_redraw = 1; });
 
-    /* 坐标系（大地基准）：切基准后经纬网与读数按该基准呈现。与右栏下拉框同步。 */
+    /* 坐标系（大地基准）：切基准后经纬网与读数按该基准呈现。勾选态与右栏
+     * 坐标网按钮悬停提示里的"当前坐标系"同步（右栏没有下拉框了）。 */
     QMenu *mdatum = menuBar()->addMenu(QStringLiteral("坐标系(&C)"));
     for (int i = 0; i < DATUM_COUNT; i++) {
         QAction *act = mdatum->addAction(QString::fromUtf8(datum_label((DatumId)i)));
@@ -707,29 +720,19 @@ void MainWindow::buildRightCol()
         m_a->day_night = !m_a->day_night; m_a->need_redraw = 1;
     });
 
-    /* 坐标网（经纬网）叠加层开关 */
-    QToolButton *grid = bigbtn(Qt::IconKind::Grid, QStringLiteral("坐标网（经纬网）"));
-    grid->setCheckable(true);
-    connect(grid, &QToolButton::toggled, this, [this](bool on) {
+    /* 坐标网（经纬网）叠加层开关。悬停提示里**顺带显示当前坐标系**：
+     * 基准只影响经纬网与右下角读数（不重投底图），所以它和坐标网是同一件事，
+     * 提示放这儿最顺。切换入口在菜单栏「坐标系(C)」/ ☰ 菜单，右栏不再放下拉框
+     * （曾经放过一个 124px 的 QComboBox，占地方且和菜单重复）。 */
+    m_gridBtn = bigbtn(Qt::IconKind::Grid, QStringLiteral("坐标网（经纬网）"));
+    m_gridBtn->setCheckable(true);
+    connect(m_gridBtn, &QToolButton::toggled, this, [this](bool on) {
         m_canvas->setShowGrid(on);
     });
-
-    /* 坐标系（大地基准）下拉框：紧邻坐标网按钮 ——
-     * 切基准后经纬网（若开着）与右下角读数立即按该基准呈现。 */
-    m_datumCombo = new QComboBox();
-    m_datumCombo->setFixedWidth(124);
-    m_datumCombo->setToolTip(QStringLiteral("坐标系（大地基准）：切基准后经纬网与右下角读数随之变化"));    for (int i = 0; i < DATUM_COUNT; i++)
-        m_datumCombo->addItem(QString::fromUtf8(datum_label((DatumId)i)));
-    m_datumCombo->setCurrentIndex(m_a->datum);
-    /* 提示里带上该基准的**来源与精度**（文案在 datum.c 的 datum_note，跟参数表
-       一起维护）：西安80 只换椭球、经纬度与 WGS84 几乎一样，不说明会被当成没生效。 */
-    m_datumCombo->setToolTip(QString::fromUtf8(datum_note((DatumId)m_a->datum)));
-    connect(m_datumCombo, QOverload<int>::of(&QComboBox::currentIndexChanged),
-            this, [this](int i) { setDatum(i); });
+    updateDatumTip();
 
     /* 轨迹 / 收藏面板开关（可勾选：亮起 = 面板开着）。
-     * 放在坐标系下拉框下面：两者都是"往地图上加东西"，
-     * 和缩放/定位/昼夜那组"操作地图"的分开。 */
+     * 和缩放/定位/昼夜那组"操作地图"的分开，与坐标网之间空一档。 */
     m_trackBtn = bigbtn(Qt::IconKind::Track, QStringLiteral("轨迹 / 收藏（导入 GPX）"));
     m_trackBtn->setCheckable(true);
     connect(m_trackBtn, &QToolButton::toggled, this, [this](bool) {
@@ -753,8 +756,7 @@ void MainWindow::buildRightCol()
     vl->addWidget(loc);
     vl->addWidget(day);
     vl->addSpacing(6);
-    vl->addWidget(grid);
-    vl->addWidget(m_datumCombo);
+    vl->addWidget(m_gridBtn);
     vl->addSpacing(6);
     vl->addWidget(m_trackBtn);
     vl->addWidget(menu);
@@ -852,15 +854,30 @@ void MainWindow::setDatum(int id)
 {
     if (id < 0 || id >= DATUM_COUNT) id = DATUM_WGS84;
     m_a->datum = id;
-    if (m_datumCombo) {
-        m_datumCombo->setCurrentIndex(id);
-        m_datumCombo->setToolTip(QString::fromUtf8(datum_note((DatumId)id)));
-    }
+    updateDatumTip();
     for (QAction *a : m_datumActs)
         a->setChecked(a->data().toInt() == id);
     /* 落盘延到 app_shutdown（app_persist_settings 统一写回 settings.ini） */
     settings_set_int(m_a->cfg, "datum", id);
     m_a->need_redraw = 1;   /* 经纬网/读数立即按新基准重绘 */
+}
+
+/* 坐标网按钮的悬停提示：按钮本身管"开/关经纬网"，提示里额外告诉用户
+ * **当前**用哪个坐标系（大地基准）读这张图，以及去哪儿切换。
+ * 提示内容随 setDatum 更新 —— 右栏没有下拉框了，这条提示是唯一的
+ * "当前基准"常驻显示（切换入口见提示最后一行：菜单栏「坐标系(C)」）。
+ * 精度/来源文案取 datum_note()：它和 datum.c 的参数表同文件维护，
+ * 西安80 只换椭球、经纬度与 WGS84 几乎一样，不说明会被当成没生效。 */
+void MainWindow::updateDatumTip()
+{
+    if (!m_gridBtn) return;
+    const DatumId id = (DatumId)(m_a ? m_a->datum : DATUM_WGS84);
+    QString tip = QStringLiteral("坐标网（经纬网）叠加层\n");
+    tip += QStringLiteral("当前坐标系：%1\n%2")
+               .arg(QString::fromUtf8(datum_label(id)),
+                    QString::fromUtf8(datum_note(id)));
+    tip += QStringLiteral("\n切换：菜单栏「坐标系(C)」或 ☰ 主菜单");
+    m_gridBtn->setToolTip(tip);
 }
 
 /* ---------------- GPX 轨迹 / 收藏 ---------------- */

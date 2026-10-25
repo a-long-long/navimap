@@ -9,7 +9,7 @@
 - 验收 `./scripts/regress.sh`（66 项；本机 = 42 通过 / 24 失败，全为环境缺失：7 省 PBF /
   `places_auto.db` / `lm.bin` / objdump 路径）；编译零警告（-Werror）。改渲染补
   `python3 scripts/bmpdiff.py 旧 新`（要素色→背景色=丢要素）。
-- `navmap_qt --ui-test`（26 项）已进 regress.sh。完成即 commit + push origin main；
+- `navmap_qt --ui-test`（33 项）已进 regress.sh。完成即 commit + push origin main；
   三前端（navmap / navmap_qt / map_shot）链接一致。Windows 构建用 `./scripts/build_win.sh`。
 
 ## 构建环境（Windows/MSYS2）
