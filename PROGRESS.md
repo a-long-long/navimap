@@ -721,6 +721,81 @@ CLI 端到端：`--datum=xa80 --datum-grid=demo.txt`（北 +100 / 东 +200）⇒
 
 ---
 
+## 十一之二、语音导航移植（抄 OsmAnd 官方，2026-10-25）
+
+> 起因：J 先生「抄写 E:\Osmand 项目中的语音导航部分，替换本项目语音」。
+> 原来的播报是「固定 300 m / 60 m 两级 + 一句直白文案」，高速上根本来不及
+> （120 km/h 时 300 m 只剩 9 秒），也没有「现在左转」、没有相邻路口合并、没有去抖
+> ⇒ 连续两个路口连着刷屏。
+
+### 抄了什么（每层取一个官方源）
+
+| 层 | 官方出处 | 本项目落点 |
+|---|---|---|
+| 分级提前量（速度 × 秒数） | `OsmAnd/…/routing/data/AnnounceTimeDistances.java` | `voice_lead_distances()` / `voice_announce_state()` |
+| 中文话术 | `nav-desktop/…/nav/route/VoiceRouter.java`、`model/Alarm.java`、`model/AlarmType.java` | `voice_action_text()` / `voice_turn_phrase()` / `voice_alarm_phrase()` |
+| 沿路告警（选取规则） | `nav-desktop/…/nav/route/Alarms.java`、`Navigator.java`、`core/Units.java` | `voice_scan_alarm()` |
+| 播报节奏（层级 / 去抖 / 冷却） | nav-desktop `VoiceRouter` | `VoiceRouter` 结构体 + `voice_router_maybe_say*()` |
+| 每帧编排顺序 | nav-desktop `VoiceRouter.update()` | `voice_tick()`（speedLimit → arrival → alarm → turn） |
+
+- 新增 `src/route/voice.{h,c}`：**纯逻辑、零平台依赖**，只决定「该说什么」，
+  不碰发声 ⇒ 判据能在 CLI 里无头跑。
+- 新增 `src/ui/voice_wire.{h,c}`：接线的**唯一实现** `nav_voice_frame()`
+  （取状态 → 编排 → `nm_tts_speak`）。生产（`window.c`）与端到端自测**共用同一份**。
+- 新增 `tools/voice_selftest.c`（策略层单函数）、`tools/voice_e2e.c`（端到端）。
+- 新增 `scripts/voice_neg.sh`（负向对照）。
+
+### 修掉的 3 个真 bug
+
+1. **告警实例号位置相关**：早期用「扫描计数器」当 `inst` ⇒ 同一条路上第二个隧道
+   永远不播。改成**段下标**（位置恒定）⇒ 官方 `IdentityHashMap` 语义。
+2. **同文本冷却只覆盖了转向**：官方 `say()` 是所有播报的**唯一出口** ⇒ 15 秒同文本
+   冷却对限速 / 到达 / 告警 / 转向一视同仁。四类现在都过同一个 `say_dup()`。
+3. **到达收尾语被吞掉**（今天最后修的）：`app_nav_sim_tick()` 原先**先**置
+   `sim_paused = 1`、**后**调播报，而播报入口有 `if (sim_paused) return;`
+   ⇒ 「您已到达目的地附近，导航结束」**永远播不出来**（GUI 里从来没响过这句）。
+   两处堵死：① `window.c` 改成「先播报、后置位」；② `voice_wire.c` 里收尾语
+   **单独判、不受 paused 影响**（常规播报才受暂停约束）。
+
+### 判据
+
+- `voice_selftest`（`VOICE-OK`）：策略层单函数（提前量 / 话术 / 层级 / 冷却 / 实例去重）。
+- `voice_e2e`（`VOICE-E2E-OK`）：**走生产路径**
+  `navsim_advance → navsim_next_maneuver → voice_wire.c 的 nav_voice_frame → nm_tts_speak`，
+  用 `NAVIMAP_TTS_DRYRUN` 把「窗口真正交出去的话」同步截下来断言。
+  A 类 9 例（转向层级 / 告警实例 / 路口合并 / 限速 / 隧道 / 到达只播一次 /
+  **收尾语恰好一次** / **收尾语不受暂停影响** / 暂停时常规播报闭嘴）
+  + B 类 2 例（官方播报顺序 / 同文本冷却 15 秒窗口）。
+- `scripts/voice_neg.sh`：9 项注入，要求**每一项都被抓到**（fail-closed）。
+
+### 踩过的坑（判据假绿，2 项）
+
+- **e2e 原来复刻了一遍接线** ⇒ 把发声循环改成 `i < 0` 两个自测照样全绿（假绿 #8）。
+  ⇒ 接线抽成 `src/ui/voice_wire.c` 的 `nav_voice_frame()`，e2e 直接调它。
+- **负向对照 #2 注入锚点误命中** `voice_router_maybe_say_arrive()` 的 `say_dup`
+  （那里 `arrived_said` 先置位 ⇒ 永远命中不了 ⇒ 注入零影响 ⇒ 假绿）。
+  ⇒ 锚点改到**告警函数**里的 `say_dup`（可观测：3.5c 第 2 次调用距上次播 4000 ms
+  > 告警自身 3000 ms 错开 ⇒ 只可能被 15 秒同文本冷却挡住）。
+- 注入写法**不能让变量变成「未使用」**：`-Werror` 下编译失败 ⇒ 跑的还是旧 exe
+  ⇒ 反而变成假绿。用 `if (n < 0)` 而不是 `i < 0`。
+
+### 已知缺口（下一步）
+
+- ⚠️ **`window.c` 里的「先播报后置位」顺序目前没有判据覆盖**：e2e 走的是
+  `voice_wire.c`，`window.c` 的置位顺序是另一份代码。⇒ 要么把置位顺序也搬进
+  `voice_wire.c`（让 e2e 能覆盖），要么明确接受这个缺口。
+- ⚠️ `scripts/voice_neg.sh` 的 9 项注入**今天未实跑**（J 先生叫停收尾），待跑。
+
+### 状态
+
+- `voice_selftest` ✅ `VOICE-OK`；`voice_e2e` ✅ `VOICE-E2E-OK`
+  （A7 实测收尾语播出：`t=72.5s 您已到达目的地附近，导航结束`）。
+- 编译：`voice_selftest` / `voice_e2e` / `navmap_ui`（`window.c` + `voice_wire.c`）
+  **零警告**通过；全量 `cmake --build build` 未跑完（收尾叫停）。
+- `scripts/regress.sh` 已加入 `voice_e2e` 一项。
+
+---
+
 ## 十二、接下来的候选（按性价比排序）
 
 > ✅ **PBF 后台解码优化（已完成，2026-10-25）**：解码本就在后台线程异步进行
@@ -746,6 +821,13 @@ CLI 端到端：`--datum=xa80 --datum-grid=demo.txt`（北 +100 / 东 +200）⇒
 > 目标达成：运行时只加载视口内那条，不再"为屏外一条边解整省"。
 
 1. **补 POI 图标与更多显示要素**（建筑 / 等高线 / 土地利用着色）——从 PBF 侧补，不换数据源。
+2. ~~**语音导航移植（抄 OsmAnd 官方）**~~——✅ **已完成（2026-10-25，见第十一之二节）**：
+   分级提前量 / 中文话术 / 沿路告警 / 播报节奏全部按官方实现抄写，
+   修掉 3 个真 bug（告警实例号位置相关 / 同文本冷却只覆盖转向 / 到达收尾语被吞）。
+   **遗留 3 项**（下次接）：
+   ① `window.c` 的"先播报后置位"顺序没有判据覆盖 ⇒ 要把置位顺序搬进 `voice_wire.c`；
+   ② `scripts/voice_neg.sh` 的 9 项注入未实跑；
+   ③ 全量回归（基线 77 项 = 53 通过 / 24 失败）与 `navmap_qt --ui-test`（40 项）未重跑。
 2. ~~**GPX 轨迹导入导出 / 收藏夹**~~——✅ **已完成（2026-10-25，见第十一·六节）**：
    GPX 1.1 解析 + SQLite `tracks.db` 持久化 + 三前端 CLI/面板接线 + 45 条自测断言
    + 4 组负向对照实证。

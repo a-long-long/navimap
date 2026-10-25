@@ -168,7 +168,8 @@ set(ROUTE_SRCS
     src/route/lmtable.c
     src/route/revidx.c
     src/route/maneuver.c
-    src/route/navsim.c)
+    src/route/navsim.c
+    src/route/voice.c)
 set(SEARCH_SRCS
     src/search/search.c)
 set(RENDER_SRCS
@@ -181,7 +182,8 @@ set(RENDER_SRCS
     src/render/trackdraw.c)
 set(UI_SRCS
     src/ui/window.c
-    src/ui/overlay.c)
+    src/ui/overlay.c
+    src/ui/voice_wire.c)
 
 # 阶段 1 叶子库：把 src/utils 按模块拆成 4 个独立 STATIC 库（字面补全阶段1）。
 # 依赖关系：mem → plat；geo / strpool / plat 为纯叶子（零内部依赖）。
@@ -590,6 +592,17 @@ add_executable(plat_selftest tools/plat_selftest.c)
 nm_link_tool(plat_selftest)
 add_executable(tts_selftest tools/tts_selftest.c)
 nm_link_tool(tts_selftest)
+# 语音播报策略（抄自 OsmAnd）：分级提前量 / 话术模板 / 播报节奏。
+add_executable(voice_selftest tools/voice_selftest.c)
+nm_link_tool(voice_selftest navmap_route navmap_map navmap_geo navmap_strpool navmap_plat navmap_mem)
+# 语音播报**端到端**自测：走生产路径（navsim → navsim_next_maneuver →
+# **ui/voice_wire.c 的 nav_voice_frame** → nm_tts_speak），
+# 验证"接线"本身（距离口径、告警基准、播报顺序、冷却、收尾语）——单函数自测抓不到这些。
+# ★ 必须链 navmap_ui：接线的**唯一实现**在 src/ui/voice_wire.c 里，
+#   链接它才能证明"自测跑的就是生产代码"（原先这里只链 route，自测只好复刻一遍接线
+#   ⇒ 接线坏掉时判据假绿，负向对照第 8 项就是这么被抓住的）。
+add_executable(voice_e2e tools/voice_e2e.c)
+nm_link_tool(voice_e2e navmap_map navmap_route navmap_search navmap_render navmap_ui)
 add_executable(alts_selftest tools/alts_selftest.c tools/tool_common.c)
 nm_link_tool(alts_selftest navmap_map navmap_route navmap_search navmap_render navmap_ui)
 

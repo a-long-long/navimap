@@ -185,6 +185,11 @@ run settings_selftest "SETTINGS-OK" "$BUILD/settings_selftest"
 # ---- 语音播报（离线 TTS）----
 run tts_selftest "TTS-OK" "$BUILD/tts_selftest"
 
+# ---- 语音播报策略（抄写 OsmAnd 官方：分级提前量 / 中文话术 / 节奏 / 沿路告警）----
+# 纯逻辑、无头可跑；期望值全部来自官方源码（AnnounceTimeDistances / nav-desktop
+# VoiceRouter / Alarm / AlarmType / Units / Alarms）。
+run voice_selftest "VOICE-OK" "$BUILD/voice_selftest"
+
 # ---- 多方案对比（阶段 12）----
 run alts_selftest "ALTS-OK" "$BUILD/alts_selftest"
 

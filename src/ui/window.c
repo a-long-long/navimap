@@ -5,6 +5,7 @@
 #include <stdlib.h>
 #include <time.h>
 
+#include "ui/voice_wire.h"
 #include "render/paint.h"
 #include "render/navdraw.h"
 #include "render/chrome.h"
@@ -44,7 +45,7 @@ static int app_big_size(int base)
 /* 语音播报：per-maneuver 去重位图重置 + 每帧按距离触发（实现见下方
  * app_nav_sim_toggle 之前）。先声明，供 app_nav_poll / app_nav_plan_sync 调用。 */
 static void nav_announce_reset(App *a);
-static void nav_announce(App *a);
+static void nav_announce_at(App *a, uint64_t now_ms);
 
 int app_init(App *a, const char *graph_dir, int w, int h,
              const char *font_path, int font_size, const AutoBuildOpt *ab)
@@ -209,7 +210,6 @@ void app_shutdown(App *a)
     if (a->have_rr) route_result_free(&a->rr);
     if (a->have_alts) route_result_set_free(&a->ralts);
     maneuver_free(&a->man);
-    free(a->ann_tier); a->ann_tier = NULL; a->ann_cap = 0;
     router_destroy(a->router);
     if (a->nav_mu) { nm_mutex_destroy(a->nav_mu); a->nav_mu = NULL; }
     mapset_free(&a->ms);
@@ -731,39 +731,43 @@ void app_search_commit(App *a)
  * 唯一会"偏离路线"的情况是 app_nav_sim_deviate 主动注入，那之后走
  * nav_request 重算，新路线到了再 navsim_start 重新起步。 */
 
-/* 重置播报去重位图（新路线 / 重新起步时调用）。 */
+/* 重置播报状态（新路线 / 重新起步时调用）。
+ * ★ 现在播报记忆全在 VoiceRouter 里（层级、同文本去抖、限速/到达/告警冷却），
+ *   不再需要 per-maneuver 的位图。 */
 static void nav_announce_reset(App *a)
 {
-    if (a->ann_cap < a->man.n) {
-        free(a->ann_tier);
-        a->ann_tier = (uint8_t *)malloc(a->man.n ? (size_t)a->man.n : 1);
-        a->ann_cap = a->man.n;
-    }
-    if (a->ann_tier) memset(a->ann_tier, 0, (size_t)(a->ann_cap > 0 ? a->ann_cap : 1));
-    a->ann_arrive = 0;
+    voice_router_reset(&a->vr);
+    a->ann_finished = 0;
 }
 
-/* 每帧调用：按"距下一条指令的距离"决定要不要播报。同一指令的"接近层(300m)"和
- * "立即层(60m)"各只播一次（per-maneuver 位图去重）。依赖 navsim_next_maneuver
- * 与既有的 maneuver_text —— 文案不需要重造。 */
-static void nav_announce(App *a)
+/* 每帧调用：按官方 OsmAnd 的规则决定播什么。
+ *
+ * ★ 抄写来源（详见 src/route/voice.h 的清单）：
+ *   · 分级提前量 = 速度 × 秒数（官方 AnnounceTimeDistances.java）
+ *     ⇒ 高速上提前得多（120 km/h 时提前 3.8 km），慢路上不啰嗦。
+ *   · 话术 = 官方 nav-desktop 的中文桌面实现（VoiceRouter.turnPhrase/action）
+ *   · 路口合并 = 官方 turnPhrase 的 "，然后紧接着…"
+ *   · 告警两级 = 官方 Alarm.phrase + 官方 Alarms/Navigator 的选取规则
+ *
+ * ★ 编排（"这一帧先播限速还是先播转向"）也在 route/voice.c 的 voice_tick() 里，
+ *   顺序严格照官方 VoiceRouter.update()：speedLimit → arrival → alarm → turn。
+ *
+ * ★★ 这里只是一层**薄封装**：真正干活的接线在 src/ui/voice_wire.c 的
+ *   nav_voice_frame()（生产与无头自测共用同一份）⇒ 接线坏了自测必然变红
+ *   （原先接线长在 App 里，自测够不着，只能复刻一遍 ⇒ 判据假绿）。 */
+static void nav_announce_at(App *a, uint64_t now_ms)
 {
-    if (!a->voice_on || !a->have_rr || !a->sim_on || a->sim_paused) return;
-    if (a->sim.arrived) {
-        if (!a->ann_arrive) { a->ann_arrive = 1; nm_tts_speak("您已到达目的地"); }
-        return;
-    }
-    if (a->man.n <= 0) return;
-    double to_go; int mi, prev;
-    mi = navsim_next_maneuver(&a->sim, &a->man, &to_go, &prev);
-    if (mi < 0 || mi >= a->man.n) return;
-    int tier = nm_tts_tier_for_distance(to_go);
-    if (tier == 0) return;
-    if (mi < a->ann_cap && (a->ann_tier[mi] & (1u << tier))) return;   /* 该层已播 */
-    if (mi < a->ann_cap) a->ann_tier[mi] |= (uint8_t)(1u << tier);
-    char buf[256];
-    maneuver_text(&a->man.v[mi], buf, sizeof buf);
-    nm_tts_speak(buf);
+    if (!a->have_rr || !a->sim_on) return;
+
+    NavVoiceCtx c;
+    c.vr        = &a->vr;
+    c.rr        = &a->rr;
+    c.man       = &a->man;
+    c.sim       = &a->sim;
+    c.voice_on  = a->voice_on;
+    c.paused    = a->sim_paused;
+    c.ann_finished = &a->ann_finished;
+    nav_voice_frame(&c, now_ms);
 }
 
 void app_nav_sim_toggle(App *a)
@@ -851,11 +855,16 @@ void app_nav_sim_tick(App *a)
     int arrived = navsim_advance(&a->sim, dt);
     /* 车头就是定位点：模拟 GNSS 永远给出"我在路上" 的位置 */
     navsim_locate(&a->sim, a->sim.car_lat, a->sim.car_lon);
+    /* ★★ 播报必须在 sim_paused 置位**之前**：
+     *   到达那一刻"您已到达目的地附近，导航结束"要能说出来，
+     *   而到达会同时把 sim_paused 置 1（模拟停下）⇒ 先置位就把它吞了
+     *   （实测真 bug：那句收尾语在 GUI 里从来没响过）。
+     *   顺序：先播报（此时 sim_paused 还是旧的 0）⇒ 再置位。 */
+    nav_announce_at(a, now);
     if (arrived) {
         a->sim_paused = 1;
         snprintf(a->nav_msg, sizeof(a->nav_msg), "已到达目的地");
     }
-    nav_announce(a);                      /* 按距离阈值播报下一条指令（V 键可关） */
     if (a->sim_follow) {
         a->view.lat = a->sim.car_lat;
         a->view.lon = a->sim.car_lon;

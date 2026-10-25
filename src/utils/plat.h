@@ -84,6 +84,16 @@ void     nm_mutex_destroy(NmMutex *m);
 void     nm_mutex_lock(NmMutex *m);
 void     nm_mutex_unlock(NmMutex *m);
 
+/* 条件变量（跨平台）。用来做"生产者-消费者"队列：等待方必须已持有
+ * nm_mutex_lock，nm_cond_wait 返回时**重新持有**该锁。
+ * 单一所有权：创建者负责 nm_cond_destroy。 */
+typedef struct NmCond NmCond;
+NmCond  *nm_cond_create(void);
+void     nm_cond_destroy(NmCond *c);
+void     nm_cond_wait(NmCond *c, NmMutex *m);   /* 释放锁 → 等信号 → 重获锁 */
+void     nm_cond_signal(NmCond *c);              /* 唤醒一个等待者 */
+void     nm_cond_broadcast(NmCond *c);           /* 唤醒全部等待者 */
+
 /* 起一个脱离式（detached）线程跑 f(arg)。成功返回 0，失败返回 -1。
  * 线程自行结束，调用方不 join；f 内部自行处理自己的资源。 */
 int nm_thread_spawn(void (*f)(void *), void *arg);
@@ -108,6 +118,30 @@ int nm_which(const char *dir, const char *name, char *out, size_t cap);
  * 返回 0 = 正常退出（码在 *exit_code）；-1 = 起不来/被信号杀。 */
 int nm_spawn_wait(const char *exe, char *const argv[], int *exit_code);
 
+/* ---------------------------------------------------------------------------
+ * 常驻子进程 + 管道（跨平台）
+ *
+ * 用途：TTS 后端要**一次启动、多次喂文本**。每句都起一个进程的话，
+ * Windows 上 PowerShell 启动要 0.5~1.5 秒 —— 导航播报会因此错过时机
+ * （车都开过路口了声音才出来）。所以起一个常驻子进程，把它的 stdin
+ * 接一条管道，逐行喂文本。
+ *
+ * 用法：spawn → 反复 write → close（关管道让子进程看到 EOF 并退出）。
+ * 单一所有权：创建者负责 nm_proc_close。
+ * ------------------------------------------------------------------------- */
+typedef struct NmProc NmProc;
+/* 起常驻子进程并把它的 stdin 接上管道。成功返回句柄，失败返回 NULL。
+ * argv 必须以 NULL 结尾；argv[0] 是程序路径。 */
+NmProc *nm_proc_spawn(const char *exe, char *const argv[]);
+/* 往子进程 stdin 写一段文本（不追加换行，调用方自己决定）。
+ * 返回写入字节数；失败返回 -1。 */
+int     nm_proc_write(NmProc *p, const char *text);
+/* 关闭 stdin 并等子进程退出，释放句柄。p 为 NULL 时什么都不做。
+ * 返回子进程退出码；取不到返回 -1。 */
+int     nm_proc_close(NmProc *p);
+/* 子进程是否还活着。p 为 NULL 或已退出返回 0。 */
+int     nm_proc_alive(NmProc *p);
+
 uint64_t nm_now_ms(void);             /* 单调时钟，毫秒 */
 uint64_t nm_now_us(void);             /* 单调时钟，微秒（基准测试要亚毫秒精度） */
 void     nm_sleep_ms(unsigned ms);
@@ -121,8 +155,24 @@ double   nm_peak_rss_mb(void);        /* 峰值驻留内存（MB） */
  * 用于无头自测（本机没有音频设备 / 没有 TTS 引擎时也能断言集成是否正确）。 */
 int  nm_tts_speak(const char *text);          /* 返回 1=已提交(或 dryrun 已写) / 0=无引擎 */
 int  nm_tts_available(void);                  /* 本机有可用引擎？（不含 dryrun） */
+/* 累计被**受理**的播报句数（只读观测口，不改变任何状态）。
+ * ★ 计数点在入队**之前**、调用线程内、无竞争 —— 不能读队列长度：后台
+ *   朗读线程会异步喝空队列，"入队后立刻读 size()"是与活消费者赛跑
+ *   （OsmAnd 的 Speech.OFFERED 踩过同一个坑）。 */
+int  nm_tts_offered_count(void);
+/* 累计已**交付引擎**的句数（计数点在交给引擎之后、后台线程内）。
+ * 与受理数配对可断言"队列真的被消费了" —— 只看受理数证明不了 worker 在跑。
+ * ★ 不等于"已播完"：常驻会话下写入管道就返回，合成还在子进程那边进行中。
+ *   要等真正播完用 nm_tts_flush()。 */
+int  nm_tts_delivered_count(void);
+/* 等待"已受理的句子全部播完"。实现：关掉常驻会话的写端 ⇒ 子进程读到 EOF
+ * ⇒ 循环退出 ⇒ 退出前会把当前句说完 ⇒ 子进程退出即精确的"播完"边界。
+ * 返回 0 = 已排空并播完；-1 = 没有会话可关（无引擎）。 */
+int  nm_tts_flush(void);
 /* 距下一条指令 to_go_m 米时该播报的层级：0 不播 / 1 接近层(<=300m) / 2 立即层(<=60m)。
- * 调用方用 per-maneuver 位图去重，避免同一条指令重复播报。 */
+ * ★ **已弃用**：导航播报改走 route/voice.c 的"速度 × 秒数"模型
+ *   （抄 OsmAnd 的 AnnounceTimeDistances），固定 300 m 在高速上来不及。
+ *   保留仅为兼容外部调用方与既有自测，新代码不要用。 */
 int  nm_tts_tier_for_distance(double to_go_m);
 
 /* ---------------- 其它 ---------------- */

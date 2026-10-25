@@ -14,6 +14,7 @@
 #include "route/route.h"
 #include "route/maneuver.h"
 #include "route/navsim.h"
+#include "route/voice.h"
 #include "search/search.h"
 #include "map/gpx.h"
 #include "ui/overlay.h"
@@ -170,12 +171,15 @@ typedef struct {
     int           ovl_alpha[OVL_COUNT];
 
     /* ---- 语音播报（离线 TTS）----
-     * voice_on 受设置面板 / V 键控制；ann_tier 是 per-maneuver 的"已播报层级"位图，
-     * 避免同一指令重复播报；ann_arrive 标记到达播报是否已发。 */
+     * voice_on 受设置面板 / V 键控制；
+     * vr 是**语音播报器状态**（抄 OsmAnd 的 VoiceRouter）：记"上一条指令播到第几级"
+     * "上一句文本与时间"（同文本去抖）"限速/到达/告警的冷却计时器"。
+     * 决策逻辑全在 route/voice.c（纯逻辑、可无头自测），这里只喂状态 + 发声。 */
     int           voice_on;        /* 语音播报开关 */
-    uint8_t      *ann_tier;        /* 每条 maneuver 的已播报层级位图（1=接近 2=立即） */
-    int           ann_cap;         /* ann_tier 容量（= man.n） */
-    uint8_t       ann_arrive;      /* 到达播报已发 */
+    VoiceRouter   vr;              /* 播报器状态（随路线重置） */
+    uint8_t       ann_finished;    /* "导航结束"已播（与 vr.arrived_said 分开：
+                                     *   前者是"前方即将到达目的地"，后者是
+                                     *   真正停到终点时的收尾语，两者是两件事） */
 } App;
 
 /* font_path：NULL = 用默认字体（宋体优先的候选链）；"none" 或 "" = 不加载字体
