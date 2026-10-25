@@ -8,6 +8,7 @@
  *               [--shot=<输出.png>]        ← 渲染一帧存 PNG 后退出
  *                                               （配合 QT_QPA_PLATFORM=offscreen
  *                                                 可无人值守出图）
+ *               [--shot-search] [--shot-track]  ← 截图前先展开搜索框 / 轨迹面板
  *
  * 分层：本文件只做参数解析与生命周期编排；窗口/部件在 main_window.cpp，
  * 地图画布在 map_canvas.cpp；C 核心（渲染/算路/搜索）经 window.h 的
@@ -42,8 +43,12 @@ int main(int argc, char **argv)
     int grid = 0;                     /* --grid：开局打开坐标网叠加层 */
     int ui_test = 0;                  /* --ui-test：跑无头 UI 自检后退出 */
     int shot_search = 0;              /* --shot-search：截图前先展开搜索框 */
+    int shot_track = 0;               /* --shot-track：截图前先展开轨迹/收藏面板 */
     const char *datum = NULL;         /* --datum=wgs84|cgcs2000|bj54|xa80：坐标系（命令行优先） */
     const char *datum_grid = NULL;    /* --datum-grid=<file>：图幅改正量格网（入口②） */
+    const char *gpx_in[8] = {0};      /* --gpx=<file>：启动即导入（可多次，最多 8 个） */
+    int n_gpx_in = 0;
+    const char *gpx_out = NULL;       /* --export-gpx=<file>：退出时导出全部轨迹+收藏 */
 
     AutoBuildOpt ab;
     memset(&ab, 0, sizeof(ab));
@@ -63,8 +68,16 @@ int main(int argc, char **argv)
         else if (strcmp(argv[i], "--grid") == 0) grid = 1;
         else if (strncmp(argv[i], "--datum=", 8) == 0) datum = argv[i] + 8;
         else if (strncmp(argv[i], "--datum-grid=", 13) == 0) datum_grid = argv[i] + 13;
+        else if (strncmp(argv[i], "--gpx=", 6) == 0) {
+            if (n_gpx_in < (int)(sizeof(gpx_in) / sizeof(gpx_in[0])))
+                gpx_in[n_gpx_in++] = argv[i] + 6;
+            else fprintf(stderr, "提示: --gpx 最多 %d 个，忽略 %s\n",
+                         (int)(sizeof(gpx_in) / sizeof(gpx_in[0])), argv[i] + 6);
+        }
+        else if (strncmp(argv[i], "--export-gpx=", 13) == 0) gpx_out = argv[i] + 13;
         else if (strcmp(argv[i], "--ui-test") == 0) ui_test = 1;
         else if (strcmp(argv[i], "--shot-search") == 0) shot_search = 1;
+        else if (strcmp(argv[i], "--shot-track") == 0) shot_track = 1;
         else if (strncmp(argv[i], "--pbf-display=", 14) == 0) {
             pbf_display = argv[i] + 14;
             const char *colon = strrchr(pbf_display, ':');
@@ -143,6 +156,20 @@ int main(int argc, char **argv)
                    pbf_lru);
         }
     }
+    /* GPX 导入（启动即入）：导入的轨迹/收藏同时写 tracks.db，下次开机还在。 */
+    for (int i = 0; i < n_gpx_in; i++) {
+        int n = app_gpx_import(&a, gpx_in[i]);
+        if (n < 0)
+            fprintf(stderr, "提示: GPX %s 导入失败（%d）\n", gpx_in[i], n);
+        else
+            printf("GPX: %s -> %d 条轨迹（含 wpt 转收藏）\n", gpx_in[i], n);
+    }
+    if (gpx_out) {
+        if (app_gpx_export(&a, gpx_out) == 0)
+            printf("GPX: 已导出全部轨迹/收藏 -> %s\n", gpx_out);
+        else
+            fprintf(stderr, "提示: GPX 导出失败（%s）\n", gpx_out);
+    }
     if (q) {
         int n = app_search_query(&a, q);
         printf("搜索「%s」%d 条（%llu ms）\n", q, n,
@@ -161,7 +188,9 @@ int main(int argc, char **argv)
     printf("字体: %s  %d pt\n",
            a.font_used[0] ? a.font_used : "(无)", a.font_size);
 
+    fflush(stdout);
     MainWindow win(&a);
+    fflush(stdout);
 
     if (ui_test) {
         /* 无头 UI 自检：断言"搜索按钮 → 点击 → 输入框出现 → Esc 收起"
@@ -178,12 +207,36 @@ int main(int argc, char **argv)
 
     if (shot) {
         /* 无人值守：渲染一帧抓全窗口（含 chrome 控件）存 PNG */
+        int shot_fail = 0;
         if (grid) win.setShowGrid(true);
         if (shot_search) win.expandSearchForShot();   /* 展开搜索框，便于看展开态 */
+        if (shot_track) win.openTrackPanelForShot();  /* 展开轨迹/收藏面板 */
         win.resize(w, h);
         win.show();
         QApplication::processEvents();   /* 让布局/首帧完成 */
         for (int i = 0; i < 3; i++) QApplication::processEvents();
+        /* ★ 截图不许撒谎：面板要求展开就必须真的贴在右栏左边。
+         *   （踩过：layoutOverlays 用 isVisible() 判断显隐，而 openTrackPanelForShot
+         *     跑在 win.show() 之前 ⇒ 分支被跳过 ⇒ 面板停在 (0,0)，截图上看不见。）
+         *   这条断言把"图里有没有面板"变成退出码，而不是靠人眼。 */
+        if (shot_track) {
+            const QSize cs = win.canvasSize();
+            const QPoint pp = win.trackPanelPos();
+            const QSize ps = win.trackPanelSize();
+            const QPoint rp = win.rightOverlayPos();
+            if (!win.trackPanelVisible() || ps.width() <= 0 ||
+                cs.width() <= 0 || pp.x() <= cs.width() / 2 ||
+                pp.x() + ps.width() > rp.x() + 1) {
+                printf("ASSERT-FAIL    轨迹面板没贴到右栏左边（pos=%d,%d %dx%d 画布 %dx%d 右栏 %d）\n",
+                       pp.x(), pp.y(), ps.width(), ps.height(),
+                       cs.width(), cs.height(), rp.x());
+                shot_fail = 1;
+            } else {
+                printf("track_panel    %d,%d %dx%d（画布 %dx%d，右栏 x=%d）\n",
+                       pp.x(), pp.y(), ps.width(), ps.height(),
+                       cs.width(), cs.height(), rp.x());
+            }
+        }
         /* 画布右下角坐标框 / 左下角路线信息都由 paintEvent 自动绘制，
            不再需要像原先那样显式刷新状态栏（--shot 不启动主循环 ⇒ 状态栏空白）。 */
         QImage img = win.grab().toImage();
@@ -193,7 +246,7 @@ int main(int argc, char **argv)
             printf("截图已保存: %s\n", shot);
         }
         app_shutdown(&a);
-        return 0;
+        return shot_fail;
     }
 
     if (q && a.su.n_hits > 0) a.su.active = 1;   /* 启动查询的结果显示图钉 */

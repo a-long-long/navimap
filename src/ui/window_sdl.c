@@ -144,6 +144,18 @@ void app_run(App *a)
                     else a->quit = 1;
                 }
                 else if (e.key.keysym.sym == SDLK_q) a->quit = 1;
+                /* Ctrl+d = 收藏视口中心（与 Qt 前端 Ctrl+D 同口径）。
+                 * ★ 必须放在普通 d（昼夜切换）**之前**判断：两者的 keysym
+                 *   都是 SDLK_d，只有修饰键不同。 */
+                else if ((SDL_GetModState() & KMOD_CTRL) &&
+                         e.key.keysym.sym == SDLK_d) {
+                    if (app_fav_add(a, a->view.lat, a->view.lon) == 0)
+                        snprintf(a->nav_msg, sizeof(a->nav_msg),
+                                 "已收藏视口中心（共 %d 个）", a->gpx.n_wpt);
+                    else
+                        snprintf(a->nav_msg, sizeof(a->nav_msg), "收藏失败（库打不开？）");
+                    a->need_redraw = 1;
+                }
                 else if (e.key.keysym.sym == SDLK_d) {
                     a->day_night = !a->day_night; app_persist_settings(a);
                 }

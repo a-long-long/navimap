@@ -198,6 +198,7 @@ run dmap_selftest "DMAP-OK" "$BUILD/dmap_selftest" "$GRAPH" "$ROOT/sources"
 # ---- 显示层分 tile（抽取期切好，运行时按需加载；覆盖性：整省要素无丢失）----
 run disp_tile_selftest "DISP-TILE-OK" "$BUILD/disp_tile_selftest" --graph="$GRAPH/beijing"
 run disp_runtime_selftest "DISP-RUNTIME-OK" "$BUILD/disp_runtime_selftest" --graph="$GRAPH/beijing"
+run gpx_selftest "GPX-OK" "$BUILD/gpx_selftest"
 
 # ---- 坐标系（大地基准）：WGS84/CGCS2000/北京54/西安80 枚举/恒等/往返/偏移自测 ----
 run datum_selftest "DATUM-OK" "$BUILD/datum_selftest"
@@ -261,9 +262,22 @@ run font_cjk_neg "FONT-CJK-OK" "$BUILD/font_cjk_check" --negative
 # 右栏按钮浮在画布上。
 #
 # ★ 负向对照已实测：把 eventFilter 里的 hideSearch() 去掉 ⇒ 立刻报 2 项 FAIL。
+#
+# ★ Windows(MSYS2) 上跑 navmap_qt.exe 需要 Qt 的 bin 进 PATH（否则加载 DLL 失败，
+#   表现成"命令不存在"）。**编译期**反过来：PATH 里不能有 Qt bin（cc1plus 会加载
+#   到不匹配的 libstdc++ 静默死掉，见 scripts/cc_retry.sh）——所以这里只在
+#   **运行** Qt 前端时临时加，构建照旧走 build_win.sh。
+QT_BIN="${QT_BIN:-/d/Qt/6.11.2/mingw_64/bin}"
+qt_run() {
+    if [ -d "$QT_BIN" ]; then
+        env QT_QPA_PLATFORM=offscreen PATH="$QT_BIN:$PATH" "$@"
+    else
+        env QT_QPA_PLATFORM=offscreen "$@"
+    fi
+}
 if [ -x "$BUILD/navmap_qt" ] || [ -x "$BUILD/navmap_qt.exe" ]; then
     exefile2() { if [ -x "$1.exe" ]; then echo "$1.exe"; else echo "$1"; fi; }
-    run qt_ui_test "QT-UI-OK" env QT_QPA_PLATFORM=offscreen \
+    run qt_ui_test "QT-UI-OK" qt_run \
         "$(exefile2 "$BUILD/navmap_qt")" --ui-test --w=900 --h=600
 fi
 
@@ -450,6 +464,78 @@ if [ -f "$SHOTS/app_route.log" ]; then
         pass=$((pass + 1)); printf '%-28s OK   (%s 个路线像素 > 200)\n' "app_route_px" "$px"
     else
         fail=$((fail + 1)); printf '%-28s FAIL %s 像素（路线没画上去？）\n' "app_route_px" "${px:-0}"
+    fi
+fi
+
+# ---- GPX 轨迹 / 收藏：map_shot --gpx（SDL 家族的无人值守渲染判据）----
+# 与 Qt 前端那条 UI 断言分工：Qt 侧钉"导入 → 面板条目跟着 store 变"，
+# 这里钉"轨迹/收藏**真的画到画面上**"（像素判据），且不依赖 Qt/offscreen。
+# ★ 负向对照已实证：把 paint_tracks / paint_favorites 改成直接 return 0 ⇒
+#   分别报「没有轨迹像素」「没有金色像素」两条 ASSERT-FAIL（各实测过一次）。
+# 视口中心取北京二环一带，GPX 内联生成（不往仓库里塞夹具）。
+GPX_FILE="$SHOTS/gpx_case.gpx"
+cat > "$GPX_FILE" <<'GEOF'
+<?xml version="1.0" encoding="UTF-8"?>
+<gpx version="1.1" creator="navimap-regress">
+  <wpt lat="39.9520" lon="116.3960"><name>故宫东门</name></wpt>
+  <wpt lat="39.9480" lon="116.4040"><name>王府井</name></wpt>
+  <trk><name>回归测试线</name><trkseg>
+    <trkpt lat="39.9450" lon="116.3900"/>
+    <trkpt lat="39.9500" lon="116.4000"/>
+    <trkpt lat="39.9550" lon="116.4100"/>
+    <trkpt lat="39.9600" lon="116.4200"/>
+    <trkpt lat="39.9500" lon="116.4300"/>
+    <trkpt lat="39.9400" lon="116.4200"/>
+  </trkseg></trk>
+</gpx>
+GEOF
+# SDL_VIDEODRIVER 只在未设时补 dummy：map_shot 不建窗口，dummy 在哪都能跑
+# （本机无显示环境必须补，否则 SDL_Init(SDL_INIT_VIDEO) 直接失败）。
+run gpx_render "ASSERT-OK" env SDL_VIDEODRIVER="${SDL_VIDEODRIVER:-dummy}" \
+    "$BUILD/map_shot" --graph="$GRAPH" --gpx="$GPX_FILE" \
+    --lat=39.95 --lon=116.40 --zoom=13 --w=1280 --h=800 \
+    --out="$SHOTS/gpx_case.bmp"
+if [ -f "$SHOTS/gpx_render.log" ]; then
+    tpx=$(sed -n 's/^gpx_trk_px  *\([0-9]*\).*/\1/p' "$SHOTS/gpx_render.log" | head -1)
+    fpx=$(sed -n 's/^gpx_fav_px  *\([0-9]*\).*/\1/p' "$SHOTS/gpx_render.log" | head -1)
+    ok=$(awk -v p="${tpx:-0}" 'BEGIN{print (p>200) ? 1 : 0}')
+    if [ "$ok" = 1 ]; then
+        pass=$((pass + 1)); printf '%-28s OK   (%s 个轨迹像素 > 200)\n' "gpx_trk_px" "$tpx"
+    else
+        fail=$((fail + 1)); printf '%-28s FAIL %s 像素（轨迹没画上去？）\n' "gpx_trk_px" "${tpx:-0}"
+    fi
+    ok=$(awk -v p="${fpx:-0}" 'BEGIN{print (p>20) ? 1 : 0}')
+    if [ "$ok" = 1 ]; then
+        pass=$((pass + 1)); printf '%-28s OK   (%s 个收藏金色像素 > 20)\n' "gpx_fav_px" "$fpx"
+    else
+        fail=$((fail + 1)); printf '%-28s FAIL %s 像素（收藏没画上去？）\n' "gpx_fav_px" "${fpx:-0}"
+    fi
+fi
+
+# ---- GPX 持久化：配置目录不存在时必须自己建出来 ----
+# 失效模式很阴：sqlite3_open **不建父目录**，打不开只返回 NULL ⇒ 导入照常
+# 打印"1 条轨迹"（内存侧成功了），但一条也不落库、**没有任何提示**，
+# 重启后收藏全丢。全新账户 / 刚清过 %APPDATA% 必中。
+# 判据：把配置目录指到一个**尚不存在**的路径，跑一次导入，断言 tracks.db 真被建出来。
+# ★ 负向对照：把 gpx_db_default_path 里的 nm_mkdir_p 那行注掉 ⇒ 目录不建、
+#   sqlite 打不开 ⇒ 这条 FAIL（实测过一次）。
+# 跨平台：Windows 看 APPDATA，其余看 XDG_CONFIG_HOME；两个都设，哪个生效都能验。
+if [ -x "$BUILD/navmap_qt.exe" ] || [ -x "$BUILD/navmap_qt" ]; then
+    CFG="$SHOTS/gpx_cfg_fresh"
+    /bin/rm -rf "$CFG" 2>/dev/null
+    QEXE=$(if [ -x "$BUILD/navmap_qt.exe" ]; then echo "$BUILD/navmap_qt.exe"; else echo "$BUILD/navmap_qt"; fi)
+    qt_run env APPDATA="$CFG/appdata" XDG_CONFIG_HOME="$CFG/xdg" \
+        "$QEXE" --graph="$GRAPH/beijing" --gpx="$GPX_FILE" \
+        --shot="$SHOTS/gpx_cfg.bmp" > "$SHOTS/gpx_persist.log" 2>&1
+    # 两种平台口径都找一遍，任一处出现 tracks.db 即算建出来了
+    found=0
+    for cand in "$CFG/appdata/navimap/tracks.db" "$CFG/xdg/navimap/tracks.db"; do
+        [ -s "$cand" ] && found=1
+    done
+    if [ "$found" = 1 ]; then
+        pass=$((pass + 1)); printf '%-28s OK   (配置目录不存在时自建 tracks.db)\n' "gpx_persist"
+    else
+        fail=$((fail + 1)); printf '%-28s FAIL 全新配置目录下没建出 tracks.db（收藏会静默丢失）\n' "gpx_persist"
     fi
 fi
 

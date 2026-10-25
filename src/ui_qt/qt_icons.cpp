@@ -130,6 +130,28 @@ void drawPlus(QPainter &p)
     p.drawLine(QPointF(10.0, 5.0), QPointF(10.0, 15.0));
 }
 
+/* 轨迹：一条折线 + 起点实心点 + 终点圆环（GPX 导入/轨迹面板用）。
+ * 折线取"左下→中上→右下再翘起"的形状，像地图上的一条记录轨迹。 */
+void drawTrack(QPainter &p)
+{
+    p.setPen(mkPen(1.8));
+    p.setBrush(Qt::NoBrush);
+    QPainterPath path;
+    path.moveTo(3.4, 15.0);
+    path.lineTo(8.6, 9.2);
+    path.lineTo(12.2, 12.4);
+    path.lineTo(16.6, 4.6);
+    p.drawPath(path);
+    /* 起点：实心小圆 */
+    p.setBrush(QBrush(kInk));
+    p.setPen(Qt::NoPen);
+    p.drawEllipse(QRectF(1.6, 13.2, 3.6, 3.6));
+    /* 终点：圆环 */
+    p.setBrush(Qt::NoBrush);
+    p.setPen(mkPen(1.6));
+    p.drawEllipse(QRectF(14.4, 2.4, 4.4, 4.4));
+}
+
 }  /* namespace */
 
 /* ---- 直接在 QPainter 上绘制（供 IconButton 的 paintEvent 调用）----
@@ -159,6 +181,7 @@ void qt_draw_icon(QPainter &p, Qt::IconKind kind, double size)
     case Qt::IconKind::Grid:    drawGrid(p);              break;
     case Qt::IconKind::Menu:    drawMenu(p);              break;
     case Qt::IconKind::Plus:    drawPlus(p);              break;
+    case Qt::IconKind::Track:   drawTrack(p);             break;
     }
     p.restore();
 }

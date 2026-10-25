@@ -14,6 +14,7 @@
 #include <QApplication>
 #include <QLineEdit>
 #include <QListWidget>
+#include <QListWidgetItem>
 #include <QLabel>
 #include <QTimer>
 #include <QDockWidget>
@@ -23,6 +24,18 @@
 #include <QMouseEvent>
 #include <QImage>
 #include <QDebug>
+#include <QFileDialog>
+#include <QPushButton>
+#include <QScrollArea>
+#include <QColor>
+
+/* 行容器里的"行"数（= 轨迹 + 收藏，空提示行不算）——自检与调试图用。
+ * 必须定义在 runUiSelfTest 之前（它在 GPX 自检段里数面板条目）。 */
+static int gpx_row_count(const QWidget *rows)
+{
+    if (!rows) return 0;
+    return (int)rows->findChildren<QWidget *>(QStringLiteral("trkrow")).size();
+}
 
 /* ---------------- 构造 / 生命周期 ---------------- */
 
@@ -315,6 +328,74 @@ int MainWindow::runUiSelfTest()
         setDatum(keep);                          /* 还原，别把自检结果写进设置 */
     }
 
+    /* GPX 轨迹链路：导入（内嵌 GPX，不依赖外部文件）→ 面板出现条目 →
+     * 删除 → 条目消失。这条链把 C 模块（gpx.c）、App 入口
+     * （app_gpx_import/del）和 UI 面板（refreshTrackPanel）全串起来。
+     * 写临时文件用 nm_temp_dir()，不碰用户目录；导入会写 tracks.db
+     * （app_gpx_import 的语义就是"导入即入库"），但测完把这条轨迹删掉，
+     * 库记录一并清掉，最终不残留（最多留下一个空库文件，无害）。 */
+    {
+        char gpath[1024];
+        snprintf(gpath, sizeof(gpath), "%s/navimap_uitest.gpx", nm_temp_dir());
+        FILE *gf = fopen(gpath, "wb");
+        if (gf) {
+            fputs("<gpx version=\"1.1\"><trk><name>自检轨迹</name><trkseg>"
+                  "<trkpt lat=\"39.9\" lon=\"116.4\"/><trkpt lat=\"39.91\" lon=\"116.41\"/>"
+                  "</trkseg></trk></gpx>", gf);
+            fclose(gf);
+        }
+        int t0 = m_a->gpx.n_trk;
+        int n = app_gpx_import(m_a, gpath);
+        check(n == 1, "GPX 导入：解析出 1 条轨迹");
+        check(m_a->gpx.n_trk == t0 + 1, "GPX 导入：store 多出一条");
+        if (m_a->gpx.n_trk > t0) {
+            const GpxTrack *tk = &m_a->gpx.trk[t0];
+            check(tk->n == 2 && tk->lat_e7 && tk->lat_e7[0] == 399000000,
+                  "GPX 导入：点数与首点坐标对");
+            check(!strcmp(tk->name, "自检轨迹"), "GPX 导入：名字对");
+        }
+        /* 面板：先打开（首次打开会创建面板控件），刷新后再数条目。
+         * 条目数必须等于 store 里的轨迹数 + 收藏数 —— 这比"至少有一条"更严：
+         * 它同时钉住"面板跟着 store 变"（导入多一条、删除少一条）。
+         * ★ 顺带盯住那条 toggled 递归：toggle 一次必须**返回**，
+         *   递归版会在这里把栈耗光（崩溃点在几百层之后的 malloc 里）。 */
+        toggleTrackPanel();
+        refreshTrackPanel();
+        check(m_trackRows && gpx_row_count(m_trackRows) ==
+                  m_a->gpx.n_trk + m_a->gpx.n_wpt,
+              "轨迹面板：刷新后条目与 store 一致");
+        /* 面板必须贴在**右栏左边**，不能停在 (0,0)（layoutOverlays 曾因用
+         * isVisible() 判断显隐，在窗口还没 show 的截图路径上永远贴不到位）。
+         * ★ 判据必须与**窗口尺寸无关**：早先写成"pp.x() > 画布宽/2"，
+         *   在 --w=900 的窄窗下 340px 面板的左沿会落到中线左侧 ⇒ 假红
+         *   （regress.sh 的 qt_ui_test 正是用 900×600 跑的）。
+         *   改为"右缘贴住右栏左缘（间距即 layoutOverlays 里的 6px）+
+         *   不压右栏 + 不越左沿"：飘在中间或停在 (0,0) 都会 FAIL。 */
+        {
+            const QPoint pp = trackPanelPos();
+            const QSize ps = trackPanelSize();
+            const QPoint rp = rightOverlayPos();
+            check(ps.width() > 0 && ps.height() > 0, "轨迹面板：尺寸非零（布局跑过了）");
+            check(pp.x() >= 0 && pp.x() + ps.width() <= rp.x() + 1,
+                  "轨迹面板：不压右栏按钮");
+            check(pp.x() + ps.width() + 6 >= rp.x() - 1,
+                  "轨迹面板：右缘贴住右栏（不是飘在中间或 (0,0)）");
+            check(trackPanelVisible(), "轨迹面板：处于可见态");
+        }
+        /* 删掉刚导入的那条（删的是最后一条 = 刚导入的） */
+        if (m_a->gpx.n_trk > t0) {
+            app_gpx_del_track(m_a, m_a->gpx.n_trk - 1);
+            check(m_a->gpx.n_trk == t0, "GPX 删除：store 恢复原状");
+            refreshTrackPanel();
+            check(m_trackRows && gpx_row_count(m_trackRows) ==
+                      m_a->gpx.n_trk + m_a->gpx.n_wpt,
+                  "轨迹面板：删除后条目同步减少");
+        }
+        toggleTrackPanel();          /* 面板收回去，别挡住后面的断言 */
+        remove(gpath);
+        m_a->need_redraw = 1;
+    }
+
     if (fail == 0) {
         printf("QT-UI-OK\n");
         return 0;
@@ -328,6 +409,7 @@ int MainWindow::runUiSelfTest()
  * 两件事：
  * ① 画布 Resize → 右栏浮层重新贴位（浮层挂在画布上，画布变了它得跟上）。
  * ② 搜索框里的 Esc → 收起输入框回到按钮态（QLineEdit 自己不处理 Esc）。
+ * ③ 轨迹面板某行双击 → 把视口挪到那条轨迹/收藏。
  */
 bool MainWindow::eventFilter(QObject *obj, QEvent *ev)
 {
@@ -339,6 +421,14 @@ bool MainWindow::eventFilter(QObject *obj, QEvent *ev)
             hideSearch();
             return true;                  /* 吃掉这个 Esc，别再传给画布 */
         }
+    } else if (obj->isWidgetType() &&
+               ev->type() == QEvent::MouseButtonDblClick &&
+               obj->property("gpxkind").isValid()) {
+        /* 轨迹面板某行被双击：把视口挪到那条轨迹/收藏（行上装了 gpxkind/gpxidx
+         * 两个动态属性，重建面板时随之更新，不会指到已删的条目） */
+        locateGpxRow(obj->property("gpxkind").toInt(),
+                     obj->property("gpxidx").toInt());
+        return true;
     }
     return QMainWindow::eventFilter(obj, ev);
 }
@@ -407,6 +497,17 @@ void MainWindow::buildMenus()
         connect(act, &QAction::triggered, this, [this, i]() { setDatum(i); });
         m_datumActs.append(act);
     }
+
+    /* 轨迹 / 收藏：导入 GPX、导出全部、收藏中心点。 */
+    QMenu *mgpx = menuBar()->addMenu(QStringLiteral("轨迹(&K)"));
+    addAct(mgpx, QStringLiteral("导入 GPX…"), QKeySequence(Qt::CTRL | Qt::Key_I), this,
+           [this]() { importGpx(); });
+    addAct(mgpx, QStringLiteral("导出全部为 GPX…"), QKeySequence(Qt::CTRL | Qt::Key_E), this,
+           [this]() { exportGpx(); });
+    addAct(mgpx, QStringLiteral("收藏视口中心"), QKeySequence(Qt::CTRL | Qt::Key_D), this,
+           [this]() { favCenter(); });
+    addAct(mgpx, QStringLiteral("轨迹 / 收藏面板"), QKeySequence(), this,
+           [this]() { toggleTrackPanel(); });
 }
 
 /* ---------------- 顶栏：搜索按钮 + 模式页签 + 路线摘要 ----------------
@@ -626,6 +727,15 @@ void MainWindow::buildRightCol()
     connect(m_datumCombo, QOverload<int>::of(&QComboBox::currentIndexChanged),
             this, [this](int i) { setDatum(i); });
 
+    /* 轨迹 / 收藏面板开关（可勾选：亮起 = 面板开着）。
+     * 放在坐标系下拉框下面：两者都是"往地图上加东西"，
+     * 和缩放/定位/昼夜那组"操作地图"的分开。 */
+    m_trackBtn = bigbtn(Qt::IconKind::Track, QStringLiteral("轨迹 / 收藏（导入 GPX）"));
+    m_trackBtn->setCheckable(true);
+    connect(m_trackBtn, &QToolButton::toggled, this, [this](bool) {
+        toggleTrackPanel();
+    });
+
     /* 菜单按钮：弹出与菜单栏同一份 QMenu（SDLV 版 TopBar 的 ☰ 按钮行为）。
        Qt 5.11 的 popup 只有 (pos, at) 两参，用 sizeHint 把菜单定位到按钮左侧，
        避免从最底钮向下弹出超出屏幕。 */
@@ -645,6 +755,8 @@ void MainWindow::buildRightCol()
     vl->addSpacing(6);
     vl->addWidget(grid);
     vl->addWidget(m_datumCombo);
+    vl->addSpacing(6);
+    vl->addWidget(m_trackBtn);
     vl->addWidget(menu);
 
     /* 外观：底板/边框/悬停高亮全部由 IconButton::paintEvent 自绘
@@ -702,6 +814,26 @@ void MainWindow::layoutOverlays()
         m_rightOverlay->move(x, y);
         m_rightOverlay->raise();
     }
+
+    /* --- 轨迹面板：右栏左边一点（贴着按钮列，不挡地图主体） ---
+     * ★ 用 !isHidden() 而不是 isVisible()：isVisible() 对"父窗口还没 show()
+     *   的子控件"一律返回 false（截图路径 --shot-track 正是这个时序：
+     *   openTrackPanelForShot 在 win.show() 之前跑），面板就永远贴不到位、
+     *   停在 (0,0)。isHidden() 只反映"自己被显式隐藏了没有"，正是我们要的。 */
+    if (m_trackPanel && !m_trackPanel->isHidden() && m_rightOverlay) {
+        m_trackPanel->adjustSize();
+        int pw = m_trackPanel->width();
+        int ph = m_trackPanel->height();
+        int cw = m_canvas->width();
+        int ch = m_canvas->height();
+        if (cw <= 0 || ch <= 0) return;
+        int x = m_rightOverlay->x() - pw - 6;
+        if (x < margin) x = margin;           /* 窄窗口时压到左边沿，别溢出 */
+        int y = m_rightOverlay->y();
+        if (y + ph > ch - margin) y = qMax(margin, ch - ph - margin);
+        m_trackPanel->move(x, y);
+        m_trackPanel->raise();
+    }
 }
 
 void MainWindow::locate()
@@ -729,6 +861,269 @@ void MainWindow::setDatum(int id)
     /* 落盘延到 app_shutdown（app_persist_settings 统一写回 settings.ini） */
     settings_set_int(m_a->cfg, "datum", id);
     m_a->need_redraw = 1;   /* 经纬网/读数立即按新基准重绘 */
+}
+
+/* ---------------- GPX 轨迹 / 收藏 ---------------- */
+
+/* 面板：右栏「轨迹」按钮弹出的浮层（挂在画布上，和右栏按钮同一层）。
+ * 上半是轨迹列表（色块 + 名字 + 点数 + 删除），下半是收藏列表，底部三个动作按钮。
+ * 用「一行一个 QWidget」（QLabel + QPushButton）而不是 QListWidget：条目不过几十条，
+ * 行布局自己接双击/删除信号，不需要 item delegate；行容器 objectName="trkrow"，
+ * UI 自检靠数它验证"面板条目与 store 一致"。
+ * ★★ 末尾同步按钮勾选态必须堵信号，否则 toggled 递归（见下面 QSignalBlocker 处）。 */
+void MainWindow::toggleTrackPanel()
+{
+    if (!m_trackPanel) {
+        m_trackPanel = new QWidget(m_canvas);
+        m_trackPanel->setObjectName(QStringLiteral("trackPanel"));
+        /* ★ 定宽而不是最小宽：layoutOverlays 用「右栏 x - 面宽 - 6」定位，
+           宽度一飘面板就跑到屏幕左边去（实测：按钮行 + wordWrap 提示的
+           sizeHint 能把面板撑到 800+ px）。340 刚好放得下按钮行。 */
+        m_trackPanel->setFixedWidth(340);
+        m_trackPanel->setStyleSheet(
+            QStringLiteral("#trackPanel{background:rgba(250,250,252,242);"
+                           "border:1px solid rgba(60,70,90,60%);border-radius:8px;}"
+                           "#trackPanel QPushButton{padding:3px 10px;}"
+                           "#trackPanel QLabel{color:#1a2233;}"));
+        QVBoxLayout *vl = new QVBoxLayout(m_trackPanel);
+        vl->setContentsMargins(8, 8, 8, 8);
+        vl->setSpacing(6);
+        QLabel *cap = new QLabel(QStringLiteral("轨迹 / 收藏"), m_trackPanel);
+        QFont f = cap->font(); f.setBold(true); cap->setFont(f);
+        vl->addWidget(cap);
+
+        QScrollArea *sa = new QScrollArea(m_trackPanel);
+        sa->setWidgetResizable(true);
+        sa->setFrameShape(QFrame::NoFrame);
+        sa->setMaximumHeight(360);
+        sa->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
+        m_trackRows = new QWidget(sa);
+        QVBoxLayout *rl = new QVBoxLayout(m_trackRows);
+        rl->setContentsMargins(2, 2, 2, 2);
+        rl->setSpacing(2);
+        sa->setWidget(m_trackRows);
+        vl->addWidget(sa, 1);
+
+        QHBoxLayout *hb = new QHBoxLayout();
+        QPushButton *bimp = new QPushButton(QStringLiteral("导入 GPX…"), m_trackPanel);
+        QPushButton *bexp = new QPushButton(QStringLiteral("导出全部…"), m_trackPanel);
+        QPushButton *bfav = new QPushButton(QStringLiteral("收藏中心点"), m_trackPanel);
+        hb->addWidget(bimp); hb->addWidget(bexp);
+        hb->addWidget(bfav);
+        hb->addStretch(1);
+        vl->addLayout(hb);
+        connect(bimp, &QPushButton::clicked, this, [this]() { importGpx(); });
+        connect(bexp, &QPushButton::clicked, this, [this]() { exportGpx(); });
+        connect(bfav, &QPushButton::clicked, this, [this]() { favCenter(); });
+        m_trackPanel->hide();
+    }
+    bool show = !m_trackPanel->isVisible();
+    if (show) refreshTrackPanel();
+    m_trackPanel->setVisible(show);
+    /* ★★ 同步按钮勾选态必须**堵信号**：m_trackBtn 是 checkable，且
+     *   toggled → toggleTrackPanel（见 buildRightCol）。setChecked 会发 toggled
+     *   ⇒ 又调一次 toggleTrackPanel ⇒ 里面再 setChecked（状态这次真变了）⇒
+     *   再发 toggled …… 无限递归，每次递归都 refreshTrackPanel 建/删一批控件，
+     *   几百层后栈耗尽 ⇒ 在 RtlAllocateHeap 里 SIGSEGV。
+     *   （实测：面板第一条 UI 断言就跑成死循环，gdb 里栈深几千层。）
+     *   同类写法在整个 Qt 里都成立：setChecked/setValue/setCurrentIndex 前先
+     *   QSignalBlocker，除非你就是想递归。 */
+    if (m_trackBtn) {
+        QSignalBlocker blk(m_trackBtn);
+        m_trackBtn->setChecked(show);
+    }
+    layoutOverlays();   /* 面板贴到右栏左边 */
+}
+
+void MainWindow::refreshTrackPanel()
+{
+    if (!m_trackRows) return;
+    QVBoxLayout *rl = qobject_cast<QVBoxLayout *>(m_trackRows->layout());
+    if (!rl) return;
+    /* 清空旧行：行是 QWidget，删它就连它的子布局/子控件一起删 */
+    {
+        QLayoutItem *child;
+        while ((child = rl->takeAt(0)) != nullptr) {
+            if (child->widget()) delete child->widget();
+            delete child;
+        }
+    }
+    const GpxStore *g = &m_a->gpx;
+    auto add_row = [&](int kind, int idx, const QString &text,
+                       const QString &tip, const QColor *swatch) {
+        QWidget *row = new QWidget(m_trackRows);
+        row->setObjectName(QStringLiteral("trkrow"));
+        row->setProperty("gpxkind", kind);
+        row->setProperty("gpxidx", idx);
+        row->setToolTip(tip);
+        QHBoxLayout *hl = new QHBoxLayout(row);
+        hl->setContentsMargins(4, 2, 4, 2);
+        hl->setSpacing(6);
+        if (swatch) {
+            QLabel *sw = new QLabel(row);
+            sw->setFixedSize(12, 12);
+            sw->setStyleSheet(QStringLiteral("background:rgb(%1,%2,%3);"
+                                             "border:1px solid rgba(0,0,0,110);"
+                                             "border-radius:2px;")
+                                  .arg(swatch->red()).arg(swatch->green())
+                                  .arg(swatch->blue()));
+            hl->addWidget(sw);
+        }
+        QLabel *lb = new QLabel(text, row);
+        lb->setToolTip(tip);
+        hl->addWidget(lb, 1);
+        QPushButton *del = new QPushButton(QString::fromUtf8("×"), row);
+        del->setFixedWidth(24);
+        del->setToolTip(QString::fromUtf8("删除这一条"));
+        QObject::connect(del, &QPushButton::clicked, this, [this, kind, idx]() {
+            if (kind == 0) gpxDelTrack(idx); else gpxDelFav(idx);
+        });
+        hl->addWidget(del);
+        rl->addWidget(row);
+        /* 双击定位：行/色块/名字三个都装过滤器（子控件忽略鼠标事件时会向上
+         * 传播到行，但显式装上更稳，不依赖传播规则） */
+        row->installEventFilter(this);
+        lb->installEventFilter(this);
+    };
+    for (int i = 0; i < g->n_trk; i++) {
+        const GpxTrack *t = &g->trk[i];
+        QColor c(t->r, t->g, t->b);
+        add_row(0, i,
+                QStringLiteral("%1  (%2 点)")
+                    .arg(QString::fromUtf8(t->name[0] ? t->name : "(未命名轨迹)"))
+                    .arg(t->n),
+                QString::fromUtf8("双击定位到这条轨迹的起点"), &c);
+    }
+    for (int i = 0; i < g->n_wpt; i++) {
+        const GpxWpt *w = &g->wpt[i];
+        add_row(1, i,
+                QString::fromUtf8("★ ") +
+                    QString::fromUtf8(w->name[0] ? w->name : "(未命名)"),
+                QString::fromUtf8("双击定位到这个收藏点"), nullptr);
+    }
+    if (g->n_trk == 0 && g->n_wpt == 0) {
+        QLabel *hint = new QLabel(
+            QString::fromUtf8("（还没有轨迹：点「导入 GPX…」选一个 .gpx 文件，"
+                              "或用 Ctrl+D 收藏视口中心）"),
+            m_trackRows);
+        hint->setObjectName(QStringLiteral("trkempty"));
+        hint->setWordWrap(true);
+        rl->addWidget(hint);
+    }
+    rl->addStretch(1);
+}
+
+/* 截图专用：把轨迹面板摆到展开态（--shot-track）。
+ * 与 expandSearchForShot 同一思路：截图要的是**确定的**展开态。
+ * 注意此时窗口还没 show()，isVisible() 一律是 false ⇒ 不能靠 toggle 的
+ * "切换"语义，直接建控件 + 强制可见 + 主动贴位。 */
+void MainWindow::openTrackPanelForShot()
+{
+    if (!m_trackPanel) toggleTrackPanel();   /* 建控件（会顺带把它显示出来） */
+    refreshTrackPanel();
+    if (m_trackPanel) m_trackPanel->setVisible(true);
+    if (m_trackBtn) {
+        QSignalBlocker blk(m_trackBtn);
+        m_trackBtn->setChecked(true);
+    }
+    layoutOverlays();
+}
+
+/* 调试/自检用的几何读取器 */
+QSize MainWindow::canvasSize() const
+{
+    return m_canvas ? m_canvas->size() : QSize();
+}
+
+QPoint MainWindow::rightOverlayPos() const
+{
+    return m_rightOverlay ? m_rightOverlay->pos() : QPoint();
+}
+
+QPoint MainWindow::trackPanelPos() const
+{
+    return m_trackPanel ? m_trackPanel->pos() : QPoint();
+}
+
+QSize MainWindow::trackPanelSize() const
+{
+    return m_trackPanel ? m_trackPanel->size() : QSize();
+}
+
+bool MainWindow::trackPanelVisible() const
+{
+    return m_trackPanel && m_trackPanel->isVisible();
+}
+
+void MainWindow::locateGpxRow(int kind, int idx)
+{
+    const GpxStore *g = &m_a->gpx;
+    double la, lo;
+    if (kind == 0) {
+        if (idx < 0 || idx >= g->n_trk || g->trk[idx].n == 0) return;
+        la = g->trk[idx].lat_e7[0] / 1e7;
+        lo = g->trk[idx].lon_e7[0] / 1e7;
+    } else {
+        if (idx < 0 || idx >= g->n_wpt) return;
+        la = g->wpt[idx].lat; lo = g->wpt[idx].lon;
+    }
+    m_a->view.lat = la; m_a->view.lon = lo;
+    m_a->need_redraw = 1;
+}
+
+void MainWindow::importGpx()
+{
+    QString path = QFileDialog::getOpenFileName(
+        this, QStringLiteral("导入 GPX 文件"), QString(),
+        QStringLiteral("GPX 轨迹 (*.gpx);;所有文件 (*)"));
+    if (path.isEmpty()) return;
+    int n = app_gpx_import(m_a, path.toUtf8().constData());
+    if (n < 0)
+        snprintf(m_a->status, sizeof(m_a->status),
+                 "GPX 导入失败：%s（解析不到 trk/rte/wpt？）",
+                 path.toUtf8().constData());
+    else
+        snprintf(m_a->status, sizeof(m_a->status),
+                 "已导入 %d 条轨迹 / 收藏若干（来自 %s）", n,
+                 path.toUtf8().constData());
+    refreshTrackPanel();
+    if (m_trackPanel && m_trackPanel->isVisible()) layoutOverlays();
+    m_a->need_redraw = 1;
+}
+
+void MainWindow::exportGpx()
+{
+    QString path = QFileDialog::getSaveFileName(
+        this, QStringLiteral("导出全部为 GPX"), QStringLiteral("navimap-tracks.gpx"),
+        QStringLiteral("GPX 轨迹 (*.gpx);;所有文件 (*)"));
+    if (path.isEmpty()) return;
+    if (!path.endsWith(QStringLiteral(".gpx"), Qt::CaseInsensitive))
+        path += QStringLiteral(".gpx");
+    app_gpx_export(m_a, path.toUtf8().constData());
+}
+
+void MainWindow::favCenter()
+{
+    app_fav_add(m_a, m_a->view.lat, m_a->view.lon);
+    refreshTrackPanel();
+    if (m_trackPanel && m_trackPanel->isVisible()) layoutOverlays();
+    m_a->need_redraw = 1;
+}
+
+void MainWindow::gpxDelTrack(int idx)
+{
+    app_gpx_del_track(m_a, idx);
+    refreshTrackPanel();
+    if (m_trackPanel && m_trackPanel->isVisible()) layoutOverlays();
+    m_a->need_redraw = 1;
+}
+
+void MainWindow::gpxDelFav(int idx)
+{
+    app_fav_del(m_a, idx);
+    refreshTrackPanel();
+    if (m_trackPanel && m_trackPanel->isVisible()) layoutOverlays();
+    m_a->need_redraw = 1;
 }
 
 /* ---------------- 左侧步骤面板 ---------------- */

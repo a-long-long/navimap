@@ -40,7 +40,18 @@ trap 'rm -f "$ERR_FILE"' EXIT
 #   分隔的整串就当一个路径，找不到 DLL ⇒ 子进程启动即死、且不报错。
 #   （MSYS 的 env 在 spawn 原生程序时会把 POSIX 形式的 PATH 转成 Windows
 #    形式并追加 ';'，所以这里必须用 env 而不是 export。）
-MSYS_PATH="/d/msys64/ucrt64/bin:/d/Qt/6.11.2/mingw_64/bin:/usr/bin:/c/Windows/system32:/c/Windows"
+#
+# ★★ PATH 里**绝不能放 Qt 的 bin 目录**（2026-10-25 实测，很隐蔽）：
+#   D:\Qt\6.11.2\mingw_64\bin 里躺着另一套 MinGW 运行期 DLL
+#   （libstdc++-6.dll / libgcc_s_seh-1.dll / libwinpthread-1.dll，版本对应
+#     Qt 自带的旧 gcc）。它排在 ucrt64 前面时，**cc1plus 启动加载的是 Qt 的
+#     libstdc++** ⇒ 与 gcc 16.2 的 ABI 不匹配 ⇒ 进程静默死掉：退出码 1、
+#     stderr 一个字都没有（和"被 Defender 杀"表现一模一样，但重试 8 次全败）。
+#     分辨方法：C 文件能编过、C++ 文件全灭 —— cc1 不需要 libstdc++，
+#     cc1plus 需要，只有它踩坑。
+#     实证：PATH=MSYS+usr+sys32+win ⇒ C/C++ 都过；PATH=QT+MSYS+… ⇒ C++ 全灭。
+#   Qt 的 DLL 只在**运行** navmap_qt.exe 时才需要，编译期一律不进 PATH。
+MSYS_PATH="/d/msys64/ucrt64/bin:/usr/bin:/c/Windows/system32:/c/Windows"
 
 for ((i = 1; i <= MAX_TRY; i++)); do
     if [ "$i" -gt 1 ]; then

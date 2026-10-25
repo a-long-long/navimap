@@ -58,6 +58,17 @@ public:
     /* 坐标系（大地基准）切换：连到右栏「坐标网」按钮旁的下拉框与 ☰ 菜单 */
     void setDatum(int id);
 
+    /* ---- GPX 轨迹 / 收藏 ----
+     * 面板是右栏左侧的浮层（和右栏按钮同一层，不参与布局 ⇒ 不影响按钮坐标）。
+     * importGpx / exportGpx 弹 QFileDialog；favCenter 收藏视口中心。 */
+    void toggleTrackPanel();
+    void importGpx();
+    void exportGpx();
+    void favCenter();
+    void gpxDelTrack(int idx);     /* 删一条轨迹（库 + 内存） */
+    void gpxDelFav(int idx);       /* 删一个收藏 */
+    void refreshTrackPanel();      /* 轨迹/收藏列表内容与 App 同步后重画面板 */
+
     /* MapCanvas 键盘事件转发到这里（焦点在画布上） */
     void handleKey(int key);
 
@@ -72,6 +83,19 @@ public:
      * 不走点击事件，直接调内部方法 —— 截图要的是**确定的**展开态，
      * 而不是"点一下之后希望它恰好展开了"。 */
     void expandSearchForShot();
+
+    /* 打开轨迹/收藏面板（--shot-track 用）：同上，截图前拿到确定的面板展开态。
+     * 导入的 GPX 会先进 store（--gpx 在 main 里先跑），所以面板里就是有内容的。 */
+    void openTrackPanelForShot();
+
+    /* 几何读取器（UI 自检 / 截图用）：浮层贴对了地方没有，只能问几何。
+     * 曾因 layoutOverlays 里用 isVisible() 判断面板显隐，导致 --shot-track
+     * （窗口还没 show）时面板永远停在 (0,0) —— 这条就是钉那个 bug 的。 */
+    QSize  canvasSize() const;
+    QPoint rightOverlayPos() const;
+    QPoint trackPanelPos() const;
+    QSize  trackPanelSize() const;
+    bool   trackPanelVisible() const;
 
 protected:
     /* 监听画布 Resize（右栏浮层重新定位）+ 搜索框的 Esc（收起搜索框） */
@@ -90,6 +114,7 @@ private:
     void closeSearch();
     void tick();                         /* 主循环一拍：画布 tick + UI 刷新 */
     void refreshSteps();
+    void locateGpxRow(int kind, int idx); /* 双击面板某行：把视口挪到那条轨迹/收藏 */
     void locate();                       /* 定位按钮：回到关注点 */
     void layoutOverlays();               /* 两个浮层贴到画布上（画布尺寸变了要重贴） */
 
@@ -105,6 +130,10 @@ private:
     QWidget      *m_rightOverlay = nullptr; /* 右上角浮层容器（挂在画布上） */
     QComboBox    *m_datumCombo = nullptr;   /* 右栏坐标网按钮旁的坐标系下拉框 */
     QList<QAction*> m_datumActs;           /* ☰ 菜单里的坐标系动作（与下拉框同步） */
+    /* GPX 轨迹/收藏面板（右栏「轨迹」按钮弹出；挂在画布上的浮层） */
+    QWidget      *m_trackPanel = nullptr;
+    QWidget      *m_trackRows  = nullptr;   /* 滚动区里的行容器（每条轨迹/收藏一行） */
+    QToolButton  *m_trackBtn   = nullptr;   /* 右栏「轨迹」按钮（可勾选，亮起=面板开） */
     QString       m_lastPick;            /* 最近一次选中的地点（按钮提示用） */
     int           m_step_count = -1;     /* 步骤面板增量刷新哨兵 */
 };

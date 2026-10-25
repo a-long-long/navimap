@@ -16,6 +16,9 @@
  *   按给定中心渲染，否则自动缩放到整条路线。
  * --sim：把模拟导航那一层也画出来（车头箭头、已走过变灰、底部指令条），
  *   --sim-sec 先推进一段路，--sim-deviate 把定位点拉开若干米模拟走错路。
+ * --gpx=<文件>：导入 GPX（轨迹 + 航点转收藏）后渲染，可给多次。
+ *   ★ 只进**内存**（gpx_parse_file），不写 tracks.db —— 截图工具不该改用户数据；
+ *     持久化那条路由交互前端（navmap/navmap_qt 的 --gpx）负责。
  */
 #include <stdio.h>
 #include <stdlib.h>
@@ -23,6 +26,7 @@
 #include <SDL.h>
 
 #include "ui/window.h"
+#include "map/gpx.h"        /* --gpx：导入轨迹/收藏后渲染（只进内存） */
 #include <time.h>
 #include "render/paint.h"
 #include "render/navdraw.h"
@@ -191,6 +195,8 @@ int main(int argc, char **argv)
     int zoom_given = 0;
     const char *dmap_demo = NULL;   /* --dmap-demo=<省>:<pct>：强制某省进入"解码中"占位态，用于截图验证 overlay */
     int dmap_demo_pct = 0;
+    const char *gpx_in[8] = {0};    /* --gpx=<文件>：导入轨迹/收藏后渲染（可多次） */
+    int n_gpx_in = 0;
 
     /* 启动自愈（同 navimap）：源 pbf 在、产物没了/坏了就重建。默认开。 */
     AutoBuildOpt ab;
@@ -252,6 +258,12 @@ int main(int argc, char **argv)
                 }
             }
             if (!pbf_display) pbf_display = "sources";  /* 占位需要 PBF 显示层模式 */
+        }
+        else if (strncmp(argv[i], "--gpx=", 6) == 0) {
+            if (n_gpx_in < (int)(sizeof(gpx_in) / sizeof(gpx_in[0])))
+                gpx_in[n_gpx_in++] = argv[i] + 6;
+            else fprintf(stderr, "提示: --gpx 最多 %d 个，忽略 %s\n",
+                         (int)(sizeof(gpx_in) / sizeof(gpx_in[0])), argv[i] + 6);
         }
         else { fprintf(stderr, "未知参数 %s\n", argv[i]); return 2; }
     }
@@ -451,6 +463,44 @@ int main(int argc, char **argv)
         }
     }
 
+    /* GPX 导入：放在**所有会改视图的选项之后**（--from/--to 的 fit-route、
+       --q 的跳转、--sim 的跟随都会挪中心），否则轨迹可能被挪出画面。
+       只进内存不落库（见文件头说明）。 */
+    int gpx_trk_drawn = 0, gpx_trk_visible = 0, gpx_fav_visible = 0;
+    for (int i = 0; i < n_gpx_in; i++) {
+        int n = gpx_parse_file(gpx_in[i], &a.gpx);
+        if (n < 0) {
+            printf("ASSERT-FAIL    GPX %s 解析失败（rc=%d）\n", gpx_in[i], n);
+            return 1;
+        }
+        printf("gpx            %s -> %d 条轨迹\n", gpx_in[i], n);
+    }
+    for (int i = 0; i < a.gpx.n_trk; i++) {
+        const GpxTrack *t = &a.gpx.trk[i];
+        if (t->n < 2) continue;                 /* <2 点画不出线段 */
+        gpx_trk_drawn++;
+        /* 与 paint_tracks 的裁剪口径一致：任一端点落进"视口 + 64 margin"
+         * 就算可见（整段都在外面才会被跳过）。可见性判定必须和实现同口径，
+         * 否则"轨迹在画面外"这种合法情况会被误判成失败。 */
+        for (uint32_t k = 0; k + 1 < t->n; k++) {
+            int x0, y0, x1, y1;
+            mv_project(&a.view, t->lat_e7[k] / 1e7, t->lon_e7[k] / 1e7, &x0, &y0);
+            mv_project(&a.view, t->lat_e7[k + 1] / 1e7, t->lon_e7[k + 1] / 1e7, &x1, &y1);
+            if (!((x0 < -64 && x1 < -64) || (x0 > w + 64 && x1 > w + 64) ||
+                  (y0 < -64 && y1 < -64) || (y0 > h + 64 && y1 > h + 64))) {
+                gpx_trk_visible++;
+                break;
+            }
+        }
+    }
+    for (int i = 0; i < a.gpx.n_wpt; i++) {
+        /* 与 paint_favorites 自己的裁剪口径一致（视口外 16px 不计） */
+        int x, y;
+        mv_project(&a.view, a.gpx.wpt[i].lat, a.gpx.wpt[i].lon, &x, &y);
+        if (x >= -16 && y >= -16 && x <= a.view.w + 16 && y <= a.view.h + 16)
+            gpx_fav_visible++;
+    }
+
     SDL_Surface *surf = SDL_CreateRGBSurface(0, w, h, 32, 0, 0, 0, 0);
     if (!surf) { fprintf(stderr, "创建 surface 失败: %s\n", SDL_GetError()); return 1; }
 
@@ -578,8 +628,7 @@ int main(int argc, char **argv)
         /* 路线画没画上去，只能靠像素数断言：几何算对了但投影/裁剪写错时，
            里程打印全对、画面上却一条线都没有（这类"数据对、画面错"的回归
            用眼睛最难发现）。 */
-        if (npix <= 0) { printf("ASSERT-FAIL    画面里没有路线像素\n"); fail = 1; }
-        if (have_sim) {
+        if (npix <= 0) { printf("ASSERT-FAIL    画面里没有路线像素\n"); fail = 1; }        if (have_sim) {
             long dpix = count_done_pixels(surf);
             printf("done_pixels    %ld（已走过那段的灰色像素）\n", dpix);
             double prog = navsim_progress(&a.sim);
@@ -599,6 +648,34 @@ int main(int argc, char **argv)
         if (a.man.n < 2 || fabs(a.man.sum_m - a.rr.total_m) > tol) {
             printf("ASSERT-FAIL    指令里程和 %.1f m != 总里程 %.1f m\n",
                    a.man.sum_m, a.rr.total_m);
+            fail = 1;
+        }
+    }
+
+    /* GPX 叠加层：轨迹色（调色板四色轮换，见 map/gpx.c 的 kPalette）+ 收藏金。
+     * 软件渲染不混色，画上去就是原值 ⇒ 可以精确数像素。
+     * ★ 判据与"有几条**看得见**的轨迹"挂钩，而不是"大于 0"：轨迹整段落在
+     *   视口外时画面本来就该没有轨迹像素（合法情况，不能算失败）；
+     *   反过来，看得见却一个像素都没有 ⇒ 渲染层真的坏了。 */
+    if (n_gpx_in > 0) {
+        long trk_px = 0;
+        static const int pal[][3] = {
+            { 232, 62, 158 }, { 0, 178, 178 }, { 150, 92, 220 }, { 110, 190, 60 }
+        };
+        for (int k = 0; k < 4; k++)
+            trk_px += count_color_pixels(surf, pal[k][0], pal[k][1], pal[k][2]);
+        long fav_px = count_color_pixels(surf, 245, 190, 40);   /* 收藏金芯 */
+        printf("gpx_trk_px     %ld（%d 条可画 / %d 条可见）\n",
+               trk_px, gpx_trk_drawn, gpx_trk_visible);
+        printf("gpx_fav_px     %ld（%d 个可见收藏）\n", fav_px, gpx_fav_visible);
+        if (gpx_trk_visible > 0 && trk_px <= 0) {
+            printf("ASSERT-FAIL    %d 条轨迹在视口内，画面里却没有轨迹像素\n",
+                   gpx_trk_visible);
+            fail = 1;
+        }
+        if (gpx_fav_visible > 0 && fav_px <= 0) {
+            printf("ASSERT-FAIL    %d 个收藏在视口内，画面里却没有金色像素\n",
+                   gpx_fav_visible);
             fail = 1;
         }
     }

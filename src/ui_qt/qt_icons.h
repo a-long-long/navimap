@@ -23,6 +23,7 @@ enum class IconKind {
     Grid,       /* 网格（坐标网） */
     Menu,       /* 三横线 */
     Plus,       /* 加号 */
+    Track,      /* 轨迹：折线 + 起终点 */
 };
 }
 

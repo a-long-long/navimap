@@ -8,6 +8,7 @@
 #include "render/paint.h"
 #include "render/navdraw.h"
 #include "render/chrome.h"
+#include "render/trackdraw.h"
 #include "map/binfmt.h"
 #include "map/map_view.h"
 #include "utils/geo.h"
@@ -138,6 +139,20 @@ int app_init(App *a, const char *graph_dir, int w, int h,
     if (!a->sdb)
         fprintf(stderr, "提示: 搜索库 %s 打不开，搜索不可用\n", places);
 
+    /* 用户轨迹/收藏库（tracks.db，与 places.db 分开：那是抽取产物、只读）。
+       打不开/不存在都照常跑——只是没有历史轨迹可加载（导入时会现场建库）。
+       ★ 必须先 gpx_store_init：App 是调用方的裸结构体（未初始化），
+       gpx_db_load_all 开头会 gpx_store_free —— 对垃圾指针 free 会直接崩。 */
+    gpx_store_init(&a->gpx);
+    {
+        char dbp[1024];
+        int pr = gpx_db_default_path(dbp, sizeof(dbp));
+        if (pr == 0) {
+            a->gpx_db = gpx_db_open(dbp);
+            if (a->gpx_db) gpx_db_load_all(a->gpx_db, &a->gpx);
+        }
+    }
+
     /* 初始中心：单省用省里第一个节点（沿用旧行为）；多省用全省并集
        bbox 的中心，并把缩放拉远到能一眼看到整组省 */
     double clat = 39.9, clon = 116.4, czoom = 12.0;
@@ -198,6 +213,11 @@ void app_shutdown(App *a)
     dedup_free(&a->dd);
     label_cache_free(&a->places);
     search_close(a->sdb);
+    /* 用户轨迹/收藏：先关库再放内存（库里内容退出前都已同步写入了——
+       导入/收藏/删除都是即时写库，不存在"待落盘"状态）。 */
+    gpx_db_close(a->gpx_db);
+    a->gpx_db = NULL;
+    gpx_store_free(&a->gpx);
     font_close(a->font_big);
     font_close(a->font);
 }
@@ -1057,6 +1077,12 @@ static void paint_frame(Raster *rs, App *a, PaintStats *st)
 
     /* 路线叠加在最上面：路面已经画完，压在路网上才看得清走向。
        模拟导航开着时按车头位置切成"已走过（灰）/ 未走（蓝）"两截。 */
+    /* GPX 轨迹 / 收藏点（地图叠加层）：画在导航路线**下面**——路线是
+       "当前这次出行"，轨迹是"历史记录"，后者被前者压住是合理的层级。
+       轨迹条数为 0 时连遍历都不做（没有 GPX 的用户零开销）。 */
+    if (a->gpx.n_trk > 0) paint_tracks(rs, &a->view, &a->gpx);
+    if (a->gpx.n_wpt > 0) paint_favorites(rs, &a->view, &a->gpx, a->font);
+
     if (a->have_rr && a->rr.n >= 2) {
         int ds = -1;
         double dt = 0;
@@ -1229,4 +1255,101 @@ void update_status(App *a, double frame_ms)
              a->view.lat, a->view.lon, a->view.zoom, a->max_class,
              a->font ? a->font_size : 0,
              a->ms.n, (unsigned long long)a->total_edges, frame_ms, nav);
+}
+
+/* ================================================================== */
+/* GPX 轨迹 / 收藏（轨迹落地）                                          */
+/* ================================================================== */
+
+int app_gpx_import(App *a, const char *path)
+{
+    if (!a || !path || !*path) return -1;
+    /* 库里还没有就在默认路径建一个（导入是"用户数据"的起点）。 */
+    if (!a->gpx_db) {
+        char dbp[1024];
+        if (gpx_db_default_path(dbp, sizeof(dbp)) == 0)
+            a->gpx_db = gpx_db_open(dbp);
+    }
+    int n0 = a->gpx.n_trk;
+    int w0 = a->gpx.n_wpt;
+    int rc = gpx_parse_file(path, &a->gpx);
+    if (rc < 0) return rc;                 /* -1 读不了 / -2 没解析到点 */
+    /* ★ 导入必须**幂等**：同一个文件导入两次，结果要和导入一次一样。
+     * 库里轨道按 name 替换、航点按 (name,lat,lon) 查重，内存侧得跟着做，
+     * 否则"库里一条、内存两条"，面板上出现同名重复行（实测踩过：
+     * 连导两次后面板里 3 个故宫东门）。 */
+    for (int i = a->gpx.n_trk - 1; i >= n0; i--) {
+        for (int k = 0; k < i; k++)
+            if (!strcmp(a->gpx.trk[k].name, a->gpx.trk[i].name)) {
+                gpx_store_del_track(&a->gpx, i);
+                break;
+            }
+    }
+    for (int i = a->gpx.n_wpt - 1; i >= w0; i--) {
+        const GpxWpt *w = &a->gpx.wpt[i];
+        int dup = 0;
+        for (int k = 0; k < i && !dup; k++) {
+            const GpxWpt *o = &a->gpx.wpt[k];
+            if (!strcmp(o->name, w->name) &&
+                fabs(o->lat - w->lat) < 1e-9 && fabs(o->lon - w->lon) < 1e-9) dup = 1;
+        }
+        if (!dup && a->gpx_db &&
+            gpx_db_find_fav(a->gpx_db, w->name, w->lat, w->lon) > 0) dup = 1;
+        if (dup) gpx_store_del_wpt(&a->gpx, i);
+    }
+    int added = a->gpx.n_trk - n0;
+    if (a->gpx_db) {
+        for (int i = n0; i < a->gpx.n_trk; i++)
+            a->gpx.trk[i].db_id = gpx_db_save_track(a->gpx_db, &a->gpx.trk[i]);
+        /* GPX 的 wpt 语义就是航点 ⇒ 进收藏夹 */
+        for (int i = w0; i < a->gpx.n_wpt; i++) {
+            const GpxWpt *w = &a->gpx.wpt[i];
+            a->gpx.wpt[i].db_id = gpx_db_add_fav(a->gpx_db, w->name, w->lat, w->lon);
+        }
+    }
+    a->need_redraw = 1;
+    return added;
+}
+
+int app_gpx_export(App *a, const char *path)
+{
+    if (!a || !path || !*path) return -1;
+    return gpx_write(&a->gpx, path);
+}
+
+int app_fav_add(App *a, double lat, double lon)
+{
+    if (!a) return -1;
+    if (!a->gpx_db) {
+        char dbp[1024];
+        if (gpx_db_default_path(dbp, sizeof(dbp)) == 0)
+            a->gpx_db = gpx_db_open(dbp);
+        if (!a->gpx_db) return -1;
+    }
+    char nm[GPX_NAME_MAX];
+    snprintf(nm, sizeof(nm), "收藏 %d", a->gpx.n_wpt + 1);
+    int id = gpx_db_add_fav(a->gpx_db, nm, lat, lon);
+    if (id < 0) return -1;
+    gpx_store_add_wpt(&a->gpx, nm, lat, lon);
+    a->gpx.wpt[a->gpx.n_wpt - 1].db_id = id;
+    a->need_redraw = 1;
+    return 0;
+}
+
+int app_fav_del(App *a, int idx)
+{
+    if (!a || idx < 0 || idx >= a->gpx.n_wpt) return -1;
+    gpx_db_del_fav(a->gpx_db, (int)a->gpx.wpt[idx].db_id);
+    gpx_store_del_wpt(&a->gpx, idx);
+    a->need_redraw = 1;
+    return 0;
+}
+
+int app_gpx_del_track(App *a, int idx)
+{
+    if (!a || idx < 0 || idx >= a->gpx.n_trk) return -1;
+    gpx_db_del_track(a->gpx_db, (int)a->gpx.trk[idx].db_id);
+    gpx_store_del_track(&a->gpx, idx);
+    a->need_redraw = 1;
+    return 0;
 }

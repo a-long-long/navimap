@@ -15,6 +15,7 @@
 #include "route/maneuver.h"
 #include "route/navsim.h"
 #include "search/search.h"
+#include "map/gpx.h"
 
 /* 设置持久化（完整设置系统）：前向声明，避免 window.h 直接依赖 settings 头。 */
 typedef struct Settings Settings;
@@ -127,6 +128,13 @@ typedef struct {
     SearchDb     *sdb;
     SearchUI      su;
 
+    /* ---- GPX 轨迹 / 收藏（轨迹落地）----
+     * gpx 是内存里的全部内容（tracks.db 加载的 + 本次运行导入的）；
+     * gpx_db 是用户数据库句柄（<config>/tracks.db，NULL=没打开）。
+     * 导入即入库、删除即删库，运行期只在主线程碰，不需要锁。 */
+    GpxStore      gpx;
+    void         *gpx_db;
+
     /* ---- nav-desktop 风格界面状态（chrome.c 绘制 + 命中测试）----
      * 这些是纯 UI 状态，与导航/渲染算法无关；改它们不影响算路结果。 */
     int           day_night;      /* 0 昼 / 1 夜（夜间半透明蒙版） */
@@ -233,5 +241,14 @@ int  app_search_query(App *a, const char *q);
    返回 0 成功。 */
 int  app_nav_plan_sync(App *a, double alat, double alon,
                        double blat, double blon);
+
+/* ---- GPX 轨迹 / 收藏入口 ----
+ * 全部在主线程调用（tracks.db 连接不跨线程）。导入即入库（同名轨迹替换），
+ * 删除同时删库记录与内存副本。 */
+int  app_gpx_import(App *a, const char *path);   /* 导入 GPX 文件；返回新增轨迹条数，<0 失败 */
+int  app_gpx_export(App *a, const char *path);   /* 全部（轨迹+收藏）导出成标准 GPX；0 成功 */
+int  app_fav_add(App *a, double lat, double lon);/* 收藏一个点（名字自动按序号起）；0 成功 */
+int  app_fav_del(App *a, int idx);               /* 删第 idx 个收藏；0 成功 */
+int  app_gpx_del_track(App *a, int idx);         /* 删第 idx 条轨迹；0 成功 */
 
 #endif

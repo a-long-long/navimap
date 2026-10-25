@@ -155,7 +155,8 @@ set(MAP_SRCS
     src/map/autobuild.c
     src/map/coverage.c
     src/map/map_view.c
-    src/map/tileidx.c)
+    src/map/tileidx.c
+    src/map/gpx.c)
 set(ROUTE_SRCS
     src/route/st.c
     src/route/sew.c
@@ -176,7 +177,8 @@ set(RENDER_SRCS
     src/render/navdraw.c
     src/render/chrome.c
     src/render/font.c
-    src/render/labels.c)
+    src/render/labels.c
+    src/render/trackdraw.c)
 set(UI_SRCS
     src/ui/window.c)
 
@@ -247,13 +249,16 @@ endif()
 # 承载，模块库本身只表达"模块↔模块"依赖，便于独立复用。
 
 # navmap_map：pbf + 全部叶子库
+# gpx.c 真正调用 sqlite3_*（tracks.db 用户数据）⇒ 与 navmap_search 同样把
+# sqlite3 收进本模块库，保证 gpx 系列工具只链 navmap_map 也能解析数据库符号。
 add_library(navmap_map STATIC ${MAP_SRCS})
 target_include_directories(navmap_map PUBLIC
     ${CMAKE_SOURCE_DIR}/src ${GEN_DIR}
     ${ZLIB_INCLUDE_DIRS} ${SQLITE3_INCLUDE_DIRS}
     ${PROTOC_INCLUDE_DIRS} ${PROTOC_REAL_INCLUDE_DIR})
 target_link_libraries(navmap_map PUBLIC
-    navmap_pbf navmap_geo navmap_strpool navmap_plat navmap_mem)
+    navmap_pbf navmap_geo navmap_strpool navmap_plat navmap_mem
+    ${SQLITE3_LIBRARIES})
 
 # navmap_search：仅叶子库（search→utils）。search.c 真正调用 sqlite3_*，
 # 故把 sqlite3 收进本模块库，保证 search 系列工具（search_cli/places_build）
@@ -601,6 +606,9 @@ nm_link_tool(disp_tile_selftest navmap_map navmap_route navmap_search navmap_ren
 
 add_executable(disp_runtime_selftest tools/disp_runtime_selftest.c)
 nm_link_tool(disp_runtime_selftest navmap_map navmap_route navmap_search navmap_render navmap_ui)
+
+add_executable(gpx_selftest tools/gpx_selftest.c)
+nm_link_tool(gpx_selftest navmap_map navmap_geo navmap_plat)
 
 # 坐标系（大地基准）自测：WGS84/CGCS2000/北京54/西安80 的枚举/往返/位移合理性 + 负向对照。
 add_executable(datum_selftest tools/datum_selftest.c)

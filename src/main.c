@@ -22,6 +22,12 @@
  *       [ ] 调字号（8~32pt），左键点两下选起终点算路线，
  *       g 开始/停止模拟导航，t 视口跟随开关，n 注入一次偏航（自动重算），
  *       . / , 调模拟倍速，c 清除，f 缩放到整条路线，p 开关面板，Esc/q 退出。
+ *
+ * 轨迹 / 收藏（与 Qt 前端同口径）：
+ *       --gpx=<文件>      启动即导入（可多次），同时写入 tracks.db
+ *       --export-gpx=<文件>  退出时把全部轨迹+收藏写成 GPX 1.1
+ *       Ctrl+d            收藏当前视口中心（进 tracks.db，重启后还在）
+ *       ★ SDL 没有文件对话框 ⇒ 导入/导出走命令行；交互只有"收藏中心点"。
  */
 int main(int argc, char **argv)
 {
@@ -32,6 +38,9 @@ int main(int argc, char **argv)
     const char *q = NULL;       /* 启动时搜一次并跳到第一条结果 */
     const char *pbf_display = NULL;  /* PBF 显示层模式：目录[:LRU上限] */
     int pbf_lru = 3;
+    const char *gpx_in[8] = {0};     /* --gpx=<文件>：启动即导入（可多次） */
+    int n_gpx_in = 0;
+    const char *gpx_out = NULL;      /* --export-gpx=<文件>：退出时导出全部 */
 
     /* 启动自愈：源 pbf 在、产物没了/坏了就当场重建（判据同 sync_maps.sh）。
        默认开；--no-autobuild 关；--sources= 指定源目录（自动探测不到时用）。 */
@@ -66,6 +75,13 @@ int main(int argc, char **argv)
                 }
             }
         }
+        else if (strncmp(argv[i], "--gpx=", 6) == 0) {
+            if (n_gpx_in < (int)(sizeof(gpx_in) / sizeof(gpx_in[0])))
+                gpx_in[n_gpx_in++] = argv[i] + 6;
+            else fprintf(stderr, "提示: --gpx 最多 %d 个，忽略 %s\n",
+                         (int)(sizeof(gpx_in) / sizeof(gpx_in[0])), argv[i] + 6);
+        }
+        else if (strncmp(argv[i], "--export-gpx=", 13) == 0) gpx_out = argv[i] + 13;
         else { fprintf(stderr, "未知参数 %s\n", argv[i]); return 2; }
     }
 
@@ -98,7 +114,21 @@ int main(int argc, char **argv)
            (unsigned long long)tn, (unsigned long long)te);
     printf("字体: %s  %d pt\n",
            a.font_used[0] ? a.font_used : "(无)", a.font_size);
+    /* 轨迹/收藏：导入即入库（app_gpx_import 的语义），导入的 wpt 转收藏 */
+    for (int i = 0; i < n_gpx_in; i++) {
+        int n = app_gpx_import(&a, gpx_in[i]);
+        if (n < 0)
+            fprintf(stderr, "提示: GPX %s 导入失败（rc=%d）\n", gpx_in[i], n);
+        else
+            printf("GPX: %s -> %d 条轨迹（含 wpt 转收藏）\n", gpx_in[i], n);
+    }
     app_run(&a);
+    if (gpx_out) {
+        if (app_gpx_export(&a, gpx_out) == 0)
+            printf("GPX: 已导出全部轨迹/收藏 -> %s\n", gpx_out);
+        else
+            fprintf(stderr, "提示: GPX 导出失败（%s）\n", gpx_out);
+    }
     app_shutdown(&a);
     return 0;
 }

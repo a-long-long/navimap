@@ -62,7 +62,15 @@ if [ ! -d "$MSYS_BIN" ]; then
     echo "找不到 $MSYS_BIN（MSYS2 UCRT64 工具链）" >&2
     exit 1
 fi
-CLEAN_PATH="$QT_BIN:$MSYS_BIN:/usr/bin:/c/Windows/system32:/c/Windows"
+# ★★ PATH 里**不放 Qt 的 bin**（2026-10-25 实测，和 Defender 杀进程表现一模一样）：
+#   Qt 的 bin 里有另一套 MinGW 运行期 DLL（libstdc++-6 / libgcc_s_seh-1 /
+#   libwinpthread-1，版本对应 Qt 自带的旧 gcc）。它排在 ucrt64 前面时
+#   cc1plus 加载到不匹配的 libstdc++ ⇒ 进程静默死掉（退出码 1、stderr 全空），
+#   且 C 文件能编过、C++ 文件全灭（cc1 不需要 libstdc++，cc1plus 需要）。
+#   实证：PATH=MSYS+usr+sys32+win ⇒ C/C++ 都过；PATH=QT+MSYS+… ⇒ C++ 全灭。
+#   Qt DLL 只在**运行** navmap_qt.exe 时才需要，编译期一律不进 PATH
+#   （跑 UI 自检时再单独加，见 regress.sh 里 QT_BIN 的用法）。
+CLEAN_PATH="$MSYS_BIN:/usr/bin:/c/Windows/system32:/c/Windows"
 
 JOBS=4
 CLEAN=0

@@ -1,12 +1,16 @@
 # 项目进度
 
-> 本文件是**面向人的当前状态总览**：已完成什么、现在什么水平、接下来做什么。>   
-> 详细施工过程见 [`PLAN.md`](PLAN.md)（§0–§52.8，按章节累积）；模块化路线图与阶段判据见>   
-> [`ARCH_ASSESSMENT.md`](ARCH_ASSESSMENT.md)；协作约定与"别再试"清单见>   
-> [`.workbuddy/memory/MEMORY.md`](.workbuddy/memory/MEMORY.md)；每日工作日志见>   
+> 本文件是**面向人的当前状态总览**：已完成什么、现在什么水平、接下来做什么。
+>   
+> 详细施工过程见 [`PLAN.md`](PLAN.md)（§0–§52.8，按章节累积）；模块化路线图与阶段判据见
+>   
+> [`ARCH_ASSESSMENT.md`](ARCH_ASSESSMENT.md)；协作约定与"别再试"清单见
+>   
+> [`.workbuddy/memory/MEMORY.md`](.workbuddy/memory/MEMORY.md)；每日工作日志见
+>   
 > `.workbuddy/memory/YYYY-MM-DD.md`。
 
-**最后更新：2026-10-24**
+**最后更新：2026-10-25**
 
 ---
 
@@ -14,16 +18,17 @@
 
 | 维度            | 状态                                                                                                           |
 | ------------- | ------------------------------------------------------------------------------------------------------------ |
-| **验收门禁**      | ✅ **54 用例 / 基线 52 通过 + 2 项环境 glitch** + **编译零警告**（详见第十一节）                                                    |
-| **代码规模**      | **121 个源文件 / 31 460 行**（src 83 文件 22 646 行 + tools 28 文件 6 730 行 + ui_qt 10 文件 2 084 行）                      |
+| **验收门禁**      | ✅ **67 用例 / 本机 43 通过 + 24 项环境缺失** + **编译零警告**（详见第十一节）                                                    |
+| **代码规模**      | **127 个源文件 / 35 800 行**（src 81 文件 24 635 行 + ui_qt 9 文件 2 627 行 + tools 37 文件 8 520 行）                      |
 | **模块化**       | ✅ **12 个 STATIC 库**（4 叶子 + pbf + 5 模块 + sdl + 聚合层），链接器强制边界；`route.c` 1856→**928 行**拆 6 子模块（详见第四节）            |
 | **数据规模**      | 8 省 / **5 228 万节点** / **4 072 万边** / 去重后 4 560 万唯一坐标                                                         |
 | **渲染**        | ✅ 面/路/线 + 中文标注 + 跨省去重 + 按需加载                                                                                 |
 | **路由**        | ✅ 双向加权 A* + ALT 地标下界 + 三类转向限制 + 跨省缝合                                                                         |
 | **搜索/导航**     | ✅ 地名/POI 检索、偏航重算、ETA、转向指令                                                                                    |
+| **GPX / 收藏**   | ✅ 轨迹导入导出、收藏夹、Qt 轨迹面板、`tracks.db` 持久化（详见第十一·六节）                                                      |
 | **跨平台**       | ✅ Linux / macOS / Windows：平台差异统一收进 `src/utils/plat.{h,c}`，业务代码零 `#ifdef`                                     |
 | **核心去 SDL 化** | ✅ `navimap_core` 不链 SDL；SDL 仅留 `navmap_sdl`（window_sdl.c）+ `map_shot` 两个适配层；字体改走 `stb_truetype`（去掉 SDL2_ttf） |
-| **未做**        | GPX、收藏、3D/地形                                                                                              |
+| **未做**        | 3D / 地形（GPX 轨迹与收藏夹已完成，见第十一·六节）                                                                                              |
 
 > 渲染与算路的**实测数字**见第二节，全部来自 2026-10-22 的回归与基准测试（模块化改动未触及算法，数字沿用）。
 
@@ -79,8 +84,10 @@
 
 ## 四、模块化进度（阶段 1 / 2 / 3，2026-10-23→24）
 
-> 详细分阶段判据、commit 对照、门禁列表见 [`ARCH_ASSESSMENT.md`](ARCH_ASSESSMENT.md) §4。本>   
-> 节为面向人的结论版。目标：把"整车复用"的单体库拆成**链接器强制边界**的多个库，消除>   
+> 详细分阶段判据、commit 对照、门禁列表见 [`ARCH_ASSESSMENT.md`](ARCH_ASSESSMENT.md) §4。本
+>   
+> 节为面向人的结论版。目标：把"整车复用"的单体库拆成**链接器强制边界**的多个库，消除
+>   
 > "要一块得拖整库 / 一个类型牵动全库重编"的耦合。
 
 ### 库结构（12 个 STATIC 库，全部经 `--start-group` 链接）
@@ -131,7 +138,7 @@
 
 ---
 
-## 五、工具链（27 个可执行 / tools/ 28 源文件）
+## 五、工具链（37 个可执行 / tools/ 37 源文件）
 
 **验收/自检类**（把 GUI 无法无头验证的逻辑做成可断言的 CLI）：
 
@@ -143,17 +150,20 @@
 - `plat_selftest` **平台抽象层契约**正/负双向验收
 - `core_no_sdl` **架构边界门禁**：`navmap_core` 不得传递 SDL
 - `blend_equiv` / `clip_equiv` 自写光栅 ↔ SDL 逐像素等价 ｜ `font_cjk_check` CJK 字形能力
-- `qt_ui_test` Qt 前端 UI 交互自检（16 项）
+- `qt_ui_test` Qt 前端 UI 交互自检（**31 项**，含 GPX 导入/面板几何/坐标系读数）
 - `tts_selftest` **离线语音播报**自检（TTS-OK）｜ `alts_selftest` **多方案对比**自检（ALTS-OK）｜ `lane_selftest` **车道指示**数据链路自检（LANE-OK）
+- `gpx_selftest` **GPX 解析/往返/边界/持久化**自检（GPX-OK，45 条断言，含收藏查重与孤儿点删除）
 
-**构建类**：`places_build` 地名库 ｜ `lmbuild_cli` 地标表 ｜ `pbf_info` ｜ `tag_stats` ｜ `restr_probe`  
+**构建类**：`places_build` 地名库 ｜ `lmbuild_cli` 地标表 ｜ `pbf_info` ｜ `tag_stats` ｜ `restr_probe`
+  
 **样板去重**：8 个 CLI 的公共参数解析/图加载收敛到 `tools/tool_common.{h,c}`（`a8f3441`）。
 
 ---
 
 ## 六、显示层按需解码（PBF 模式，2026-10-22 新增）
 
-`--pbf-display=<sources目录>[:LRU上限]` 开启：显示层（面/线要素）改为**从原始 PBF 运行时解码**，  
+`--pbf-display=<sources目录>[:LRU上限]` 开启：显示层（面/线要素）改为**从原始 PBF 运行时解码**，
+  
 不再从 nmbin 打开 `lines/areas/polyrefs`。这三个文件因此**可以整个不落盘**。
 
 ```bash
@@ -163,42 +173,56 @@
 
 **设计要点**
 
-- **省粒度而非瓦片粒度**：实测 PBF 的 data blob 平均覆盖全省 43% 的纬度跨度（北京 621 个 blob，    
-  单个跨 0.99°/1.33°，z11 视口仍命中 53%）⇒ 按 blob 跳读收益低于索引成本，**不可行**。    
+- **省粒度而非瓦片粒度**：实测 PBF 的 data blob 平均覆盖全省 43% 的纬度跨度（北京 621 个 blob，
+    
+  单个跨 0.99°/1.33°，z11 视口仍命中 53%）⇒ 按 blob 跳读收益低于索引成本，**不可行**。
+    
   改为"整省解一次 + LRU 缓存"。
-- **不需要扫第二遍 PBF 取坐标**：`polyrefs` 存的是节点内部下标，而这个下标空间**就是** nmbin    
-  `nodes.bin` 的下标空间（都按 osm id 升序、都去掉了文件里不存在的节点）⇒ 拿 `nodes.bin`    
+- **不需要扫第二遍 PBF 取坐标**：`polyrefs` 存的是节点内部下标，而这个下标空间**就是** nmbin
+    
+  `nodes.bin` 的下标空间（都按 osm id 升序、都去掉了文件里不存在的节点）⇒ 拿 `nodes.bin`
+    
   的 osm_id 数组做二分查表即可，省掉整遍 PBF 扫描与两份坐标数组（河北 105 MB）。
 - **等价性**：解码结果与落盘文件**8 省逐字节相同**（8 省全 IDENTICAL）。渲染端零改动。
-- **实测代价**：解码耗时 天津 0.6 s / 北京 1.6 s / 河北 4.4 s；峰值 RSS 104 / 275 / 714 MB。    
+- **实测代价**：解码耗时 天津 0.6 s / 北京 1.6 s / 河北 4.4 s；峰值 RSS 104 / 275 / 714 MB。
+    
   ⚠️ 解码在**后台线程异步**进行（`dmap_worker`），主线程不阻塞；解码期间该省
   has_features=0、渲染自然空白，界面画"省名 解码中… NN%"占位（`paint_dmap_overlay`），
   并实时回报 `pbfmap_decode` 的字节级进度回调。
-- **收益**：磁盘省 **195 MB**（8 省 lines+areas+polyrefs 合计）。    
-  ⚠️ 但 nmbin 的 4.2 G 里 **94% 是路由图**（nodes/edges/edgelist/rev），    
+- **收益**：磁盘省 **195 MB**（8 省 lines+areas+polyrefs 合计）。
+    
+  ⚠️ 但 nmbin 的 4.2 G 里 **94% 是路由图**（nodes/edges/edgelist/rev），
+    
   那部分**省不掉**（A* 需要全图），仍走 mmap。
 
 **两种模式现已逐像素完全一致（12 组实测 0 差异）**
 
 原先有一处 12.357% 的文字像素差异，根因不是数据而是**一个悬垂纹理指针**，已修复：
 
-`app_render_to_surface` 每帧新建/销毁一个软件渲染器，但销毁前没有作废字形缓存。  
-`glyph_get` 靠 `tex_owner != r` 判断"renderer 换了没有"，而判据是**指针相等** ——  
-中间的 `SDL_DestroyRenderer` 把那块内存还回分配器，下一帧 `SDL_CreateSoftwareRenderer`  
-很可能拿回**同一个地址**（实测 8 省图集上就是如此）。于是判据失效，缓存里的 `g->tex`  
+`app_render_to_surface` 每帧新建/销毁一个软件渲染器，但销毁前没有作废字形缓存。
+  
+`glyph_get` 靠 `tex_owner != r` 判断"renderer 换了没有"，而判据是**指针相等** ——
+  
+中间的 `SDL_DestroyRenderer` 把那块内存还回分配器，下一帧 `SDL_CreateSoftwareRenderer`
+  
+很可能拿回**同一个地址**（实测 8 省图集上就是如此）。于是判据失效，缓存里的 `g->tex`
+  
 成了悬垂指针，下一帧 `RenderCopy` 画出错的字。
 
-修复就是在销毁 renderer 前无条件 `font_drop_textures()`（只在字体后端为 stb_truetype 时  
+修复就是在销毁 renderer 前无条件 `font_drop_textures()`（只在字体后端为 stb_truetype 时
+  
 调，且**不能每帧调**——会毁掉 CJK 缓存；SDL 软渲染器后端路径已落实此约定）。
 
-**教训**：SDL 对象销毁/重建的成对约定，必须在**每条**销毁路径上落实，尤其当判据是  
+**教训**：SDL 对象销毁/重建的成对约定，必须在**每条**销毁路径上落实，尤其当判据是
+  
 **指针相等**时，它对"地址被复用"完全失效。
 
 ---
 
 ## 七、跨平台与硬编码清理（2026-10-23）
 
-**动机**：代码里散落一批"只在本机成立"的写法——编译期全绿，换平台才炸，且报错位置  
+**动机**：代码里散落一批"只在本机成立"的写法——编译期全绿，换平台才炸，且报错位置
+  
 离写的地方很远。一次性收进平台抽象层，并配正反双向门禁。
 
 **`src/utils/plat.{h,c}`（平台抽象层，唯一允许出现平台差异的地方）**
@@ -213,16 +237,20 @@
 | `strcasecmp`、`strdup`、`rename` 覆盖语义       | `nm_strcasecmp` / `nm_strdup` / `nm_rename`                                                                       |
 | **字体后端**                                  | 渲染文字改走 **`stb_truetype`**（`src/render/font.c`），**不再依赖 SDL2_ttf**；CJK 字形按字体文件 cmap 探测                              |
 
-**CMake 跨平台化**：`m` 库仅类 Unix 链接；Windows 链 `psapi` 并定义 `SDL_MAIN_HANDLED` +  
-`_CRT_SECURE_NO_WARNINGS`；protobuf-c 查找去掉 `NO_DEFAULT_PATH` 改为 HINTS 优先 + 默认路径兜底。  
-**平台差异只许出现在 `plat.{h,c}`**（业务代码零 `#ifdef _WIN32`），由 `plat_selftest` 正反  
+**CMake 跨平台化**：`m` 库仅类 Unix 链接；Windows 链 `psapi` 并定义 `SDL_MAIN_HANDLED` +
+  
+`_CRT_SECURE_NO_WARNINGS`；protobuf-c 查找去掉 `NO_DEFAULT_PATH` 改为 HINTS 优先 + 默认路径兜底。
+  
+**平台差异只许出现在 `plat.{h,c}`**（业务代码零 `#ifdef _WIN32`），由 `plat_selftest` 正反
+  
 双向门禁钉死（负向对照已实测能 FAIL）。
 
 ---
 
 ## 八、界面元素对齐 nav-desktop（2026-10-23）
 
-按 osmand-app/nav-desktop 的界面元素清单，11 类 chrome 全部落到 navimap（纯 C/SDL2 自绘，  
+按 osmand-app/nav-desktop 的界面元素清单，11 类 chrome 全部落到 navimap（纯 C/SDL2 自绘，
+  
 新增 `src/render/chrome.{h,c}`，绘制/命中测试/动作派发共用同一份几何）：
 
 | 元素              | 实现                                                    |
@@ -239,7 +267,8 @@
 | ScaleBar 比例尺    | 左下角，按纬度换算 m/px，1/2/5 整数档自动选                           |
 | Compass 指北针     | `MapView` 新增 `rot`（投影双向旋转，`rot=0` 与旧投影逐位等价）；Ctrl+拖动旋转 |
 
-验证：编译零警告；regress 关键数值不变；浏览/导航两态截图核对。  
+验证：编译零警告；regress 关键数值不变；浏览/导航两态截图核对。
+  
 已知限制：无边框窗口拖拽在 Wayland 下可能受限；夜间是蒙版近似。
 
 ---
@@ -249,13 +278,16 @@
 SDL 自绘 chrome 在 Wayland 下呈现异常，界面层迁移 Qt：**Qt 只管窗口/部件/交互，地图渲染核心一行不动**。
 
 - `src/ui_qt/`：`qt_main.cpp` + `main_window.cpp`（菜单栏/搜索框/页签/右栏/步骤面板/状态栏，真控件）
-  - `map_canvas.cpp`（地图画布：`app_render_to_surface` 画进 `SDL_Surface` → `QImage::Format_RGB32`      
+  - `map_canvas.cpp`（地图画布：`app_render_to_surface` 画进 `SDL_Surface` → `QImage::Format_RGB32`
+      
     → paintEvent blit；拖拽/滚轮/旋转/点选全部经 C 核心 API）。
 - `App.qt_ui=1`：`paint_frame` 跳过 SDL 自绘 chrome/搜索框/面板/指令条（Qt 控件承担），地图、结果图钉、夜间蒙版保留。
 - CMake 自动探测 **Qt Widgets（Qt6）**，找到才编 `navmap_qt`，没装 Qt 的环境不受影响。
-- 验证：零警告编译；offscreen `--shot` 截图核对（菜单栏/搜索框/页签/右栏四钮/比例尺全齐，地图颜色正确）；    
+- 验证：零警告编译；offscreen `--shot` 截图核对（菜单栏/搜索框/页签/右栏四钮/比例尺全齐，地图颜色正确）；
+    
   SIGTERM 退出验证通过（入口先 `SDL_SetHint(NO_SIGNAL_HANDLERS)` + `SDL_INIT_NOPARACHUTE`）。
-- 右栏补齐：**坐标网按钮**（▦，纯 Qt 叠加层，C 核心零改动）+ **菜单按钮**（☰，弹出同一份 QMenu）。    
+- 右栏补齐：**坐标网按钮**（▦，纯 Qt 叠加层，C 核心零改动）+ **菜单按钮**（☰，弹出同一份 QMenu）。
+    
   `--grid` 可开局打开坐标网。
 
 ---
@@ -298,24 +330,33 @@ SDL 自绘 chrome 在 Wayland 下呈现异常，界面层迁移 Qt：**Qt 只管
 
 ## 十一、验收门禁（regress.sh）
 
-- **54 个用例**；本机基线 **52 通过 / 2 失败**。两项失败是**环境 glitch**，非代码回归：
-  1. `plat_selftest` 字体偏好（本机无期望的中文字体链）；
-  2. `core_no_sdl_sdl` 找不到 `build/navimap` 给 `objdump` 提取依赖。       
-     ⇒ **见到 52/54 即视为无回归**，与历史记录一致。
-- **本机（Windows，仅有 beijing 一省数据）实测 62 项 = 38 通过 / 24 失败**，
-  失败项全部是环境缺失（7 省 PBF 无源、`products/places_auto.db` 未建、
-  `lm.bin` 未建、`build/navimap` 路径 glitch），新增的 `datum_selftest`（DATUM-OK）
-  与 `qt_ui_test`（QT-UI-OK，20 项）均在通过之列。
+- **67 个用例**；全数据基线（Linux，8 省 PBF + `places_auto.db` + `lm.bin` 齐全）
+  **59 通过 / 0 失败**。
+- **本机（Windows，仅有 beijing 一省数据）实测 67 项 = 43 通过 / 24 失败**
+  （2026-10-25 GPX 收尾后复测）。24 项失败**全部**是环境缺失，与代码无关：
+  7 省 PBF 无源 ⇒ 跨省算路 / 反向索引 / `navsim_tj` / `navsim_xa` / `tile_xcheck`（天津瓦片）；
+  `products/places_auto.db` 未建 ⇒ `search` / `places_selftest`；
+  `lm.bin` 未建 ⇒ `lm_loaded` / `lm_nlm` / `lm_admissible` / `lmdist*`；
+  `core_no_sdl_sdl` 找不到 `build/navimap`（无 `.exe` 后缀）给 `objdump` 提取依赖。
+  ⇒ **见到 43/67 即视为无回归**。
+  `gpx_selftest`（GPX-OK）/ `gpx_render` / `gpx_trk_px` / `gpx_fav_px` /
+  `qt_ui_test`（QT-UI-OK，31 项）均在新通过之列。
   - 2026-10-25 顺手修掉一项**假红**：`dmap_selftest` 打印完 `DMAP-OK` 就 `return`，
     而 `MapSet ms` 是 main 的栈变量、后台 worker 仍在解码 ⇒ 退出期回调命中已销毁
     的栈，`rc=139` 却因判据只 grep 标记行而显示"通过"。补 `mapset_free(&ms)`
     （置 `dmap_quit` 并等 worker 停）后 rc=0（连跑 3 次稳定）。
+- ⚠️ **跑回归前先把运行期 DLL 放进 PATH**：`PATH=/d/msys64/ucrt64/bin:$PATH`
+  （`libprotobuf-c-1.dll` / `zlib1.dll` / `SDL2.dll` 都在那儿；Windows 靠 PATH 找 DLL，
+  不是 `LD_LIBRARY_PATH`）。Qt 用例由 `qt_run()` 临时加 `/d/Qt/6.11.2/mingw_64/bin`。
+  ★★★ **但编译期绝不能把 Qt bin 放进 PATH** —— cc1plus 会加载 Qt 自带的旧 libstdc++，
+  表现为退出码 1、stderr 全空（分辨特征：**C 文件能编过、C++ 全灭**）。
+  构建一律走 `./scripts/build_win.sh`。
 - **编译零警告**为硬门禁（`-Wall -Wextra` + 特定 `-Wno-*` 白名单，零警告 FAIL）。
 - 布尔判据用**确定性量**（展开数 / 里程 / 像素差），不用墙钟时间；A/B 至少 4 轮；探针量完撤干净。
 
 ```bash
 source env.sh                  # 修正 PKG_CONFIG_PATH / LD_LIBRARY_PATH
-./scripts/regress.sh --build   # 构建 + 54 项回归 + 零警告门禁
+./scripts/regress.sh --build   # 构建 + 67 项回归 + 零警告门禁
 ./scripts/sync_maps.sh         # 重建 products/ 产物
 ```
 
@@ -463,6 +504,69 @@ CLI 端到端：`--datum=xa80 --datum-grid=demo.txt`（北 +100 / 东 +200）⇒
 
 ---
 
+## 十一·六、GPX 轨迹导入导出 / 收藏夹（2026-10-25 新增）
+
+原"未做"三项之一（另两项 3D/地形仍未做）。分三层，全部有自测 + 负向对照：
+
+| 层 | 文件 | 职责 |
+|---|---|---|
+| 数据 / 持久化 | `src/map/gpx.{h,c}`（635 行，编进 `navmap_map`） | GPX 1.1 XML 解析（`trk/trkseg/trkpt` + `wpt`）、`GpxStore` 内存容器、写盘、SQLite `tracks.db`（`track` / `tpoint` / `fav` 三表） |
+| 绘制 | `src/render/trackdraw.{h,c}`（91 行） | `paint_tracks`（4 色循环调色板）＋ `paint_favorites`（金色 ＋ 名字标注）。软件渲染**不混色** ⇒ 调色板色可被像素判据精确计数 |
+| 交互 | `src/ui/window.c` + 三前端 | 导入 / 导出 / 删除 / 收藏入口 |
+
+**三前端接线（行为等价）**
+
+| 前端 | 入口 |
+|---|---|
+| SDL `navmap` | `--gpx=<file>`（可重复，最多 8 个）/ `--export-gpx=<path>`；**Ctrl+D** 收藏视口中心 |
+| Qt `navmap_qt` | 同名 CLI ＋ 右侧**轨迹面板**（QLabel 行布局：色块 / 名字 / 点数 / 删除按钮，双击定位）＋ `--shot-track` 无人值守截图 |
+| `map_shot` | `--gpx=` **只进内存不落库**，渲染后打 `gpx_trk_px` / `gpx_fav_px` 像素计数 |
+
+> ★ Ctrl+D 必须放在普通 `d`（昼夜切换）**之前**判断，否则永远被昼夜分支吃掉。
+
+**判据与负向对照（全部实证能失败）**
+
+- `gpx_selftest`（**45 条断言**，GPX-OK）｜ `gpx_persist`（配置目录不存在时自建 tracks.db）：解析往返、DB 存取、**孤儿点删除**、
+  `gpx_db_find_fav` 按 (name,lat,lon) 查重（两侧边界 5e-8 / 1e-4）。
+- `map_shot --gpx`：`gpx_trk_px` / `gpx_fav_px` **与"可见条数"挂钩**（裁剪口径与实现逐字一致），
+  不是简单 >0 —— 否则视口外轨迹画没画都判绿。
+- Qt `--ui-test`（**31 项**）：GPX 导入 4 条 + 面板条目同步 2 条 + **4 条几何断言**。
+- 三组负向对照：① 注掉 `paint_tracks` ⇒ `gpx_trk_px 0` FAIL；
+  ② 注掉 `paint_favorites` ⇒ `gpx_fav_px 0` FAIL；
+  ③ `layoutOverlays` 把 `!isHidden()` 改回 `isVisible()` ⇒ `--shot-track` 报
+  `ASSERT-FAIL 轨迹面板没贴到右栏左边（pos=0,0 …）`、**RC=1**。
+
+**端到端实测**：导入后截图 vs 重启后截图**逐像素相同**（`tracks.db` 持久化闭环）；
+轨迹品红 **1316 px** vs 基线 0；收藏金 **58 px**（两簇）；面板 340×160 贴在右栏左侧
+（画布 1280×779，右栏 x=1146），3 行：二环测试线(6 点) / 故宫东门 / 王府井。
+
+**踩过的坑（都进了 MEMORY.md）**
+
+1. ★★ **`toggled` 信号递归**：`m_trackBtn` 是 checkable，`toggled` 又连回
+   `toggleTrackPanel()`，内部再 `setChecked()` ⇒ 无限递归，每层 `refreshTrackPanel`
+   建/删一批控件 ⇒ 几百层后栈耗尽 ⇒ **在 `RtlAllocateHeap` 里 SIGSEGV**
+   （表现与 Defender 杀进程、堆损坏一模一样，极易误判）。修：`QSignalBlocker`。
+   定位法：两个最小复现程序（QLabel / 面板结构 / 菜单栏 / QDockWidget / 样式表）
+   **都不崩** ⇒ 排除框架因素，回头插桩才发现递归。
+2. ★★ **导入必须幂等**：库里按 name 替换轨迹、收藏按 (name,lat,lon) 查重；
+   内存侧必须同步去重，否则"库里一条、内存两条"，面板出现同名重复行。
+3. ★★ **sqlite rowid 会复用**：`DELETE FROM track` 后 INSERT 复用同一 rowid，
+   不同时删 `tpoint` 子表会让新轨迹"继承"旧点 ⇒ `gpx_db_save_track` 补孤儿点删除。
+4. ★ **面板定位判据不能与窗口尺寸耦合**：早先写"面板 x > 画布宽/2"，在
+   `--w=900` 的窄窗下 340px 面板左沿落到中线左侧 ⇒ **假红**。改成"右缘贴住右栏左缘
+   （间距 6px）+ 不压右栏 + 不越左沿"，与尺寸无关。
+5. ★ **`isVisible()` vs `isHidden()`**：子控件在顶层窗口 `show()` 之前
+   `isVisible()` 恒为 false（`--shot-track` 正是这个时序）⇒ 浮层贴位用 `!isHidden()`。
+6. ★★★ **`sqlite3_open` 不建父目录 ⇒ 全新账户下收藏静默丢失**：`%APPDATA%/navimap`
+   不存在时 `gpx_db_open` 只返回 NULL，而导入消息照常打印"1 条轨迹"（内存侧成功了）
+   ⇒ **一条也不落库、零提示**，重启后全丢。修：`gpx_db_default_path` 里先 `nm_mkdir_p`。
+   门禁 `gpx_persist`（把配置目录指到全新路径，断言 tracks.db 真被建出来）；
+   负向对照：注掉 `nm_mkdir_p` ⇒ 该例 FAIL。
+
+---
+
+---
+
 ## 十二、接下来的候选（按性价比排序）
 
 > ✅ **PBF 后台解码优化（已完成，2026-10-25）**：解码本就在后台线程异步进行
@@ -488,7 +592,10 @@ CLI 端到端：`--datum=xa80 --datum-grid=demo.txt`（北 +100 / 东 +200）⇒
 > 目标达成：运行时只加载视口内那条，不再"为屏外一条边解整省"。
 
 1. **补 POI 图标与更多显示要素**（建筑 / 等高线 / 土地利用着色）——从 PBF 侧补，不换数据源。
-2. **GPX 轨迹导入导出 / 收藏夹**——现有导航缺落地的轨迹与收藏管理。
+2. ~~**GPX 轨迹导入导出 / 收藏夹**~~——✅ **已完成（2026-10-25，见第十一·六节）**：
+   GPX 1.1 解析 + SQLite `tracks.db` 持久化 + 三前端 CLI/面板接线 + 45 条自测断言
+   + 4 组负向对照实证。
 
-> ⚠️ 改全局行为（权重 w、地标数、启发式）前必读 `.workbuddy/memory/MEMORY.md` 的>   
+> ⚠️ 改全局行为（权重 w、地标数、启发式）前必读 `.workbuddy/memory/MEMORY.md` 的
+>   
 > "方法论"与"别再试"清单：手挑样本下结论已翻车 4 次，改地标数必须连带重定 w。
