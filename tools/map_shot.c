@@ -189,6 +189,8 @@ int main(int argc, char **argv)
     double sim_sec = 0;          /* 渲染前先推进多少模拟秒 */
     double deviate_m = 0;        /* >0：把定位点朝右拉开这么多米（模拟走错路） */
     int zoom_given = 0;
+    const char *dmap_demo = NULL;   /* --dmap-demo=<省>:<pct>：强制某省进入"解码中"占位态，用于截图验证 overlay */
+    int dmap_demo_pct = 0;
 
     /* 启动自愈（同 navimap）：源 pbf 在、产物没了/坏了就重建。默认开。 */
     AutoBuildOpt ab;
@@ -236,6 +238,21 @@ int main(int argc, char **argv)
                 }
             }
         }
+        else if (strncmp(argv[i], "--dmap-demo=", 12) == 0) {
+            dmap_demo = argv[i] + 12;
+            const char *colon = strrchr(dmap_demo, ':');
+            if (colon && colon[1] >= '0' && colon[1] <= '9') {
+                dmap_demo_pct = atoi(colon + 1);
+                size_t n = (size_t)(colon - dmap_demo);
+                static char dbuf[128];
+                if (n < sizeof(dbuf)) {
+                    memcpy(dbuf, dmap_demo, n);
+                    dbuf[n] = '\0';
+                    dmap_demo = dbuf;
+                }
+            }
+            if (!pbf_display) pbf_display = "sources";  /* 占位需要 PBF 显示层模式 */
+        }
         else { fprintf(stderr, "未知参数 %s\n", argv[i]); return 2; }
     }
 
@@ -261,6 +278,30 @@ int main(int argc, char **argv)
     a.view.zoom = zoom;
     a.view.w = w; a.view.h = h;
     a.max_class = max_class;
+
+    /* --dmap-demo：强制某省进入"解码中"占位态，用于截图验证 overlay。
+     * 把视图居中到该省并标出进度%，不真正解码（只是渲染层占位）。 */
+    if (dmap_demo) {
+        int prov = -1;
+        for (int i = 0; i < a.ms.n; i++)
+            if (strcmp(a.ms.srcs[i].name, dmap_demo) == 0) { prov = i; break; }
+        if (prov < 0) {
+            fprintf(stderr, "提示: 找不到省份 %s 供 --dmap-demo\n", dmap_demo);
+        } else {
+            MapSrc *s = &a.ms.srcs[prov];
+            s->pbf_display_mode = 1;
+            s->loaded = 1;
+            s->has_features = 0;          /* 显示层"还没好" */
+            s->dmap_inflight = 1;
+            s->dmap_progress = dmap_demo_pct;
+            a.view.lat = ((double)s->bbox[0] + s->bbox[2]) / 2e7;
+            a.view.lon = ((double)s->bbox[1] + s->bbox[3]) / 2e7;
+            a.view.zoom = 8;
+            int32_t eb[4] = { s->bbox[0], s->bbox[1], s->bbox[2], s->bbox[3] };
+            mapset_set_view(&a.ms, eb);
+            printf("dmap-demo      %s 进度 %d%%（强制解码中占位）\n", s->name, dmap_demo_pct);
+        }
+    }
 
     /* 进程内算路（阶段 9）：起终点 → 路线 + 转向指令，随后由 paint_frame
        直接叠到画面上，不用先导出 GeoJSON。 */

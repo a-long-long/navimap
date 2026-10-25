@@ -192,6 +192,9 @@ run alts_selftest "ALTS-OK" "$BUILD/alts_selftest"
 # 数据链路：beijing 图含 lanes.bin，mapset 能按 (省,边) 取出合法车道串。
 run lane_selftest "LANE-OK" "$BUILD/lane_selftest" --graph="$GRAPH/beijing"
 
+# ---- PBF 显示层后台异步解码（不阻塞主线程 + 进度回调 + 解码完成）----
+run dmap_selftest "DMAP-OK" "$BUILD/dmap_selftest" "$GRAPH" "$ROOT/sources"
+
 # ---- 去 SDL 化的三条门禁（方案2）----
 #
 # 背景：navimap_core 已做到"零 SDL"，Qt 前端（navmap_qt）一行 SDL 都不链，

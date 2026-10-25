@@ -146,7 +146,7 @@ typedef struct {
 } AreaRec;
 
 int pbfmap_decode(const char *pbf_path, const NMBinFile *nodes_index,
-                  PbfMap *out)
+                  PbfMap *out, PbfMapProgress cb, void *ud)
 {
     if (!out || !pbf_path || !nodes_index) return -1;
     memset(out, 0, sizeof(*out));
@@ -190,7 +190,18 @@ int pbfmap_decode(const char *pbf_path, const NMBinFile *nodes_index,
     PbfStatus rc;
     int failed = 0;
 
+    if (cb) cb(ud, 0.0);   /* 起始：UI 立刻进入"解码中 0%" */
+
     while ((rc = pbf_stream_next(s, &type, &buf, &len)) == PBF_OK) {
+        /* 进度：已读字节 / 文件总长（主解码阶段约占 0~0.92；后续 polyrefs
+         * 映射 + 记录组装占 0.92~1.0）。后台线程据此回报实时百分比。 */
+        if (cb) {
+            uint64_t off = pbf_stream_offset(s);
+            uint64_t fs  = pbf_stream_file_size(s);
+            double f = fs ? (double)off / (double)fs : 0.0;
+            if (f > 1.0) f = 1.0;
+            cb(ud, f * 0.92);
+        }
         if (!type || strcmp(type, "OSMData") != 0) continue;
         PbfBlock *blk = NULL;
         if (pbf_unpack_block(buf, len, &blk) != 0) { failed = 1; break; }
@@ -269,6 +280,7 @@ int pbfmap_decode(const char *pbf_path, const NMBinFile *nodes_index,
         pbf_block_free(blk);
         if (failed) break;
     }
+    if (cb && !failed && rc != PBF_ERR) cb(ud, 0.92);  /* 主扫描结束，进入映射阶段 */
     pbf_stream_close(s);
     if (failed || rc == PBF_ERR) {
         free(node_ids);
@@ -384,6 +396,8 @@ int pbfmap_decode(const char *pbf_path, const NMBinFile *nodes_index,
     out->n_areas   = out->areas.hdr.rec_count;
     out->n_lines   = out->lines.hdr.rec_count;
     out->n_polyrefs = out->polyrefs.hdr.rec_count;
+
+    if (cb && rc_ret == 0) cb(ud, 1.0);   /* 完成 */
 
 done:
     free(node_ids);

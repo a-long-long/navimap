@@ -592,6 +592,10 @@ nm_link_tool(alts_selftest navmap_map navmap_route navmap_search navmap_render n
 add_executable(lane_selftest tools/lane_selftest.c)
 nm_link_tool(lane_selftest navmap_map navmap_route navmap_search navmap_render navmap_ui)
 
+# PBF 显示层后台异步解码验收：set_view 不阻塞主线程 + 进度回调生效 + 解码完成。
+add_executable(dmap_selftest tools/dmap_selftest.c)
+nm_link_tool(dmap_selftest navmap_map navmap_route navmap_search navmap_render navmap_ui)
+
 # 字体契约验收：内置 Noto 字体集是否真能加载并出字形。
 add_executable(font_selftest tools/font_selftest.c)
 nm_link_tool(font_selftest navmap_map navmap_route navmap_search navmap_render navmap_ui)

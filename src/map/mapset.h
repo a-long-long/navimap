@@ -37,6 +37,7 @@ typedef struct {
     uint64_t  dmap_used;                /* LRU 时间戳（越大越新） */
     int       dmap_inflight;  /* 后台解码进行中：src_unload 不得卸 nodes 映射 */
     int       dmap_failed;    /* 该省 PBF 解码失败：重载前不再重试 */
+    int       dmap_progress;  /* 0..100，后台解码实时进度（dmap_inflight/排队期间有效） */
     NMBinFile tiles, edgelist;          /* 空间索引（可选） */
     int       has_tiles;
     int       loaded;       /* 本省份 mmap 是否已打开；mapset_set_view 按需置 1 / 清 0。
@@ -96,8 +97,9 @@ void mapset_free(MapSet *ms);
  * 若 ms->pbf_dir 非空，则**显示层**（lines/areas/polyrefs）改为从 PBF
  * 运行时解码：视口进省才解码，滚出则按 LRU 淘汰（驻留上限 ms->dmap_lru_cap）。
  * 解码结果与 nmbin 落盘文件**逐字节相同**（8 省实测）⇒ 渲染结果一致。
- * ⚠️ 解码是**同步**的（一省几百毫秒到数秒），调用方应在后台线程里做，
- * 或先解码再切视图。 */
+ * ⚠️ 解码在**后台线程**异步进行（dmap_worker），主线程不阻塞；解码完成前
+ * 该省 has_features=0、渲染自然跳过（空白），就绪后下一帧经 publish 挂上。
+ * 实时进度见 mapset_dmap_progress / 渲染端的"解码中 NN%"占位。 */
 void mapset_set_view(MapSet *ms, const int32_t vb[4]);
 
 /* 按省下标确保该省已加载（maneuver/snap 访问特定省前调用，避免卸载后悬垂访问）。 */
@@ -110,6 +112,10 @@ int  mapset_enable_pbf_display(MapSet *ms, const char *pbf_dir, int lru_cap);
 /* 确保某省的显示层已从 PBF 解码（供后台线程调用）。
  * 返回 0 = 已就绪；-1 = 失败（该省没有 PBF 或解码出错）。 */
 int  mapset_ensure_display(MapSet *ms, int prov);
+
+/* 取某省后台解码进度（0..100）。无在途/未启用时返回 0。
+ * 读受 dmap_mtx 保护（与 worker 的进度回调串行）。 */
+int  mapset_dmap_progress(const MapSet *ms, int prov);
 
 /* 供状态栏/日志用的汇总：总节点数、总边数 */
 void mapset_totals(const MapSet *ms, uint64_t *nodes, uint64_t *edges);

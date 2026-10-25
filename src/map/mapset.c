@@ -603,6 +603,12 @@ int mapset_enable_pbf_display(MapSet *ms, const char *pbf_dir, int lru_cap)
             s->has_features = 0;
         }
     }
+    /* 预热：立即起后台解码线程（线程空转直到派发任务）。省得首进省时才 spawn，
+     * 让解码在视口进省的第一帧就已在途，进一步压低感知延迟。 */
+    if (ms->dmap_mtx && !ms->dmap_worker_started) {
+        nm_thread_spawn(dmap_worker, ms);
+        ms->dmap_worker_started = 1;
+    }
     return 0;
 }
 
@@ -622,7 +628,7 @@ int mapset_ensure_display(MapSet *ms, int prov)
     if (!nm_file_exists(pbf)) return -1;
 
     PbfMap m;
-    if (pbfmap_decode(pbf, &s->nodes, &m) != 0) return -1;
+    if (pbfmap_decode(pbf, &s->nodes, &m, NULL, NULL) != 0) return -1;
 
     /* 接管缓冲：把 dmap 的三个 NMBinFile 挂到 src 上，渲染端零改动。
      * （内容与 nmbin 落盘文件逐字节相同，8 省实测。） */
@@ -634,6 +640,23 @@ int mapset_ensure_display(MapSet *ms, int prov)
     s->has_features = 1;
     s->dmap_used = ++ms->dmap_clock;
     return 0;
+}
+
+/* 取某省后台解码进度（0..100）。无在途/未启用时返回 0。
+ * 读受 dmap_mtx 保护，与 worker 的进度回调串行，避免撕裂读。 */
+int mapset_dmap_progress(const MapSet *ms, int prov)
+{
+    if (!ms || prov < 0 || prov >= ms->n) return 0;
+    const MapSrc *s = &ms->srcs[prov];
+    int p = 0;
+    if (ms->dmap_mtx) {
+        nm_mutex_lock(ms->dmap_mtx);
+        p = s->dmap_progress;
+        nm_mutex_unlock(ms->dmap_mtx);
+    } else {
+        p = s->dmap_progress;
+    }
+    return p;
 }
 
 /* ------------------------------------------------------------------ */
@@ -665,6 +688,7 @@ static void mapset_publish_display(MapSet *ms)
         s->dmap     = res;
         s->dmap_from_pbf = 1;
         s->has_features  = 1;
+        s->dmap_progress = 100;     /* 完成 */
         s->dmap_used = ++ms->dmap_clock;
     } else {
         s->dmap_failed = 1;   /* 解码失败：不再重试，等重载（src_open_files 清标记） */
@@ -688,11 +712,26 @@ static void mapset_dispatch_display(MapSet *ms, int prov)
     }
     ms->job_prov = prov;
     s->dmap_inflight = 1;
+    s->dmap_progress = 0;       /* 解码开始，进度从 0 爬升 */
     if (!ms->dmap_worker_started) {
         nm_thread_spawn(dmap_worker, ms);
         ms->dmap_worker_started = 1;
     }
     nm_mutex_unlock(ms->dmap_mtx);
+}
+
+/* 后台解码进度回调上下文：把 pbfmap_decode 回报的 frac 写到对应省的
+ * dmap_progress（受 dmap_mtx 保护，与渲染端读取串行）。 */
+typedef struct { MapSet *ms; int prov; } DmapCbCtx;
+
+static void dmap_progress_cb(void *ud, double frac)
+{
+    DmapCbCtx *c = (DmapCbCtx *)ud;
+    MapSet *ms = c->ms;
+    MapSrc *s = &ms->srcs[c->prov];
+    if (ms->dmap_mtx) nm_mutex_lock(ms->dmap_mtx);
+    s->dmap_progress = (int)(frac * 100.0 + 0.5);
+    if (ms->dmap_mtx) nm_mutex_unlock(ms->dmap_mtx);
 }
 
 /* 后台解码线程：轮询任务槽（无 condvar，解码本身 0.6~4.4s，4ms 轮询延迟可忽略），
@@ -719,7 +758,9 @@ static void dmap_worker(void *arg)
             if (k > 0 && (size_t)k < sizeof(nm_) &&
                 nm_path_join(pbf, sizeof(pbf), ms->pbf_dir, nm_) == 0 &&
                 nm_file_exists(pbf)) {
-                ok = (pbfmap_decode(pbf, &s->nodes, &m) == 0);
+                DmapCbCtx cbctx = { ms, p };
+                ok = (pbfmap_decode(pbf, &s->nodes, &m, dmap_progress_cb,
+                                   &cbctx) == 0);
             }
         }
 

@@ -893,6 +893,47 @@ static void app_update_coverage(App *a)
 
 
 
+/* 解码中省份的占位提示：后台线程解码 PBF 显示层期间，该省 has_features=0、
+ * 渲染自然空白。这里画一个"省名 解码中… NN%"小药丸，避免用户以为地图坏了。
+ * 进度来自 worker 经 pbfmap_decode 进度回调实时更新的 dmap_progress。 */
+static void paint_dmap_overlay(Raster *rs, App *a)
+{
+    if (!a->font) return;
+    MvProj P;
+    mv_proj_begin(&a->view, &P);
+    int W = a->view.w, H = a->view.h;
+    for (int i = 0; i < a->ms.n; i++) {
+        MapSrc *s = &a->ms.srcs[i];
+        if (!s->loaded || !s->pbf_display_mode || s->has_features) continue;
+        int prog  = mapset_dmap_progress(&a->ms, i);
+        int failed = s->dmap_failed;
+
+        /* 投影省 bbox 中心到屏幕；超出则夹紧到可视区边缘 */
+        double cla = ((double)s->bbox[0] + s->bbox[2]) / 2e7;
+        double clo = ((double)s->bbox[1] + s->bbox[3]) / 2e7;
+        int sx, sy;
+        mv_proj(&P, cla, clo, &sx, &sy);
+
+        char buf[128];
+        const char *txt = buf;
+        if (failed)
+            snprintf(buf, sizeof(buf), "%s 解码失败", s->name);
+        else
+            snprintf(buf, sizeof(buf), "%s 解码中… %d%%", s->name, prog);
+
+        int tw = font_text_w(a->font, txt);
+        int pw = tw + 16, ph = 22;
+        int x = sx - pw / 2, y = sy - ph / 2;
+        if (x < 4) x = 4;  if (x + pw > W - 4) x = W - pw - 4;
+        if (y < 4) y = 4;  if (y + ph > H - 4) y = H - ph - 4;
+
+        uint8_t r = failed ? 120 : 28, g = failed ? 40 : 34, b = failed ? 40 : 48;
+        raster_fill_rect(rs, x, y, pw, ph, r, g, b, 210);
+        raster_rect(rs, x, y, pw, ph, 70, 80, 100, 220);
+        font_draw(a->font, rs, x + 8, y + 4, txt, 232, 240, 252, 0);
+    }
+}
+
 static void paint_frame(Raster *rs, App *a, PaintStats *st)
 {
     /* 统计在这里清零一次，且只在这里清。
@@ -1032,6 +1073,9 @@ static void paint_frame(Raster *rs, App *a, PaintStats *st)
     int cx, cy;
     mv_project(&a->view, a->view.lat, a->view.lon, &cx, &cy);
     paint_marker(rs, cx, cy, 4, 30, 90, 220);
+
+    /* 解码中的省份：画"省名 解码中… NN%"占位（后台线程解码期间 has_features=0） */
+    paint_dmap_overlay(rs, a);
 
     /* 夜间蒙版：只压暗地图，不压下面要画的面板/文字/chrome */
     if (a->day_night) paint_night_tint(rs, a->view.w, a->view.h);

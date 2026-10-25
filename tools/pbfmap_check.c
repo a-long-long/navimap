@@ -61,7 +61,7 @@ int main(int argc, char **argv)
 
     printf("=== %s vs %s ===\n", dir, pbf);
     PbfMap m;
-    if (pbfmap_decode(pbf, &dn, &m) != 0) {
+    if (pbfmap_decode(pbf, &dn, &m, NULL, NULL) != 0) {
         fprintf(stderr, "解码失败\n");
         return 2;
     }

@@ -34,15 +34,22 @@ typedef struct {
     uint64_t n_polyrefs;
 } PbfMap;
 
+/* 进度回调：frac ∈ [0,1]，解码主循环按"已读字节/文件总长"推进后调用；
+ * 用于后台线程把实时进度回报给 UI（ud 由调用方传入，可为 NULL）。
+ * cb 在**解码线程**里调用，调用方负责线程安全（这里只回调，不碰锁）。 */
+typedef void (*PbfMapProgress)(void *ud, double frac);
+
 /* 从 pbf_path 解码一省的显示层到 out。
  *
  * nodes_index 必须是该省 nmbin 的 nodes.bin（提供 osm_id → 内部下标的
  * 映射）。它已经在内存里（mmap），用它做二分查表省掉"再扫一遍 PBF 取坐标"。
  *
+ * cb/ud：可选进度回报（后台线程解码时传，同步解码可传 NULL）。
+ *
  * 返回 0 = 成功；-1 = 失败。失败时 out 的内容未定义（调用方仍应调
  * pbfmap_free 释放可能已分配的缓冲）。 */
 int  pbfmap_decode(const char *pbf_path, const NMBinFile *nodes_index,
-                    PbfMap *out);
+                    PbfMap *out, PbfMapProgress cb, void *ud);
 
 /* 释放 out 持有的内存缓冲（可重复调用）。 */
 void pbfmap_free(PbfMap *m);
