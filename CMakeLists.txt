@@ -596,6 +596,12 @@ nm_link_tool(lane_selftest navmap_map navmap_route navmap_search navmap_render n
 add_executable(dmap_selftest tools/dmap_selftest.c)
 nm_link_tool(dmap_selftest navmap_map navmap_route navmap_search navmap_render navmap_ui)
 
+add_executable(disp_tile_selftest tools/disp_tile_selftest.c)
+nm_link_tool(disp_tile_selftest navmap_map navmap_route navmap_search navmap_render navmap_ui)
+
+add_executable(disp_runtime_selftest tools/disp_runtime_selftest.c)
+nm_link_tool(disp_runtime_selftest navmap_map navmap_route navmap_search navmap_render navmap_ui)
+
 # 字体契约验收：内置 Noto 字体集是否真能加载并出字形。
 add_executable(font_selftest tools/font_selftest.c)
 nm_link_tool(font_selftest navmap_map navmap_route navmap_search navmap_render navmap_ui)

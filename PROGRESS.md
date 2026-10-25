@@ -323,6 +323,20 @@ source env.sh                  # 修正 PKG_CONFIG_PATH / LD_LIBRARY_PATH
 > `pbfmap_check` 仍 IDENTICAL。
 > 另：`--dmap-demo=<省>:<pct>` 可强制某省进入"解码中"占位态，用于截图验证。
 
+> 🔶 **显示层分 tile（已完成，2026-10-25）**：把整省显示层（areas/lines/polyrefs）
+> 在**抽取期**一次性切成规则网格（北京 0.1° 网格 → 270 tile），每条 tile 拥有独立
+> polyrefs 段（`write_disp_tiles`），写 `disp.idx` 清单；旧省无 `disp/` 自动回退整省。
+> - Phase 1（抽取期切 tile）：`disp_tile_selftest`（DISP-TILE-OK）证明整省要素**零丢失**
+>   （面 199640 / 线 104691 全覆盖，跨 tile 重复属边界保护）。
+> - Phase 2（运行期按视口按需加载）：`mapset.c` 的 `src_load_disp_tiles` 每帧按视口+边距
+>   算相交 tile 集合，逐 tile 打开→复制→关闭（同时最多 3 个 mmap，绕开 Windows 映射句柄
+>   上限；曾一次性开 270 个在 ~168 个后耗尽句柄），拼接进 `s->areas/lines/polyrefs`
+>   （ref_off 重基到整段 dpoly）。`disp_sig` 命中则跳过重建，稳定态 set_view 0.14ms；
+>   视口移出 → `src_unload` 释放拼接缓冲（屏外 tile 不加载）。`disp_runtime_selftest`
+>   （DISP-RUNTIME-OK）证明等价：视口内要素**零丢失**、节点序列逐节点相等、负向对照通过。
+> - Phase 3 已被 Phase 2 吸收：拼接进单省缓冲后 `paint_areas/paint_lines` **零改动**。
+> 目标达成：运行时只加载视口内那条，不再"为屏外一条边解整省"。
+
 1. **补 POI 图标与更多显示要素**（建筑 / 等高线 / 土地利用着色）——从 PBF 侧补，不换数据源。
 2. **GPX 轨迹导入导出 / 收藏夹**——现有导航缺落地的轨迹与收藏管理。
 

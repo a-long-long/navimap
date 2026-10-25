@@ -195,6 +195,10 @@ run lane_selftest "LANE-OK" "$BUILD/lane_selftest" --graph="$GRAPH/beijing"
 # ---- PBF 显示层后台异步解码（不阻塞主线程 + 进度回调 + 解码完成）----
 run dmap_selftest "DMAP-OK" "$BUILD/dmap_selftest" "$GRAPH" "$ROOT/sources"
 
+# ---- 显示层分 tile（抽取期切好，运行时按需加载；覆盖性：整省要素无丢失）----
+run disp_tile_selftest "DISP-TILE-OK" "$BUILD/disp_tile_selftest" --graph="$GRAPH/beijing"
+run disp_runtime_selftest "DISP-RUNTIME-OK" "$BUILD/disp_runtime_selftest" --graph="$GRAPH/beijing"
+
 # ---- 去 SDL 化的三条门禁（方案2）----
 #
 # 背景：navimap_core 已做到"零 SDL"，Qt 前端（navmap_qt）一行 SDL 都不链，

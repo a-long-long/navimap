@@ -969,6 +969,207 @@ static int write_restrictions(Graph *g, const char *path, const char *src)
 /* ------------------------------------------------------------------ */
 #define OUTF2(p, dir, name) (snprintf(p, sizeof(p), "%s/%s", dir, name), (const char *)(p))
 
+/* 显示层分 tile 的辅助：把一条已算好 ref_off/ref_cnt 的要素写入 tile tc。
+ * 该 tile 的 polyrefs 段独立：要素 ref_off 重基到本 tile polyrefs 的当前末尾。
+ * 返回 0；buf_reserve 失败（OOM）返回 -1（调用方据此放弃整轮分 tile，退回整省）。 */
+static int disp_append(Buf *tbuf, Buf *tpoly, const uint8_t *rec, int recsz,
+                       const uint8_t *prp, uint32_t roff, uint32_t rcnt,
+                       uint16_t off_field)
+{
+    uint64_t base = tpoly->n;                         /* 写入前 polyrefs 字节数 */
+    if (buf_reserve(tpoly, (size_t)rcnt * 4) != 0) return -1;
+    memcpy(tpoly->p + base, prp + (size_t)roff * 4, (size_t)rcnt * 4);
+    tpoly->n += (size_t)rcnt * 4;
+    if (buf_reserve(tbuf, (size_t)recsz) != 0) { tpoly->n = base; return -1; }
+    uint8_t rbuf[NM_AREA_BYTES > NM_LINE_BYTES ? NM_AREA_BYTES : NM_LINE_BYTES];
+    memcpy(rbuf, rec, (size_t)recsz);
+    nm_put_u32(rbuf + off_field, (uint32_t)(base / 4));
+    memcpy(tbuf->p + tbuf->n, rbuf, (size_t)recsz);
+    tbuf->n += (size_t)recsz;
+    return 0;
+}
+
+/* 抽取期把整省显示层切成规则网格 tile（一次性，离线）。运行时只 mmap 视口内
+ * tile，省掉"为屏外一条边解整省"的浪费（见 mapset.c）。每条 tile 拥有独立
+ * polyrefs 段。整省 areas/lines/polyrefs.bin 仍照常写（旧省无 disp.idx 时
+ * 回退整省）。大要素跨 tile 重复写入保证边界不丢；复制面过大则只落中心 tile。
+ * 失败（OOM/IO）非致命：只跳过 tile 化，整省产物照常有效。 */
+static int write_disp_tiles(Graph *g, const char *dir, const char *src,
+                            const Buf *pr)
+{
+    if (!g->have_bb) return 0;
+    int64_t la0 = g->bb[0], lo0 = g->bb[1], la1 = g->bb[2], lo1 = g->bb[3];
+    int64_t span_lat = la1 - la0, span_lon = lo1 - lo0;
+    if (span_lat <= 0 || span_lon <= 0) return 0;
+
+    int64_t tile_e7 = 1000000;                       /* 0.1° 起，过大就翻倍 */
+    long ncols, nrows;
+    for (;;) {
+        ncols = (long)((span_lon + tile_e7 - 1) / tile_e7);
+        nrows = (long)((span_lat + tile_e7 - 1) / tile_e7);
+        if (ncols < 1) ncols = 1;
+        if (nrows < 1) nrows = 1;
+        if ((uint64_t)ncols * (uint64_t)nrows <= 4096) break;
+        tile_e7 *= 2;
+    }
+    uint64_t nt = (uint64_t)ncols * (uint64_t)nrows;
+    Buf *dtA = calloc(nt, sizeof(Buf));
+    Buf *dtL = calloc(nt, sizeof(Buf));
+    Buf *dtP = calloc(nt, sizeof(Buf));
+    uint8_t *used = calloc(nt, 1);
+    if (!dtA || !dtL || !dtP || !used) { free(dtA); free(dtL); free(dtP); free(used); return -1; }
+    for (uint64_t t = 0; t < nt; t++) {
+        dtA[t].esz = NM_AREA_BYTES; dtL[t].esz = NM_LINE_BYTES; dtP[t].esz = 4;
+    }
+
+    size_t nlines = g->lines.n / sizeof(LineRec);
+    size_t nareas = g->areas.n / sizeof(AreaRec);
+    LineRec *lr = (LineRec *)g->lines.p;
+    AreaRec  *ar = (AreaRec *)g->areas.p;
+
+    /* ---- 线要素 ---- */
+    for (size_t i = 0; i < nlines; i++) {
+        if (lr[i].ref_cnt == 0) continue;
+        uint32_t ro = lr[i].ref_off, rc = lr[i].ref_cnt;
+        int32_t fa0 = 90*10000000, fa1 = -90*10000000;
+        int32_t fo0 = 180*10000000, fo1 = -180*10000000;
+        int got = 0;
+        for (uint32_t k = 0; k < rc; k++) {
+            uint32_t idx = nm_get_u32(pr->p + ((size_t)ro + k) * 4);
+            if ((uint64_t)idx >= g->n_ids) continue;
+            int32_t la = g->lat[idx], lo = g->lon[idx];
+            if (la < fa0) fa0 = la; if (la > fa1) fa1 = la;
+            if (lo < fo0) fo0 = lo; if (lo > fo1) fo1 = lo;
+            got = 1;
+        }
+        if (!got) continue;
+        long c0 = (long)((fa0 - la0) / tile_e7), c1 = (long)((fa1 - la0) / tile_e7);
+        long r0 = (long)((fo0 - lo0) / tile_e7), r1 = (long)((fo1 - lo0) / tile_e7);
+        long tcw = (c1 - c0 + 1), tch = (r1 - r0 + 1);
+        if (tcw * tch > 64) { c0 = c1 = (c0 + c1) / 2; r0 = r1 = (r0 + r1) / 2; } /* 过大只落中心 */
+        if (c0 < 0) c0 = 0; if (c1 >= ncols) c1 = ncols - 1;
+        if (r0 < 0) r0 = 0; if (r1 >= nrows) r1 = nrows - 1;
+        uint8_t rec[NM_LINE_BYTES]; memset(rec, 0, sizeof(rec));
+        nm_put_u64(rec + LF_OSM_ID,  (uint64_t)lr[i].osm_id);
+        nm_put_u32(rec + LF_REF_OFF, 0);
+        nm_put_u32(rec + LF_REF_CNT, rc);
+        rec[LF_CLASS]  = lr[i].cls;
+        rec[LF_FLAGS]  = lr[i].flags;
+        nm_put_u32(rec + LF_NAME_ID, lr[i].name_id);
+        for (long r = r0; r <= r1; r++)
+            for (long c = c0; c <= c1; c++) {
+                uint64_t tc = (uint64_t)r * (uint64_t)ncols + (uint64_t)c;
+                if (disp_append(&dtL[tc], &dtP[tc], rec, NM_LINE_BYTES,
+                                pr->p, ro, rc, LF_REF_OFF) != 0) goto fail;
+                used[tc] = 1;
+            }
+    }
+    /* ---- 面要素 ---- */
+    for (size_t i = 0; i < nareas; i++) {
+        if (ar[i].ref_cnt == 0) continue;
+        uint32_t ro = ar[i].ref_off, rc = ar[i].ref_cnt;
+        int32_t fa0 = 90*10000000, fa1 = -90*10000000;
+        int32_t fo0 = 180*10000000, fo1 = -180*10000000;
+        int got = 0;
+        for (uint32_t k = 0; k < rc; k++) {
+            uint32_t idx = nm_get_u32(pr->p + ((size_t)ro + k) * 4);
+            if ((uint64_t)idx >= g->n_ids) continue;
+            int32_t la = g->lat[idx], lo = g->lon[idx];
+            if (la < fa0) fa0 = la; if (la > fa1) fa1 = la;
+            if (lo < fo0) fo0 = lo; if (lo > fo1) fo1 = lo;
+            got = 1;
+        }
+        if (!got) continue;
+        long c0 = (long)((fa0 - la0) / tile_e7), c1 = (long)((fa1 - la0) / tile_e7);
+        long r0 = (long)((fo0 - lo0) / tile_e7), r1 = (long)((fo1 - lo0) / tile_e7);
+        long tcw = (c1 - c0 + 1), tch = (r1 - r0 + 1);
+        if (tcw * tch > 64) { c0 = c1 = (c0 + c1) / 2; r0 = r1 = (r0 + r1) / 2; }
+        if (c0 < 0) c0 = 0; if (c1 >= ncols) c1 = ncols - 1;
+        if (r0 < 0) r0 = 0; if (r1 >= nrows) r1 = nrows - 1;
+        uint8_t rec[NM_AREA_BYTES]; memset(rec, 0, sizeof(rec));
+        nm_put_u64(rec + AF_OSM_ID,  (uint64_t)ar[i].osm_id);
+        nm_put_u32(rec + AF_REF_OFF, 0);
+        nm_put_u32(rec + AF_REF_CNT, rc);
+        rec[AF_KIND] = ar[i].kind;
+        for (long r = r0; r <= r1; r++)
+            for (long c = c0; c <= c1; c++) {
+                uint64_t tc = (uint64_t)r * (uint64_t)ncols + (uint64_t)c;
+                if (disp_append(&dtA[tc], &dtP[tc], rec, NM_AREA_BYTES,
+                                pr->p, ro, rc, AF_REF_OFF) != 0) goto fail;
+                used[tc] = 1;
+            }
+    }
+
+    /* ---- 写出每个非空 tile 的 3 个 nmbin + disp.idx 清单 ---- */
+    {
+        char path[4096];
+        uint64_t written = 0;
+        for (uint64_t tc = 0; tc < nt; tc++) {
+            if (!used[tc]) continue;
+            long r = (long)(tc / (uint64_t)ncols), c = (long)(tc % (uint64_t)ncols);
+            uint64_t na = dtA[tc].n / NM_AREA_BYTES;
+            uint64_t nl = dtL[tc].n / NM_LINE_BYTES;
+            uint64_t np = dtP[tc].n / 4;
+            /* areas */
+            snprintf(path, sizeof(path), "%s/t_%ld_%ld.areas", dir, c, r);
+            NMBinWriter *w = nmbin_create(path, NMBIN_KIND_AREAS, NM_AREA_BYTES, src);
+            if (!w) goto fail;
+            nmbin_add_field(w, "osm_id",  AF_OSM_ID,  NMT_U64, 8);
+            nmbin_add_field(w, "ref_off", AF_REF_OFF, NMT_U32, 4);
+            nmbin_add_field(w, "ref_cnt", AF_REF_CNT, NMT_U32, 4);
+            nmbin_add_field(w, "kind",    AF_KIND,    NMT_U8,  1);
+            if (na && nmbin_write_records(w, dtA[tc].p, na) != 0) { nmbin_abort(w); goto fail; }
+            if (nmbin_finalize(w) != 0) { nmbin_abort(w); goto fail; }
+            /* lines */
+            snprintf(path, sizeof(path), "%s/t_%ld_%ld.lines", dir, c, r);
+            w = nmbin_create(path, NMBIN_KIND_LINES, NM_LINE_BYTES, src);
+            if (!w) goto fail;
+            nmbin_add_field(w, "osm_id",  LF_OSM_ID,  NMT_U64, 8);
+            nmbin_add_field(w, "ref_off", LF_REF_OFF, NMT_U32, 4);
+            nmbin_add_field(w, "ref_cnt", LF_REF_CNT, NMT_U32, 4);
+            nmbin_add_field(w, "class",   LF_CLASS,   NMT_U8,  1);
+            nmbin_add_field(w, "flags",   LF_FLAGS,   NMT_U8,  1);
+            nmbin_add_field(w, "name_id", LF_NAME_ID, NMT_U32, 4);
+            if (nl && nmbin_write_records(w, dtL[tc].p, nl) != 0) { nmbin_abort(w); goto fail; }
+            if (nmbin_finalize(w) != 0) { nmbin_abort(w); goto fail; }
+            /* polyrefs */
+            snprintf(path, sizeof(path), "%s/t_%ld_%ld.polyrefs", dir, c, r);
+            w = nmbin_create(path, NMBIN_KIND_POLYREFS, 4, src);
+            if (!w) goto fail;
+            nmbin_add_field(w, "node_idx", 0, NMT_U32, 4);
+            if (np && nmbin_write_records(w, dtP[tc].p, np) != 0) { nmbin_abort(w); goto fail; }
+            if (nmbin_finalize(w) != 0) { nmbin_abort(w); goto fail; }
+            written++;
+        }
+        /* disp.idx 清单：网格参数 + 非空 tile 列表（运行时据此只开视口内 tile）*/
+        snprintf(path, sizeof(path), "%s/disp.idx", dir);
+        FILE *mf = fopen(path, "wb");
+        if (mf) {
+            fprintf(mf, "tile_e7 %lld\n", (long long)tile_e7);
+            fprintf(mf, "lat0 %lld\n", (long long)la0);
+            fprintf(mf, "lon0 %lld\n", (long long)lo0);
+            fprintf(mf, "ncols %ld\n", ncols);
+            fprintf(mf, "nrows %ld\n", nrows);
+            fprintf(mf, "ntiles %llu\n", (unsigned long long)written);
+            for (uint64_t tc = 0; tc < nt; tc++) {
+                if (!used[tc]) continue;
+                long r = (long)(tc / (uint64_t)ncols), c = (long)(tc % (uint64_t)ncols);
+                fprintf(mf, "%ld %ld\n", c, r);
+            }
+            fclose(mf);
+            g->st.disp_tiles = written;
+        }
+    }
+    for (uint64_t t = 0; t < nt; t++) { buf_free(&dtA[t]); buf_free(&dtL[t]); buf_free(&dtP[t]); }
+    free(dtA); free(dtL); free(dtP); free(used);
+    return 0;
+
+fail:
+    for (uint64_t t = 0; t < nt; t++) { buf_free(&dtA[t]); buf_free(&dtL[t]); buf_free(&dtP[t]); }
+    free(dtA); free(dtL); free(dtP); free(used);
+    return -1;   /* 非致命：调用方忽略，整省产物仍有效 */
+}
+
 static int write_lines_areas(Graph *g, const char *dir, const char *src)
 {
     size_t nlines = g->lines.n / sizeof(LineRec);
@@ -1082,6 +1283,9 @@ static int write_lines_areas(Graph *g, const char *dir, const char *src)
         }
     }
     if (nmbin_finalize(w) != 0) { buf_free(&pr); return -1; }
+
+    /* 显示层分 tile（抽取期一次性切好；失败非致命，整省产物仍有效）*/
+    write_disp_tiles(g, dir, src, &pr);
 
     buf_free(&pr);
     return 0;

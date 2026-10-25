@@ -9,6 +9,11 @@
 #include "utils/geo.h"
 #include "utils/plat.h"
 
+/* 显示层分 tile 的前向声明（定义在 src_close 之后） */
+static int  disp_open(MapSrc *s);
+static void src_free_disp(MapSrc *s);
+static int  src_load_disp_tiles(MapSrc *s, const int32_t eb[4]);
+
 /* ------------------------------------------------------------------ */
 /* 单省加载                                                              */
 /* ------------------------------------------------------------------ */
@@ -52,9 +57,229 @@ static void src_close(MapSrc *s)
     name_pool_close(&s->np);
     nmbin_close(&s->lanes);
     name_pool_close(&s->lnp);
+    src_free_disp(s);     /* 回收 tile 拼接缓冲（普通省空操作） */
     free(s->area_bbox);
     free(s->line_bbox);
     memset(s, 0, sizeof(*s));
+}
+
+/* ------------------------------------------------------------------ */
+/* 显示层分 tile：运行时按视口只加载相交 tile，拼接进 areas/lines/polyrefs */
+/* ------------------------------------------------------------------ */
+
+/* 解析 disp.idx 的网格参数。成功（该省有 disp.idx 且格式合法）返回 0，
+ * 并把 tile_e7/lat0/lon0/ncols/nrows 存进 s、置 has_disp_tiles=1；
+ * 失败（无 disp.idx 或解析错误）返回 -1，调用方回退到整省 nmbin。 */
+static int disp_open(MapSrc *s)
+{
+    char p[4096];
+    snprintf(p, sizeof(p), "%s/disp.idx", s->dir);
+    FILE *f = fopen(p, "rb");
+    if (!f) return -1;
+    int got = 0;
+    char line[256];
+    int64_t tile_e7 = 0, lat0 = 0, lon0 = 0;
+    long ncols = 0, nrows = 0;
+    while (fgets(line, sizeof(line), f)) {
+        if (sscanf(line, "tile_e7 %lld", &tile_e7) == 1) continue;
+        if (sscanf(line, "lat0 %lld", &lat0) == 1) continue;
+        if (sscanf(line, "lon0 %lld", &lon0) == 1) continue;
+        if (sscanf(line, "ncols %ld", &ncols) == 1) continue;
+        if (sscanf(line, "nrows %ld", &nrows) == 1) continue;
+        if (strncmp(line, "ntiles", 6) == 0) { got = 1; break; }
+    }
+    fclose(f);
+    if (!got || ncols <= 0 || nrows <= 0 || tile_e7 <= 0) return -1;
+    s->has_disp_tiles = 1;
+    s->disp_tile_e7 = tile_e7;
+    s->disp_lat0    = lat0;
+    s->disp_lon0    = lon0;
+    s->disp_ncols   = (int)ncols;
+    s->disp_nrows   = (int)nrows;
+    return 0;
+}
+
+/* 释放拼接缓冲（手 malloc 的 dareas/dlines/dpoly，nmbin_close 不会 free）。
+ * 对无 tile 的省是空操作（dareas==NULL 且 has_disp_tiles==0），不动 has_features，
+ * 以免误清普通省由 nmbin 管理的整省显示层。 */
+static void src_free_disp(MapSrc *s)
+{
+    free(s->dareas); s->dareas = NULL; s->dea = 0;
+    free(s->dlines); s->dlines = NULL; s->del = 0;
+    free(s->dpoly);  s->dpoly  = NULL; s->depo = 0;
+    if (s->has_disp_tiles) {
+        s->areas.data = NULL; s->areas.mapped = 0;
+        s->lines.data = NULL; s->lines.mapped = 0;
+        s->polyrefs.data = NULL; s->polyrefs.mapped = 0;
+        s->has_features = 0;
+        s->disp_sig = 0;
+    }
+}
+
+/* 按视口 eb（含边距的 [lat0,lon0,lat1,lon1]）加载相交的显示层 tile，
+ * 拼接进 s->areas/lines/polyrefs（mapped=0 的手 malloc 缓冲），
+ * 使 paint_areas/paint_lines 零改动（它们直接读这三个缓冲）。
+ *
+ * 每个 tile 的 polyrefs 是独立段，ref_off 以本 tile 的 polyrefs 为基；
+ * 拼接时把 ref_off 重基到整段 dpoly 的 u32 偏移。disp_sig 命中则跳过重建
+ * （视口在已加载 tile 集合内不重做，避免每帧 churn）。返回 0 成功 / -1 失败。 */
+static int src_load_disp_tiles(MapSrc *s, const int32_t eb[4])
+{
+    if (!s->has_disp_tiles) return -1;
+
+    int64_t te7 = s->disp_tile_e7, la0 = s->disp_lat0, lo0 = s->disp_lon0;
+    int ncols = s->disp_ncols, nrows = s->disp_nrows;
+
+    /* 第一遍：读 disp.idx，收集与 eb 相交的 tile (c,r)，并算集合签名 */
+    int cap = 16, nneed = 0;
+    int32_t *need = malloc((size_t)cap * 2 * sizeof(int32_t));
+    if (!need) return -1;
+    uint64_t sig = 0;
+
+    char idxp[4096];
+    snprintf(idxp, sizeof(idxp), "%s/disp.idx", s->dir);
+    FILE *f = fopen(idxp, "rb");
+    if (!f) { free(need); src_free_disp(s); return -1; }
+    char line[256];
+    int in_list = 0;
+    while (fgets(line, sizeof(line), f)) {
+        if (strncmp(line, "ntiles", 6) == 0) { in_list = 1; continue; }
+        if (!in_list) continue;
+        long c, r;
+        if (sscanf(line, "%ld %ld", &c, &r) != 2) continue;
+        if (c < 0 || r < 0 || c >= ncols || r >= nrows) continue;
+        /* tile (c,r)：列=纬度、行=经度（与 write_disp_tiles 一致） */
+        int32_t tla0 = (int32_t)(la0 + (int64_t)c * te7);
+        int32_t tla1 = (int32_t)(la0 + ((int64_t)c + 1) * te7);
+        int32_t tlo0 = (int32_t)(lo0 + (int64_t)r * te7);
+        int32_t tlo1 = (int32_t)(lo0 + ((int64_t)r + 1) * te7);
+        if (tla1 < eb[0] || tlo1 < eb[1] || tla0 > eb[2] || tlo0 > eb[3]) continue;
+        if (nneed >= cap) {
+            cap *= 2;
+            int32_t *t = realloc(need, (size_t)cap * 2 * sizeof(int32_t));
+            if (!t) { fclose(f); free(need); src_free_disp(s); return -1; }
+            need = t;
+        }
+        need[2 * nneed] = (int32_t)c; need[2 * nneed + 1] = (int32_t)r; nneed++;
+        sig ^= (((uint64_t)(unsigned)(c * 0x9E3779B1u)) << 1) ^
+               ((uint64_t)(unsigned)(r * 0x85EBCA77u));
+    }
+    fclose(f);
+    sig = (sig << 32) | (uint64_t)(unsigned)nneed;
+
+    if (nneed == 0) {
+        /* 视口在省内但该处无要素：清空缓冲，保持 has_features=0 自然跳过 */
+        if (s->disp_sig != (int64_t)sig) { src_free_disp(s); s->disp_sig = (int64_t)sig; }
+        free(need);
+        return 0;
+    }
+    if (s->disp_sig == (int64_t)sig && s->dareas) {
+        free(need);          /* 同一 tile 集合，缓冲仍有效，跳过重建 */
+        return 0;
+    }
+
+    /* 逐 tile 打开→复制→关闭（同时最多 3 个文件 mmap，绕开 Windows 的映射句柄上限；
+     * 之前一次性打开全部 tile 会在 ~168 个后耗尽句柄）。拼接缓冲随增长动态 realloc。 */
+    uint8_t *da = NULL, *dl = NULL, *dp = NULL;
+    size_t cap_a = 0, cap_l = 0, cap_p = 0;
+    uint64_t na = 0, nl = 0, np = 0;   /* 拼接后的记录条数（最终 rec_count） */
+    int fail = 0;
+
+    for (int k = 0; k < nneed; k++) {
+        int32_t c = need[2 * k], r = need[2 * k + 1];
+        char pa[4096], pl[4096], pp[4096];
+        snprintf(pa, sizeof(pa), "%s/t_%ld_%ld.areas", s->dir, (long)c, (long)r);
+        snprintf(pl, sizeof(pl), "%s/t_%ld_%ld.lines", s->dir, (long)c, (long)r);
+        snprintf(pp, sizeof(pp), "%s/t_%ld_%ld.polyrefs", s->dir, (long)c, (long)r);
+        NMBinFile A, L, P;
+        memset(&A, 0, sizeof(A)); memset(&L, 0, sizeof(L)); memset(&P, 0, sizeof(P));
+        if (nmbin_open(pa, &A) != 0 || nmbin_open(pl, &L) != 0 || nmbin_open(pp, &P) != 0) {
+            nmbin_close(&A); nmbin_close(&L); nmbin_close(&P);
+            fail++; continue;
+        }
+        uint64_t ka = A.hdr.rec_count, kl = L.hdr.rec_count, kp = P.hdr.rec_count;
+
+        /* polyrefs：追加到 dp（本 tile 落在偏移 np 处，areas/lines 据此重基 ref_off） */
+        if (kp) {
+            size_t need_p = (size_t)(np + kp) * 4;
+            if (need_p > cap_p) {
+                cap_p = need_p * 2 + 4096;
+                uint8_t *t = realloc(dp, cap_p);
+                if (!t) { nmbin_close(&A); nmbin_close(&L); nmbin_close(&P); goto oom; }
+                dp = t;
+            }
+            memcpy(dp + (size_t)np * 4, P.data, (size_t)kp * 4);
+        }
+        /* areas：复制并把 ref_off 重基到整段 dp（np = 本 tile polyrefs 起点） */
+        if (ka) {
+            size_t need_a = (size_t)(na + ka) * NM_AREA_BYTES;
+            if (need_a > cap_a) {
+                cap_a = need_a * 2 + 4096;
+                uint8_t *t = realloc(da, cap_a);
+                if (!t) { nmbin_close(&A); nmbin_close(&L); nmbin_close(&P); goto oom; }
+                da = t;
+            }
+            uint8_t *out = da + (size_t)na * NM_AREA_BYTES;
+            for (uint64_t j = 0; j < ka; j++) {
+                const uint8_t *rec = A.data + j * NM_AREA_BYTES;
+                memcpy(out, rec, NM_AREA_BYTES);
+                uint32_t ro = nm_get_u32(rec + AF_REF_OFF);
+                nm_put_u32(out + AF_REF_OFF, (uint32_t)((uint64_t)np + ro));
+                out += NM_AREA_BYTES;
+            }
+        }
+        /* lines：同 areas */
+        if (kl) {
+            size_t need_l = (size_t)(nl + kl) * NM_LINE_BYTES;
+            if (need_l > cap_l) {
+                cap_l = need_l * 2 + 4096;
+                uint8_t *t = realloc(dl, cap_l);
+                if (!t) { nmbin_close(&A); nmbin_close(&L); nmbin_close(&P); goto oom; }
+                dl = t;
+            }
+            uint8_t *out = dl + (size_t)nl * NM_LINE_BYTES;
+            for (uint64_t j = 0; j < kl; j++) {
+                const uint8_t *rec = L.data + j * NM_LINE_BYTES;
+                memcpy(out, rec, NM_LINE_BYTES);
+                uint32_t ro = nm_get_u32(rec + LF_REF_OFF);
+                nm_put_u32(out + LF_REF_OFF, (uint32_t)((uint64_t)np + ro));
+                out += NM_LINE_BYTES;
+            }
+        }
+        nmbin_close(&A); nmbin_close(&L); nmbin_close(&P);
+        na += ka; nl += kl; np += kp;
+    }
+    free(need);
+
+    if (fail == nneed) {            /* 全打不开：保留旧缓冲，下次再试，不闪退 */
+        free(da); free(dl); free(dp);
+        s->disp_sig = (int64_t)sig;
+        return -1;
+    }
+
+    /* 释放旧拼接缓冲 + 懒填 bbox 缓存（多边形集合变了必须重建） */
+    free(s->dareas); free(s->dlines); free(s->dpoly);
+    free(s->area_bbox); s->area_bbox = NULL;
+    free(s->line_bbox); s->line_bbox = NULL;
+
+    s->dareas = da; s->dea = (size_t)na * NM_AREA_BYTES;
+    s->dlines = dl; s->del = (size_t)nl * NM_LINE_BYTES;
+    s->dpoly  = dp; s->depo = (size_t)np * 4;
+
+    s->areas.data = da; s->areas.hdr.rec_count = na;
+    s->areas.hdr.rec_size = NM_AREA_BYTES; s->areas.mapped = 0; s->areas.data_len = s->dea;
+    s->lines.data = dl; s->lines.hdr.rec_count = nl;
+    s->lines.hdr.rec_size = NM_LINE_BYTES; s->lines.mapped = 0; s->lines.data_len = s->del;
+    s->polyrefs.data = dp; s->polyrefs.hdr.rec_count = np;
+    s->polyrefs.hdr.rec_size = 4; s->polyrefs.mapped = 0; s->polyrefs.data_len = s->depo;
+    s->has_features = (na + nl > 0) ? 1 : 0;
+    s->disp_sig = (int64_t)sig;
+    return 0;
+
+oom:
+    free(da); free(dl); free(dp); free(need);
+    s->disp_sig = (int64_t)sig;
+    return -1;
 }
 
 /* 只打开文件、不碰身份（name/dir/bbox/dup_of/loaded 由调用方保持）。
@@ -99,9 +324,14 @@ static int src_open_files(MapSrc *s)
 
     /* 线/面要素可选：三者齐备才算有。
      * ★ PBF 模式下**不从 nmbin 打开**这三个文件（它们可能根本没落盘），
-     * 改由 mapset_ensure_display 从 PBF 运行时解码。 */
+     *   改由 mapset_ensure_display 从 PBF 运行时解码。
+     * ★ 有显示层分 tile（disp.idx）的省也**不从 nmbin 打开整省**这三个文件，
+     *   改为 mapset_set_view 按视口只加载相交 tile 并拼接（见 src_load_disp_tiles），
+     *   避免为屏外一条边解码/映射整省。 */
     if (s->pbf_display_mode) {
         s->has_features = 0;      /* 等解码后再置 1 */
+    } else if (disp_open(s) == 0) {
+        s->has_features = 0;      /* 等 set_view 按视口加载 tile 后再置 1 */
     } else {
         s->has_features = 1;
         snprintf(p, sizeof(p), "%s/lines.bin", s->dir);
@@ -191,6 +421,9 @@ static void src_unload(MapSrc *s)
         pbfmap_free(&s->dmap);
         s->dmap_from_pbf = 0;
     }
+    /* ★ 显示层分 tile 的拼接缓冲也是手 malloc（mapped=0），nmbin_close 不会释放，
+     * 这里先回收；普通省 has_disp_tiles=0，src_free_disp 是空操作。 */
+    src_free_disp(s);
     if (s->has_features) {
         nmbin_close(&s->lines);
         nmbin_close(&s->areas);
@@ -531,13 +764,23 @@ void mapset_set_view(MapSet *ms, const int32_t vb[4])
         /* PBF 显示层：视口进省 ⇒ 后台线程异步解码（见 dmap_worker）。
          * 不再在主线程同步解码（旧逻辑会阻塞渲染 0.6~4.4s）。解码完成前
          * 该省 has_features=0，渲染自然跳过（空白），就绪后下一帧经 publish
-         * 挂上、立即显示——也就是"渐进式加载"，零卡顿。 */
-        if (ov && ms->pbf_dir[0]) {
+         * 挂上、立即显示——也就是"渐进式加载"，零卡顿。
+         * ★ 仅 pbf_display_mode 的省走这条；显示层分 tile 的省（has_disp_tiles）
+         * pbf_display_mode=0，走下面的同步按需加载。 */
+        if (ov && ms->pbf_dir[0] && s->pbf_display_mode) {
             if (!s->dmap_from_pbf) {
                 mapset_dispatch_display(ms, i);   /* 无任务在途才派发，异步 */
             } else {
                 s->dmap_used = ++ms->dmap_clock;  /* 已就绪才刷新 LRU */
             }
+        }
+
+        /* 显示层分 tile：视口进省 ⇒ 按视口只加载相交 tile 并拼接进
+         * areas/lines/polyrefs（同步、仅 mmap 视口内少量 tile，轻量不卡）。
+         * 不进省（!ov）已由 src_unload 释放拼接缓冲。失败不致命：
+         * 该省 has_features=0，本帧自然不画显示层。 */
+        if (ov && s->has_disp_tiles) {
+            src_load_disp_tiles(s, eb);
         }
     }
 

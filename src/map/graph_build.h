@@ -37,6 +37,7 @@ typedef struct {
     uint64_t areas_skip_open;          /* 打了面标签但 way 不闭合 */
     uint64_t linearea_dropped_missing; /* 引用的节点缺失/被剔除，整条丢弃 */
     uint64_t tiles_written;            /* 空间索引 tile 数（0 = 未生成） */
+    uint64_t disp_tiles;               /* 显示层分 tile 数（0 = 未生成 / 失败） */
 
     uint64_t names;                 /* 路名池条目数 */
     uint64_t ways_with_lanes;       /* 带 turn:lanes 的可路由 way 数 */

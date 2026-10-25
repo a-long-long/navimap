@@ -83,6 +83,7 @@ int main(int argc, char **argv)
            st.restr_skip_via_way, st.restr_skip_incomplete, st.restr_skip_unresolved);
     printf("bbox_e7        %d %d %d %d\n", st.bbox[0], st.bbox[1], st.bbox[2], st.bbox[3]);
     printf("tiles          %" PRIu64 "\n", st.tiles_written);
+    printf("disp_tiles     %" PRIu64 "  (显示层分 tile，运行时只加载视口内)\n", st.disp_tiles);
     printf("elapsed_sec    %.1f\n", st.elapsed_sec);
 
     /* ---- 闸门 ---- */
@@ -137,6 +138,7 @@ int main(int argc, char **argv)
                 st.restr_skip_via_way, st.restr_skip_incomplete,
                 st.restr_skip_unresolved);
         fprintf(f, "bbox_e7        %d %d %d %d\n", st.bbox[0], st.bbox[1], st.bbox[2], st.bbox[3]);
+        fprintf(f, "disp_tiles     %" PRIu64 "\n", st.disp_tiles);
         fprintf(f, "elapsed_sec    %.1f\n", st.elapsed_sec);
         fclose(f);
     } else {

@@ -57,6 +57,18 @@ typedef struct {
     int32_t  *line_bbox;    /* 线缓存（paint_lines 懒填，nl*4 个 i32）。
                              * 线要素没有 tile 索引，缺了它每帧要白投影 10 万条线
                              * 的全部顶点——实测占 z14 一帧的 75%。 */
+
+    /* ---- 显示层分 tile（运行时按需加载，只 mmap 视口内 tile）----
+     * has_disp_tiles：本省有 disp.idx（抽取期已切好）。有则**不走**整省
+     * nmbin/pbf 解码，改为按视口把相交 tile 拼接进 areas/lines/polyrefs。
+     * 拼接缓冲 dareas/dlines/dpoly 是手 malloc 的（NMBinFile.mapped=0，
+     * nmbin_close 只置空不释放），卸载时由 src_unload/close 负责 free。 */
+    int       has_disp_tiles;
+    int64_t   disp_tile_e7, disp_lat0, disp_lon0;  /* 网格参数（e7） */
+    int       disp_ncols, disp_nrows;
+    uint8_t  *dareas, *dlines, *dpoly;   /* 拼接缓冲（手动 malloc/free） */
+    size_t    dea, del, depo;             /* 三个缓冲当前字节数 */
+    int64_t   disp_sig;      /* 上次拼接的 tile 集合签名，避免每帧重建 */
 } MapSrc;
 
 typedef struct {
