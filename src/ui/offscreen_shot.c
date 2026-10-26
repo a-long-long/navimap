@@ -1,41 +1,107 @@
-/* map_shot —— 不弹窗口，把一帧路网渲成图片落盘。
+/* offscreen_shot —— 离屏像素审计通道（map_shot 与 navmap_qt --shot-offscreen 共用）
  *
- * 存在理由：本机没有 xvfb-run、也没有 valgrind，GUI 只能由人在 Wayland 会话里
- * 肉眼看。渲染对不对（有没有路、投影歪不歪、LOD 生不生效）必须能无人值守验证，
- * 所以做一个离屏渲染通道：出来的图可以直接打开看，也可以做像素级断言。
+ * 存在理由同 map_shot：本机没有 xvfb-run、也没有 valgrind，GUI 只能由人在
+ * Wayland 会话里肉眼看。渲染对不对（有没有路、投影歪不歪、LOD 生不生效、
+ * 浮层透不透明、轨迹画没画上去）必须能无人值守验证，所以做一个离屏渲染通道：
+ * 出来的图可以直接打开看，也可以做像素级断言。
  *
- * 用法：
- *   ./map_shot --graph=products/graph/beijing --out=/tmp/shot.bmp \
- *              --lat=39.90 --lon=116.40 --zoom=12 --w=1280 --h=800 \
- *              [--max-class=4] [--font=<路径.ttf|none>] [--font-size=14]
- *              [--from=lat,lon --to=lat,lon] [--fit-route]
- *              [--sim [--sim-sec=<模拟秒>] [--sim-deviate=<米>]]
+ * ★ 本文件是这条通道的**单一可信源**：map_shot（tools/map_shot.c 只剩 3 行壳）
+ *   与 navmap_qt --shot-offscreen 都调 offscreen_shot_main()，保证两个前端的
+ *   离屏判据逐字节一致，保住 74/4 回归基线。
  *
- * --from/--to：进程内直接算一条路线并叠加（不用先跑 route_cli 导 GeoJSON），
- *   这样"算路 + 画路线 + 指令"整条链都能无人值守断言。给 --lat/--lon 时
- *   按给定中心渲染，否则自动缩放到整条路线。
- * --sim：把模拟导航那一层也画出来（车头箭头、已走过变灰、底部指令条），
- *   --sim-sec 先推进一段路，--sim-deviate 把定位点拉开若干米模拟走错路。
- * --gpx=<文件>：导入 GPX（轨迹 + 航点转收藏）后渲染，可给多次。
- *   ★ 只进**内存**（gpx_parse_file），不写 tracks.db —— 截图工具不该改用户数据；
- *     持久化那条路由交互前端（navmap/navmap_qt 的 --gpx）负责。
+ * ★ 零 SDL 依赖：以前 map_shot 用 SDL_CreateRGBSurface + SDL_SaveBMP，现在改
+ *   成 malloc 一块 0x00RRGGBB 内存缓冲 + 内建 24 位 BMP 写出。Qt 前端本就不链
+ *   SDL，这条路径也必须零 SDL；map_shot 迁过来后也顺带脱了 SDL。
+ *
+ * 用法（与旧 map_shot 完全一致）：
+ *   navmap_qt --shot-offscreen --graph=products/graph/beijing --out=/tmp/shot.bmp \
+ *             --lat=39.90 --lon=116.40 --zoom=12 --w=1280 --h=800 \
+ *             [--from=lat,lon --to=lat,lon --fit-route] \
+ *             [--q=<查询词>] [--sim --sim-sec=<秒> --sim-deviate=<米>] \
+ *             [--gpx=<文件> ...] [--ovl-alpha=<key>=<pct> ...] \
+ *             [--shot-offscreen]  ← 仅 navmap_qt 多传一次，本函数忽略
  */
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <SDL.h>
+#include <math.h>
+#include <time.h>
+#include <stdint.h>
 
 #include "ui/window.h"
-#include "map/gpx.h"        /* --gpx：导入轨迹/收藏后渲染（只进内存） */
-#include "ui/overlay.h"     /* --ovl-alpha：逐浮层透明度 */
-#include <time.h>
-#include "render/paint.h"
-#include "render/navdraw.h"
+#include "map/autobuild.h"   /* AutoBuildOpt（app_init 的 ab 参数；不依赖 tool_common） */
+#include "map/gpx.h"         /* --gpx：导入轨迹/收藏后渲染（只进内存） */
+#include "ui/overlay.h"      /* --ovl-alpha：逐浮层透明度 */
 #include "map/binfmt.h"
-#include "map/coverage.h"
+#include "map/coverage.h"    /* mapset_coverage / COV_HAS_ROAD */
+#include "map/map_view.h"    /* mv_project / mv_visible_bbox */
+#include "map/mapset.h"      /* mapset_enable_pbf_display */
 #include "utils/plat.h"
-#include "tool_common.h"
+#include "render/paint.h"
+#include "render/navdraw.h"  /* NAV_ROUTE_* */
+#include "render/audit.h"    /* 共享离屏像素审计（app_offscreen_audit） */
+#include "route/navsim.h"    /* 模拟导航 */
+#include "route/maneuver.h"  /* maneuver_kind_text */
 
+/* 把一帧渲进调用方持有的内存缓冲（0x00RRGGBB，与 SDL surface / QImage 同源）。
+ * 这里不再用 SDL，缓冲自己管（与 MapCanvas::m_px 完全一致的内存布局）。 */
+static int render_buffer(App *a, uint8_t *px, int w, int h, PaintStats *st)
+{
+    if (!px) return -1;
+    return app_render_to_buf(a, px, w, h, (size_t)w,
+                             0x00FF0000u, 0x0000FF00u, 0x000000FFu, 0x00000000u, st);
+}
+
+/* 内建 24 位 BMP 写出：BGR、行 4 字节对齐、自下而上存储（与 ovl_px.py 口径一致）。
+   不依赖任何外部库。返回 0=成功，-1=失败。 */
+static int write_bmp24(const char *path, const uint8_t *px, int w, int h)
+{
+    FILE *f = fopen(path, "wb");
+    if (!f) { fprintf(stderr, "打不开 %s\n", path); return -1; }
+    int stride = (w * 3 + 3) & ~3;
+    uint32_t imgsize = (uint32_t)stride * (uint32_t)h;
+    uint32_t filesize = 54 + imgsize;
+    uint8_t hdr[54];
+    memset(hdr, 0, sizeof(hdr));
+    hdr[0] = 'B'; hdr[1] = 'M';
+    hdr[2] = (uint8_t)(filesize & 0xff); hdr[3] = (uint8_t)((filesize >> 8) & 0xff);
+    hdr[4] = (uint8_t)((filesize >> 16) & 0xff); hdr[5] = (uint8_t)((filesize >> 24) & 0xff);
+    hdr[10] = 54;                       /* 像素数据偏移 */
+    hdr[14] = 40;                      /* BITMAPINFOHEADER 大小 */
+    hdr[18] = (uint8_t)(w & 0xff); hdr[19] = (uint8_t)((w >> 8) & 0xff);
+    hdr[20] = (uint8_t)((w >> 16) & 0xff); hdr[21] = (uint8_t)((w >> 24) & 0xff);
+    hdr[22] = (uint8_t)(h & 0xff); hdr[23] = (uint8_t)((h >> 8) & 0xff);
+    hdr[24] = (uint8_t)((h >> 16) & 0xff); hdr[25] = (uint8_t)((h >> 24) & 0xff);
+    hdr[26] = 1; hdr[27] = 0;          /* planes */
+    hdr[28] = 24; hdr[29] = 0;         /* bpp */
+    hdr[34] = (uint8_t)(imgsize & 0xff); hdr[35] = (uint8_t)((imgsize >> 8) & 0xff);
+    hdr[36] = (uint8_t)((imgsize >> 16) & 0xff); hdr[37] = (uint8_t)((imgsize >> 24) & 0xff);
+    if (fwrite(hdr, 1, 54, f) != (size_t)54) { fclose(f); return -1; }
+    uint8_t *row = (uint8_t *)malloc((size_t)stride);
+    if (!row) { fclose(f); return -1; }
+    for (int y = h - 1; y >= 0; y--) {              /* 自下而上 */
+        const uint8_t *src = px + (size_t)y * w * 4;
+        for (int x = 0; x < w; x++) {
+            row[x * 3 + 0] = src[x * 4 + 0];       /* B */
+            row[x * 3 + 1] = src[x * 4 + 1];       /* G */
+            row[x * 3 + 2] = src[x * 4 + 2];       /* R */
+        }
+        for (int p = w * 3; p < stride; p++) row[p] = 0;
+        if (fwrite(row, 1, (size_t)stride, f) != (size_t)stride) { free(row); fclose(f); return -1; }
+    }
+    free(row);
+    if (fclose(f) != 0) return -1;
+    return 0;
+}
+
+/* 前缀匹配取参数值：arg_val("--from=39,116", "--from=") -> "39,116"；不匹配返回 NULL。
+   替代 tool_common 的 tc_arg_val（避免 navmap_qt 链接 tool_common）。 */
+static const char *arg_val(const char *a, const char *pfx)
+{
+    size_t n = strlen(pfx);
+    if (strncmp(a, pfx, n) == 0) return a + n;
+    return NULL;
+}
 
 static int parse_ll(const char *s, double *lat, double *lon)
 {
@@ -50,109 +116,29 @@ static int parse_ll(const char *s, double *lat, double *lon)
     return 0;
 }
 
-/* 数屏幕上有多少个"路线蓝"像素：断言路线真的画上去了。
-   软件渲染器不做 alpha 混合，画上去的颜色就是原值，可以精确比。 */
-static long count_route_pixels(SDL_Surface *s)
+/* 把画面上一个像素设成给定颜色（0x00RRGGBB）。用于 --route GeoJSON 叠加。 */
+static void set_px(uint8_t *px, int w, int x, int y, int r, int g, int b)
 {
-    if (s->format->BitsPerPixel != 32) return -1;
-    Uint32 want = SDL_MapRGBA(s->format, NAV_ROUTE_R, NAV_ROUTE_G, NAV_ROUTE_B, 255);
-    long n = 0;
-    for (int y = 0; y < s->h; y++) {
-        Uint32 *row = (Uint32 *)((Uint8 *)s->pixels + (size_t)y * s->pitch);
-        for (int x = 0; x < s->w; x++)
-            if (row[x] == want) n++;
-    }
-    return n;
+    if (x < 0 || y < 0 || x >= w) return;
+    uint8_t *p = px + ((size_t)y * w + x) * 4;
+    p[2] = (uint8_t)r; p[1] = (uint8_t)g; p[0] = (uint8_t)b;
 }
-
-/* 数"已走过"的灰像素（NAV_ROUTE_DONE 那套颜色）。模拟导航推进一半之后，
-   画面上必须同时有灰（走过）和蓝（没走）——只断言蓝的话，"已走过那段"
-   画没画对根本发现不了（颜色写错、切分位置写错都是蓝的照样全在）。 */
-static long count_done_pixels(SDL_Surface *s)
+/* 3px 粗线（与旧 SDL 软渲染同口径）。 */
+static void draw_line(uint8_t *px, int w, int x0, int y0, int x1, int y1, int r, int g, int b)
 {
-    if (s->format->BitsPerPixel != 32) return -1;
-    Uint32 want = SDL_MapRGBA(s->format, 130, 138, 150, 255);
-    long n = 0;
-    for (int y = 0; y < s->h; y++) {
-        Uint32 *row = (Uint32 *)((Uint8 *)s->pixels + (size_t)y * s->pitch);
-        for (int x = 0; x < s->w; x++)
-            if (row[x] == want) n++;
-    }
-    return n;
-}
-
-/* 按颜色数像素（软件渲染器不做混合，画上去是什么颜色就是什么颜色）。
-   搜索框、指令条这类"框画没画出来"的断言都靠它。 */
-static long count_color_pixels(SDL_Surface *s, int cr, int cg, int cb)
-{
-    if (s->format->BitsPerPixel != 32) return -1;
-    Uint32 want = SDL_MapRGBA(s->format, (Uint8)cr, (Uint8)cg, (Uint8)cb, 255);
-    long n = 0;
-    for (int y = 0; y < s->h; y++) {
-        Uint32 *row = (Uint32 *)((Uint8 *)s->pixels + (size_t)y * s->pitch);
-        for (int x = 0; x < s->w; x++)
-            if (row[x] == want) n++;
-    }
-    return n;
-}
-
-/* 数"接近某颜色"的像素（每通道容差 tol）。
- * 为什么需要：浮层现在是**半透明**的（默认 75%），它画在画面上的颜色是
- * "原色 × alpha + 底图色 × (1−alpha)" —— 用原色精确计数会数到 0。
- * 实测：无图提示横幅改成 75% 后 nomap_banner_px 从 3489 掉到 0，
- * 7 个省（没数据的那 7 个）渲染用例一起假红。 */
-static long count_near_color_pixels(SDL_Surface *s, int cr, int cg, int cb, int tol)
-{
-    if (s->format->BitsPerPixel != 32) return -1;
-    long n = 0;
-    for (int y = 0; y < s->h; y++) {
-        Uint32 *row = (Uint32 *)((Uint8 *)s->pixels + (size_t)y * s->pitch);
-        for (int x = 0; x < s->w; x++) {
-            Uint8 r, g, b, al;
-            SDL_GetRGBA(row[x], s->format, &r, &g, &b, &al);
-            if (abs((int)r - cr) <= tol && abs((int)g - cg) <= tol &&
-                abs((int)b - cb) <= tol)
-                n++;
+    int dx = abs(x1 - x0), dy = abs(y1 - y0);
+    int sx = x0 < x1 ? 1 : -1, sy = y0 < y1 ? 1 : -1;
+    int err = dx - dy;
+    for (;;) {
+        for (int d = -1; d <= 1; d++) {
+            if (dx >= dy) set_px(px, w, x0, y0 + d, r, g, b);
+            else          set_px(px, w, x0 + d, y0, r, g, b);
         }
+        if (x0 == x1 && y0 == y1) break;
+        int e2 = 2 * err;
+        if (e2 > -dy) { err -= dy; x0 += sx; }
+        if (e2 <  dx) { err += dx; y0 += sy; }
     }
-    return n;
-}
-
-/* 数某个**浮层元素**的像素：按它当前的透明度算出与底图背景混合后的实际颜色。
- * ★ 判据随用户设置走 —— 用户把该浮层调成 30%，这条也不会假红（而不是
- *   反过来把"用户改了设置"判成回归）。 */
-static long count_overlay_pixels(SDL_Surface *s, int cr, int cg, int cb,
-                                 int intrinsic_a, int ovl_a)
-{
-    const int BG[3] = { 244, 241, 234 };      /* paint_background 的底色 */
-    /* 有效 alpha = 元素自身底色 alpha × 浮层透明度（两层都是 0~255）。
-     * ★ 只按浮层 alpha 算会错：横幅边框 (255,186,64) 是画在**横幅填充**之上的，
-     *   不是画在底图上的 ⇒ 按底图混合算出来的期望色根本不存在（实测数到 0）。
-     *   所以这里数的是**填充**（它才直接压在底图上）。 */
-    const double k = (intrinsic_a / 255.0) * (ovl_a / 255.0);
-    int er = (int)(cr * k + BG[0] * (1.0 - k) + 0.5);
-    int eg = (int)(cg * k + BG[1] * (1.0 - k) + 0.5);
-    int eb = (int)(cb * k + BG[2] * (1.0 - k) + 0.5);
-    return count_near_color_pixels(s, er, eg, eb, 8);
-}
-
-/* 把一帧渲进调用方的 SDL_Surface。
- *
- * ★ 像素格式全部从 surface 自己的 format 里读（Rmask/Gmask/Bmask/Amask），
- *   不写死：写死就会在"某台机器上红蓝互换"，而这种 bug 只在别人机器上复现。
- *   stride 以像素计（pitch 是字节，32bpp 时 pitch/4 == w）。
- *   注意没有 SDL_MUSTLOCK 的检查：这里只用软件 surface（可写内存），硬件
- *   surface 走不到这条路。 */
-static int render_surface(App *a, SDL_Surface *surf, PaintStats *st)
-{
-    if (!surf || !surf->pixels) return -1;
-    if (surf->format->BitsPerPixel != 32 || surf->format->BytesPerPixel != 4)
-        return -1;
-    if (surf->pitch % 4) return -1;
-    return app_render_to_buf(a, surf->pixels, surf->w, surf->h,
-                              (size_t)(surf->pitch / 4),
-                              surf->format->Rmask, surf->format->Gmask,
-                              surf->format->Bmask, surf->format->Amask, st);
 }
 
 /* 极简 GeoJSON LineString 读取：只认 "coordinates" 后面的 [[lon,lat],...]。
@@ -205,7 +191,7 @@ static double *read_geojson_line(const char *path, size_t *out_n)
     return pts;
 }
 
-int main(int argc, char **argv)
+int offscreen_shot_main(int argc, char **argv)
 {
     const char *graph = "products/graph/beijing";
     const char *pbf_display = NULL;   /* PBF 显示层模式 */
@@ -239,23 +225,25 @@ int main(int argc, char **argv)
     const char *gpx_in[8] = {0};    /* --gpx=<文件>：导入轨迹/收藏后渲染（可多次） */
     int settings_ovl = 0;            /* --settings-ovl：出图前打开浮层透明度子面板 */
     int open_tf = 0;                 /* --panel=tf：出图前打开轨迹/收藏管理面板（QA 验收用） */
+    int open_menu = 0;               /* --menu：出图前打开主菜单浮层（QA 验收用） */
     struct { NmOverlay id; int pct; } ovl_set[OVL_COUNT] = {{OVL_TITLE,0}};
     int n_ovl = 0;                   /* --ovl-alpha=<key>=<pct>：逐浮层透明度 */
     int n_gpx_in = 0;
 
     /* 启动自愈（同 navimap）：源 pbf 在、产物没了/坏了就重建。默认开。 */
     AutoBuildOpt ab;
-    tc_ab_init(&ab);
+    memset(&ab, 0, sizeof(ab));
+    ab.enable = 1;
 
     for (int i = 1; i < argc; i++) {
         const char *v;
-        if ((v = tc_arg_val(argv[i], "--from=")))     from_s = v;
-        else if ((v = tc_arg_val(argv[i], "--to=")))  to_s = v;
+        if ((v = arg_val(argv[i], "--from=")))     from_s = v;
+        else if ((v = arg_val(argv[i], "--to=")))  to_s = v;
         else if (strcmp(argv[i], "--fit-route") == 0) fit_route = 1;
-        else if ((v = tc_arg_val(argv[i], "--q=")))      q_s = v;
+        else if ((v = arg_val(argv[i], "--q=")))      q_s = v;
         else if (strcmp(argv[i], "--sim") == 0)       sim = 1;
-        else if ((v = tc_arg_val(argv[i], "--sim-sec=")))     sim_sec = atof(v);
-        else if ((v = tc_arg_val(argv[i], "--sim-deviate="))) deviate_m = atof(v);
+        else if ((v = arg_val(argv[i], "--sim-sec=")))     sim_sec = atof(v);
+        else if ((v = arg_val(argv[i], "--sim-deviate="))) deviate_m = atof(v);
         else if (strncmp(argv[i], "--graph=", 8) == 0) graph = argv[i] + 8;
         else if (strncmp(argv[i], "--out=", 6) == 0) out = argv[i] + 6;
         else if (strncmp(argv[i], "--lat=", 6) == 0) { lat = atof(argv[i] + 6); have_center |= 1; }
@@ -324,6 +312,11 @@ int main(int argc, char **argv)
              * 可视证据（配合 --gpx 可看到面板里真的列出轨迹/收藏）。 */
             open_tf = 1;
         }
+        else if (strcmp(argv[i], "--menu") == 0) {
+            /* 把主菜单浮层打开再出图：给"新增的菜单项（导入/导出 GPX、
+             * 轨迹收藏）"留个可视证据。 */
+            open_menu = 1;
+        }
         else if (strncmp(argv[i], "--ovl-alpha=", 12) == 0) {
             if (n_ovl >= (int)(sizeof(ovl_set) / sizeof(ovl_set[0]))) {
                 fprintf(stderr, "提示: --ovl-alpha 最多 %d 个\n",
@@ -341,23 +334,21 @@ int main(int argc, char **argv)
                 n_ovl++;
             }
         }
+        /* --shot-offscreen：仅 navmap_qt 调本函数时多传一次，忽略即可。 */
+        else if (strcmp(argv[i], "--shot-offscreen") == 0) { /* no-op */ }
         else { fprintf(stderr, "未知参数 %s\n", argv[i]); return 2; }
     }
 
-    if (SDL_Init(SDL_INIT_VIDEO) != 0) {
-        fprintf(stderr, "SDL_Init 失败: %s\n", SDL_GetError());
-        return 1;
-    }
-
     App a;
-    if (app_init(&a, graph, w, h, font, font_size, &ab) != 0) { SDL_Quit(); return 1; }
+    if (app_init(&a, graph, w, h, font, font_size, &ab) != 0) return 1;
+    a.qt_ui = 0;   /* 离屏审计通道：让 C 核心把 chrome（无图横幅/搜索框/标题栏）
+                      画进缓冲，与旧 map_shot 逐字节一致，保住 74/4 基线。 */
     if (pbf_display) {
         if (mapset_enable_pbf_display(&a.ms, pbf_display, pbf_lru) != 0) {
             fprintf(stderr, "提示: PBF 显示层不可用（%s），改用 nmbin 产物\n", pbf_display);
         } else {
             printf("显示层: PBF 运行时解码（%s, LRU %d）\n", pbf_display, pbf_lru);
-            /* map_shot 是一次性离屏截图：没有"逐帧渐进"可言，直接同步解码
-             * 各省（与交互前端走后台线程不同），保证出图即是对的。 */
+            /* 离屏截图：没有"逐帧渐进"可言，直接同步解码各省。 */
             for (int i = 0; i < a.ms.n; i++)
                 mapset_ensure_display(&a.ms, i);
         }
@@ -368,6 +359,7 @@ int main(int argc, char **argv)
     a.max_class = max_class;
     if (settings_ovl) { a.settings_open = 1; a.settings_ovl = 1; }
     if (open_tf) { a.tf_open = 1; }
+    if (open_menu) { a.menu_open = 1; }
     /* --ovl-alpha：默认 75% 已在 app_init 里读好，这里再覆盖 */
     for (int i = 0; i < n_ovl; i++)
         app_ovl_alpha_set(&a, ovl_set[i].id, ovl_set[i].pct);
@@ -547,7 +539,6 @@ int main(int argc, char **argv)
     /* GPX 导入：放在**所有会改视图的选项之后**（--from/--to 的 fit-route、
        --q 的跳转、--sim 的跟随都会挪中心），否则轨迹可能被挪出画面。
        只进内存不落库（见文件头说明）。 */
-    int gpx_trk_drawn = 0, gpx_trk_visible = 0, gpx_fav_visible = 0;
     for (int i = 0; i < n_gpx_in; i++) {
         int n = gpx_parse_file(gpx_in[i], &a.gpx);
         if (n < 0) {
@@ -556,59 +547,34 @@ int main(int argc, char **argv)
         }
         printf("gpx            %s -> %d 条轨迹\n", gpx_in[i], n);
     }
-    for (int i = 0; i < a.gpx.n_trk; i++) {
-        const GpxTrack *t = &a.gpx.trk[i];
-        if (t->n < 2) continue;                 /* <2 点画不出线段 */
-        gpx_trk_drawn++;
-        /* 与 paint_tracks 的裁剪口径一致：任一端点落进"视口 + 64 margin"
-         * 就算可见（整段都在外面才会被跳过）。可见性判定必须和实现同口径，
-         * 否则"轨迹在画面外"这种合法情况会被误判成失败。 */
-        for (uint32_t k = 0; k + 1 < t->n; k++) {
-            int x0, y0, x1, y1;
-            mv_project(&a.view, t->lat_e7[k] / 1e7, t->lon_e7[k] / 1e7, &x0, &y0);
-            mv_project(&a.view, t->lat_e7[k + 1] / 1e7, t->lon_e7[k + 1] / 1e7, &x1, &y1);
-            if (!((x0 < -64 && x1 < -64) || (x0 > w + 64 && x1 > w + 64) ||
-                  (y0 < -64 && y1 < -64) || (y0 > h + 64 && y1 > h + 64))) {
-                gpx_trk_visible++;
-                break;
-            }
-        }
-    }
-    for (int i = 0; i < a.gpx.n_wpt; i++) {
-        /* 与 paint_favorites 自己的裁剪口径一致（视口外 16px 不计） */
-        int x, y;
-        mv_project(&a.view, a.gpx.wpt[i].lat, a.gpx.wpt[i].lon, &x, &y);
-        if (x >= -16 && y >= -16 && x <= a.view.w + 16 && y <= a.view.h + 16)
-            gpx_fav_visible++;
-    }
+    /* 轨迹/收藏的"可见性"判定交给共享审计模块（render/audit.c），
+       它读 a.gpx 自己算，保证与 navmap_qt --shot-offscreen 同口径。 */
 
-    SDL_Surface *surf = SDL_CreateRGBSurface(0, w, h, 32, 0, 0, 0, 0);
-    if (!surf) { fprintf(stderr, "创建 surface 失败: %s\n", SDL_GetError()); return 1; }
+    uint8_t *buf = (uint8_t *)malloc((size_t)w * h * 4);
+    if (!buf) { fprintf(stderr, "内存不足\n"); return 1; }
 
     PaintStats st;
     clock_t t0 = clock();
-    if (render_surface(&a, surf, &st) != 0) {
+    if (render_buffer(&a, buf, w, h, &st) != 0) {
         fprintf(stderr, "渲染失败\n");
+        free(buf);
         return 1;
     }
     /* 第二帧：热身后的稳态成本（首帧含 bbox 懒建等一次性成本） */
     if (resize_font > 0) {
         int got = app_set_font_size(&a, resize_font);
         printf("resized_font   %d pt\n", got);
-        if (got != resize_font) { printf("ASSERT-FAIL    运行期改字号失败\n"); return 1; }
+        if (got != resize_font) { printf("ASSERT-FAIL    运行期改字号失败\n"); free(buf); return 1; }
     }
     clock_t t1 = clock();
-    render_surface(&a, surf, &st);
+    render_buffer(&a, buf, w, h, &st);
     double warm_ms = (double)(clock() - t1) / CLOCKS_PER_SEC * 1000;
 
     /* 路线叠加：把 route_cli 算出的路径画成红线，一眼看出路线贴不贴路网 */
     size_t nroute = 0;
     if (route) {
         double *rp = read_geojson_line(route, &nroute);
-        if (!rp) { printf("ASSERT-FAIL    读不了路线 %s\n", route); return 1; }
-        SDL_Renderer *rr = SDL_CreateSoftwareRenderer(surf);
-        if (!rr) { printf("ASSERT-FAIL    建不了软渲染器\n"); return 1; }
-        SDL_SetRenderDrawColor(rr, 225, 40, 40, 255);
+        if (!rp) { printf("ASSERT-FAIL    读不了路线 %s\n", route); free(buf); return 1; }
         int drawn_seg = 0;
         for (size_t i = 0; i + 1 < nroute; i++) {
             int x0, y0, x1, y1;
@@ -618,13 +584,9 @@ int main(int argc, char **argv)
             if ((x0 < -50 && x1 < -50) || (x0 > w + 50 && x1 > w + 50) ||
                 (y0 < -50 && y1 < -50) || (y0 > h + 50 && y1 > h + 50))
                 continue;
-            for (int d = -1; d <= 1; d++) {          /* 3px 粗 */
-                SDL_RenderDrawLine(rr, x0 + d, y0, x1 + d, y1);
-                SDL_RenderDrawLine(rr, x0, y0 + d, x1, y1 + d);
-            }
+            draw_line(buf, w, x0, y0, x1, y1, 225, 40, 40);
             drawn_seg++;
         }
-        SDL_DestroyRenderer(rr);
         free(rp);
         printf("route          %s（%zu 点，本帧可见 %d 段）\n", route, nroute, drawn_seg);
     }
@@ -632,8 +594,9 @@ int main(int argc, char **argv)
            (double)(clock() - t0) / CLOCKS_PER_SEC * 1000, warm_ms);
     printf("  分解(第2帧)   背景 %.0f  面 %.0f  路 %.0f  线 %.0f  标注 %.0f ms\n",
            st.ms_bg, st.ms_areas, st.ms_roads, st.ms_lines, st.ms_labels);
-    if (SDL_SaveBMP(surf, out) != 0) {
-        fprintf(stderr, "保存失败: %s\n", SDL_GetError());
+    if (write_bmp24(out, buf, w, h) != 0) {
+        fprintf(stderr, "保存失败: %s\n", out);
+        free(buf);
         return 1;
     }
 
@@ -665,111 +628,15 @@ int main(int argc, char **argv)
     printf("poi_icons      %llu\n", (unsigned long long)st.poi_icons);
     printf("road_labels    %llu\n", (unsigned long long)st.road_labels_drawn);
 
-    int fail = 0;
-    /* 无地图区域时"画不出路"是预期结果，不能再当失败；
-       这时该断言的是"提示横幅画出来了没有"——否则会出现
-       "既没地图、也没提示"这种最差情况却显示 ASSERT-OK。
-       横幅边框是琥珀色 (255,186,64)，数它的像素即可。 */
-    char cov_prov[64];
-    double flat, flon;
-    app_focus_point(&a, &flat, &flon);      /* 与界面上的提示用同一个点 */
-    int cov = mapset_coverage(&a.ms, flat, flon, 3000,
-                              cov_prov, sizeof(cov_prov));
-    printf("coverage       %d  省=%s\n", cov, cov_prov[0] ? cov_prov : "-");
-    if (cov == COV_HAS_ROAD) {
-        if (st.drawn == 0) {
-            printf("ASSERT-FAIL    一帧都没画出来（视口里没有路？）\n");
-            fail = 1;
-        }
-        long bp = count_overlay_pixels(surf, 48, 34, 8, 232,
-                                           app_ovl_a(&a, OVL_NOMAP));
-        /* 阈值 2000：横幅改 75% 半透明后判的是"混合后近色（容差 8）"，会撞上
-         * 密集路网/注记的深色像素 —— 实测 8 省 z13 假阳性 222~525 px（判 200
-         * 全假红，截图目视确认根本没有横幅、cov=COV_HAS_ROAD）；真横幅
-         * r_nomap 实测 10341 px。2000 与两侧各隔 4 倍以上。 */
-        if (bp > 2000) {
-            printf("ASSERT-FAIL    有地图却画出了无地图提示横幅（%ld px）\n", bp);
-            fail = 1;
-        }
-    } else {
-        long bp = count_overlay_pixels(surf, 48, 34, 8, 232,
-                                           app_ovl_a(&a, OVL_NOMAP));
-        printf("nomap_banner_px %ld\n", bp);
-        if (bp <= 200) {
-            printf("ASSERT-FAIL    无地图区域却没有提示横幅（用户会以为程序坏了）\n");
-            fail = 1;
-        }
-    }
-
-    if (have_search) {
-        /* 输入框是 (250,250,250) 的白底：框没画出来时会是 0。
-           几何算对了但忘了调 paint_search_box 的话，只有这条能抓住。 */
-        /* 数边框 (110,170,255) 而不是白底 (250,250,250)：
-         * 白底混完是 249，离背景色 244 太近，容差一放宽就把背景也算进来了。 */
-        long boxpix = count_overlay_pixels(surf, 20, 28, 44, 236,
-                                           app_ovl_a(&a, OVL_SEARCH));
-        printf("search_box_px  %ld\n", boxpix);
-        if (boxpix <= 200) { printf("ASSERT-FAIL    画面里没有搜索框\n"); fail = 1; }
-    }
-
-    if (have_route) {
-        long npix = count_route_pixels(surf);
-        printf("route_pixels   %ld\n", npix);
-        /* 路线画没画上去，只能靠像素数断言：几何算对了但投影/裁剪写错时，
-           里程打印全对、画面上却一条线都没有（这类"数据对、画面错"的回归
-           用眼睛最难发现）。 */
-        if (npix <= 0) { printf("ASSERT-FAIL    画面里没有路线像素\n"); fail = 1; }        if (have_sim) {
-            long dpix = count_done_pixels(surf);
-            printf("done_pixels    %ld（已走过那段的灰色像素）\n", dpix);
-            double prog = navsim_progress(&a.sim);
-            /* 走过一段之后画面上必须同时有灰和蓝：全是蓝说明"已走过"没画，
-               全是灰说明切分点写反了。 */
-            if (prog > 0.05 && prog < 0.95) {
-                if (dpix <= 0) { printf("ASSERT-FAIL    已走过那段没画成灰色\n"); fail = 1; }
-                if (npix <= 0) { printf("ASSERT-FAIL    未走那段没有蓝色像素\n"); fail = 1; }
-            }
-            if (deviate_m > 60.0 && !navsim_offroute(&a.sim, 0)) {
-                printf("ASSERT-FAIL    注入 %.0f m 偏移却没判偏航（实测 %.1f m）\n",
-                       deviate_m, a.sim.off_m);
-                fail = 1;
-            }
-        }
-        double tol = a.rr.total_m * 0.001 + 1.0;
-        if (a.man.n < 2 || fabs(a.man.sum_m - a.rr.total_m) > tol) {
-            printf("ASSERT-FAIL    指令里程和 %.1f m != 总里程 %.1f m\n",
-                   a.man.sum_m, a.rr.total_m);
-            fail = 1;
-        }
-    }
-
-    /* GPX 叠加层：轨迹色（调色板四色轮换，见 map/gpx.c 的 kPalette）+ 收藏金。
-     * 软件渲染不混色，画上去就是原值 ⇒ 可以精确数像素。
-     * ★ 判据与"有几条**看得见**的轨迹"挂钩，而不是"大于 0"：轨迹整段落在
-     *   视口外时画面本来就该没有轨迹像素（合法情况，不能算失败）；
-     *   反过来，看得见却一个像素都没有 ⇒ 渲染层真的坏了。 */
-    if (n_gpx_in > 0) {
-        long trk_px = 0;
-        static const int pal[][3] = {
-            { 232, 62, 158 }, { 0, 178, 178 }, { 150, 92, 220 }, { 110, 190, 60 }
-        };
-        for (int k = 0; k < 4; k++)
-            trk_px += count_color_pixels(surf, pal[k][0], pal[k][1], pal[k][2]);
-        long fav_px = count_color_pixels(surf, 245, 190, 40);   /* 收藏金芯 */
-        printf("gpx_trk_px     %ld（%d 条可画 / %d 条可见）\n",
-               trk_px, gpx_trk_drawn, gpx_trk_visible);
-        printf("gpx_fav_px     %ld（%d 个可见收藏）\n", fav_px, gpx_fav_visible);
-        if (gpx_trk_visible > 0 && trk_px <= 0) {
-            printf("ASSERT-FAIL    %d 条轨迹在视口内，画面里却没有轨迹像素\n",
-                   gpx_trk_visible);
-            fail = 1;
-        }
-        if (gpx_fav_visible > 0 && fav_px <= 0) {
-            printf("ASSERT-FAIL    %d 个收藏在视口内，画面里却没有金色像素\n",
-                   gpx_fav_visible);
-            fail = 1;
-        }
-    }
-    if (fail) return 1;
-    printf("ASSERT-OK\n");
-    return 0;
+    /* 像素计数 + 断言 + 日志：交给共享审计模块（render/audit.c）。
+       navmap_qt --shot-offscreen 也走同一份逻辑，保证两前端判据逐位一致。 */
+    AuditCtx actx;
+    actx.have_search = have_search;
+    actx.have_route  = have_route;
+    actx.have_sim    = have_sim;
+    actx.deviate_m   = deviate_m;
+    actx.n_gpx_in    = n_gpx_in;
+    int rc = app_offscreen_audit(&a, buf, w, h, w * 4, &st, &actx);
+    free(buf);
+    return rc;
 }

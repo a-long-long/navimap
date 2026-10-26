@@ -31,8 +31,8 @@ find_package(Threads REQUIRED)
 
 # ---------------------------------------------------------------------------
 # 依赖（方案2 架构约束：navimap_core 不链 SDL）。
-# SDL 只出现在两个适配层：navmap_sdl（window_sdl.c）与 map_shot（自己 include
-# SDL.h）。navimap_qt 只链 navimap_core + Qt Widgets。字体已换成 stb_truetype
+# SDL 现仅出现在去 SDL 化门禁对照体 blend_equiv / clip_equiv（合法链 SDL2）。
+# navimap_qt 只链 navimap_core + Qt Widgets；离屏出图走 src/ui/offscreen_shot.c（零 SDL）。
 # （单头文件、零外部库），于是"核心零 SDL"完全可行。SDL2_ttf 已彻底移除。
 # ---------------------------------------------------------------------------
 macro(nm_require_pc var mod)
@@ -179,11 +179,13 @@ set(RENDER_SRCS
     src/render/chrome.c
     src/render/font.c
     src/render/labels.c
-    src/render/trackdraw.c)
+    src/render/trackdraw.c
+    src/render/audit.c)
 set(UI_SRCS
     src/ui/window.c
     src/ui/overlay.c
-    src/ui/voice_wire.c)
+    src/ui/voice_wire.c
+    src/ui/offscreen_shot.c)
 
 # 阶段 1 叶子库：把 src/utils 按模块拆成 4 个独立 STATIC 库（字面补全阶段1）。
 # 依赖关系：mem → plat；geo / strpool / plat 为纯叶子（零内部依赖）。
@@ -318,12 +320,12 @@ target_link_libraries(navmap_settings PUBLIC navmap_plat)
 # navimap_core：聚合层（方案2 架构边界的对外门面）。
 #   ★ 仅含一个无副作用的锚点符号（src/core_anchor.c），不含业务 .c；
 #     把 5 个模块库 + 5 个叶子库 + 第三方库聚合成一个链接面，
-#     使 24 个 exe / navmap_sdl / navmap_qt 等无需改动即可继续链接 navimap_core。
-#   ★ 核心零 SDL：聚合层连 SDL 的 include 都不给；SDL 只在 navmap_sdl / map_shot。
+#     使 24 个 exe / navmap_qt 等无需改动即可继续链接 navimap_core。
+#   ★ 核心零 SDL：聚合层连 SDL 的 include 都不给；SDL 仅 blend_equiv / clip_equiv 合法链。
 add_library(navimap_core STATIC src/core_anchor.c)
 
 # ★ 核心不含 SDL：连 include 路径都不给。理由见上面"依赖"一节的架构约束。
-#   谁需要 SDL（窗口版 / 离屏出图）自己去链 navimap_sdl 或直接链 SDL2。
+#   谁需要 SDL（去 SDL 化门禁对照体）自己去直接链 SDL2。
 target_include_directories(navimap_core PUBLIC
     ${CMAKE_SOURCE_DIR}/src
     ${GEN_DIR}
@@ -472,24 +474,13 @@ add_executable(tag_stats tools/tag_stats.c)
 nm_link_tool(tag_stats)
 
 # ---------------------------------------------------------------------------
-# SDL 适配层：唯一直接依赖 SDL 的库。只有 SDL 窗口版（navmap）链它。
+# SDL 适配层（navmap_sdl / window_sdl.c / navimap 可执行）已于 #88 彻底移除：
+# 彻底 Qt 化后，交互前端是 navmap_qt，离屏像素审计走 C 核心缓冲（chrome.c，
+# a.qt_ui=0 把 chrome 画进缓冲、零 SDL）。本机不再构建任何 SDL GUI 二进制。
+# 仅 blend_equiv / clip_equiv 仍合法链 SDL2（去 SDL 化门禁用的对照体）。
 # ---------------------------------------------------------------------------
-add_library(navmap_sdl STATIC src/ui/window_sdl.c)
-target_include_directories(navmap_sdl PUBLIC
-    ${CMAKE_SOURCE_DIR}/src
-    ${SDL2_INCLUDE_DIRS})
-target_link_directories(navmap_sdl PUBLIC ${SDL2_LIBRARY_DIRS})
-target_link_libraries(navmap_sdl PUBLIC
-    -Wl,--start-group
-    navmap_map navmap_route navmap_search navmap_render navmap_ui
-    navmap_pbf navmap_geo navmap_strpool navmap_plat navmap_mem
-    ${ZLIB_LIBRARIES} ${SQLITE3_LIBRARIES} ${PROTOC_LIB} ${NAVIMAP_CORE_SYS_LIBS}
-    -Wl,--end-group
-    ${SDL2_LIBRARIES} Threads::Threads)
 
-# 主程序（GUI）
-add_executable(navmap src/main.c)
-target_link_libraries(navmap PRIVATE navmap_sdl)
+# 主程序（GUI）：原 navimap (SDL) 已移除，交互前端统一为 navmap_qt（见下方 Qt 段）。
 
 # Qt 前端（可选）：找到 Qt6 或 Qt5 的 Widgets 就多编一个 navmap_qt。
 #   同一份源码同时兼容 Qt5/Qt6：无 Q_OBJECT/信号槽，故无需 moc；事件坐标统一用
@@ -510,6 +501,10 @@ if(QT)
         src/ui_qt/qt_main.cpp
         src/ui_qt/map_canvas.cpp
         src/ui_qt/qt_font.cpp
+# 离屏渲染：src/ui/offscreen_shot.c（offscreen_shot_main，零 SDL，纯内存缓冲 +
+# 内建 24 位 BMP 写出）。该通道作为 navmap_qt --shot-offscreen 的单一可信源。
+# #88 后 map_shot 壳已删除，regress 直接吃 navmap_qt --shot-offscreen
+# （见 scripts/regress.sh 的 shot()/app_route/gpx_render/ovl_shot）。
         src/ui_qt/qt_icons.cpp
         src/ui_qt/main_window.cpp)
     target_link_libraries(navmap_qt PRIVATE navimap_core ${QT}::Widgets Threads::Threads)
@@ -518,12 +513,6 @@ else()
     message(STATUS "Qt 前端: 未找到 Qt6/Qt5 Widgets，跳过 navmap_qt")
 endif()
 
-# 离屏渲染：自己用 SDL 存 BMP（SDL_SaveBMP），直接链 SDL2，但不链 navimap_sdl。
-add_executable(map_shot tools/map_shot.c tools/tool_common.c)
-target_include_directories(map_shot PRIVATE ${SDL2_INCLUDE_DIRS})
-target_link_directories(map_shot PRIVATE ${SDL2_LIBRARY_DIRS})
-nm_link_tool(map_shot navmap_map navmap_route navmap_search navmap_render navmap_ui)
-target_link_libraries(map_shot PRIVATE ${SDL2_LIBRARIES} Threads::Threads)
 
 # 光栅 alpha 混色与 SDL 软渲染器的逐像素等价性（去 SDL 化的门禁）。
 add_executable(blend_equiv tools/blend_equiv.c)

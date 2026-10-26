@@ -64,7 +64,10 @@ run() {                       # run <名字> <必须出现的标记> <命令...>
 
 shot() {                      # shot <名字> <省目录|graph> <lat> <lon> <zoom>
     local name=$1 g=$2 la=$3 lo=$4 z=$5
-    run "$name" "ASSERT-OK" "$BUILD/map_shot" --graph="$g" \
+    # #87：离屏判据从 map_shot 迁到 navmap_qt --shot-offscreen（与 map_shot 同源、
+    # 审计逐字节一致的单可信源）。--shot-offscreen 在 Qt 初始化前就走纯 C 离屏通道，
+    # 不建窗口、不链 SDL、不依赖显示环境（QT_QPA_PLATFORM / SDL_VIDEODRIVER 都不用）。
+    run "$name" "ASSERT-OK" "$BUILD/navmap_qt" --shot-offscreen --graph="$g" \
         --lat="$la" --lon="$lo" --zoom="$z" --w=1280 --h=800 \
         --out="$SHOTS/$name.bmp"
 }
@@ -234,7 +237,7 @@ if [ -x "$BUILD/core_no_sdl" ]; then
     run core_no_sdl "CORE-NO-SDL-OK" "$BUILD/core_no_sdl" \
         "$(exefile "$BUILD/navmap_qt")" "$BUILD/libnavimap_core.a"
     run core_no_sdl_sdl "CORE-NO-SDL-OK" "$BUILD/core_no_sdl" --expect-sdl \
-        "$(exefile "$BUILD/navimap")"
+        "$(exefile "$BUILD/blend_equiv")"
 fi
 
 # ---- 字体链的中文覆盖（中文变方框的根因门禁）----
@@ -443,14 +446,13 @@ fi
 
 # ★★ 主程序（window.c）自己的算路路径（PLAN.md §51.9）
 #   之前 navsim_* 用的是独立工具 navsim_cli，**根本没走到 window.c**；
-#   map_shot 不带 --from/--to 也不算路 ⇒ 主程序的 `nav_worker` /
-#   `app_nav_plan_sync` 长期没有任何自动化覆盖，而它们才是对外行为。
-#   这里用 map_shot --from/--to 走 `app_nav_plan_sync`，一次盖住：
-#     ① 吸附 → ② 算路 → ③ 转向指令 → ④ 路线真的画到画面上（route_pixels）。
+#   这里用 navmap_qt --shot-offscreen --from/--to 走 `app_nav_plan_sync`
+#   （离屏通道设 a.qt_ui=0，主程序算路/渲染一条龙与旧 map_shot 逐字节一致），
+#   一次盖住：① 吸附 → ② 算路 → ③ 转向指令 → ④ 路线真的画到画面上（route_pixels）。
 #   ★ 起终点特意选 **保定→石家庄**：修复前它吸附到 hebei #6204583（悬在与主干
 #     断开的小连通块里）⇒ 双向都"不连通"，是 §51.1 那个 bug 的原生样本。
 #     判据"里程在 120~160 km 内"能同时挡住"算不出来"和"吸附错了点"。
-run app_route "ASSERT-OK" "$BUILD/map_shot" --graph="$GRAPH" \
+run app_route "ASSERT-OK" "$BUILD/navmap_qt" --shot-offscreen --graph="$GRAPH" \
     --from=38.87,115.46 --to=38.04,114.51 --fit-route --w=800 --h=600 \
     --out="$SHOTS/app_route.bmp"
 if [ -f "$SHOTS/app_route.log" ]; then
@@ -472,9 +474,9 @@ if [ -f "$SHOTS/app_route.log" ]; then
     fi
 fi
 
-# ---- GPX 轨迹 / 收藏：map_shot --gpx（SDL 家族的无人值守渲染判据）----
+# ---- GPX 轨迹 / 收藏：navmap_qt --shot-offscreen --gpx（离屏像素判据）----
 # 与 Qt 前端那条 UI 断言分工：Qt 侧钉"导入 → 面板条目跟着 store 变"，
-# 这里钉"轨迹/收藏**真的画到画面上**"（像素判据），且不依赖 Qt/offscreen。
+# 这里钉"轨迹/收藏**真的画到画面上**"（像素判据），走共享审计模块、不依赖 Qt/offscreen。
 # ★ 负向对照已实证：把 paint_tracks / paint_favorites 改成直接 return 0 ⇒
 #   分别报「没有轨迹像素」「没有金色像素」两条 ASSERT-FAIL（各实测过一次）。
 # 视口中心取北京二环一带，GPX 内联生成（不往仓库里塞夹具）。
@@ -494,10 +496,9 @@ cat > "$GPX_FILE" <<'GEOF'
   </trkseg></trk>
 </gpx>
 GEOF
-# SDL_VIDEODRIVER 只在未设时补 dummy：map_shot 不建窗口，dummy 在哪都能跑
-# （本机无显示环境必须补，否则 SDL_Init(SDL_INIT_VIDEO) 直接失败）。
-run gpx_render "ASSERT-OK" env SDL_VIDEODRIVER="${SDL_VIDEODRIVER:-dummy}" \
-    "$BUILD/map_shot" --graph="$GRAPH" --gpx="$GPX_FILE" \
+# 离屏通道不建窗口、不链 SDL，任何环境都能跑（无需 QT_QPA_PLATFORM / SDL_VIDEODRIVER）。
+run gpx_render "ASSERT-OK" "$BUILD/navmap_qt" --shot-offscreen --graph="$GRAPH" \
+    --gpx="$GPX_FILE" \
     --lat=39.95 --lon=116.40 --zoom=13 --w=1280 --h=800 \
     --out="$SHOTS/gpx_case.bmp"
 if [ -f "$SHOTS/gpx_render.log" ]; then
@@ -540,17 +541,19 @@ fi
 #   ③ 把 chrome.c 的 rtext 改回乘系数（文字跟着一起淡）
 #      ⇒ "前景（文字/图标）没有保持清晰" FAIL。
 ovl_shot() {   # $1=key $2=pct $3=输出
-    # ★ map_shot 的输出由 run() 自己重定向进 $log；这里**不要**再对 run 调用
-    #   挂重定向 —— 那会把 run() 的 OK/FAIL 结果行一起吞掉，计数器照加、
-    #   结果行看不见，footer 对不上账（踩过：6 项隐形失败）。
-    run "ovl_$1_$2" "ASSERT-OK" env SDL_VIDEODRIVER="${SDL_VIDEODRIVER:-dummy}" \
-        "$BUILD/map_shot" --graph="$GRAPH" --lat=39.94 --lon=116.405 --zoom=13 \
+    # ★ navmap_qt --shot-offscreen 的输出由 run() 自己重定向进 $log；这里**不要**
+    #   再对 run 调用挂重定向 —— 那会把 run() 的 OK/FAIL 结果行一起吞掉。
+    # ★ 离屏通道设 a.qt_ui=0，chrome 由 C 核心画进缓冲（与旧 map_shot 逐字节一致），
+    #   所以浮层矩形坐标仍是 C 侧布局：标题栏 0,0,800,30；右栏四按钮 750,88,42,184。
+    run "ovl_$1_$2" "ASSERT-OK" "$BUILD/navmap_qt" --shot-offscreen --graph="$GRAPH" \
+        --lat=39.94 --lon=116.405 --zoom=13 \
         --w=800 --h=600 --ovl-alpha="$1=$2" --out="$3"
 }
 # 标题栏矩形 0,0,800,30（CHROME_TITLE_H=30）；右栏四按钮 750,88,42,184
-# ★ 标题栏在 map_shot 里**只有底板没有文字**（map_shot 不加载字体，"NavMap"
-#   那行字不画）⇒ 这条只验底板比值 + 逐浮层独立，前景判据 --fg=0 跳过。
-#   前景（文字/图标）保持清晰由下面两条验：C 右栏（图标）与 Qt 搜索按钮（**文字**）。
+# ★ 离屏通道设 a.qt_ui=0，chrome 由 C 核心画进缓冲；标题栏**只有底板没有文字**
+#   （离屏通道不加载字体，"NavMap" 那行字不画）⇒ 这条只验底板比值 + 逐浮层独立，
+#   前景判据 --fg=0 跳过。前景（文字/图标）保持清晰由下面两条验：
+#   C 右栏（图标，本段）与 Qt 搜索按钮（**文字**，--shot 视觉验收段）。
 ovl_shot alpha_title 100 "$SHOTS/ovl_title_100.bmp"
 ovl_shot alpha_title 75  "$SHOTS/ovl_title_075.bmp"
 ovl_shot alpha_title 0   "$SHOTS/ovl_title_000.bmp"

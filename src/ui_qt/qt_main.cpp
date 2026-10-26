@@ -26,10 +26,25 @@ extern "C" {
 #include "map/mapset.h"     /* mapset_enable_pbf_display / mapset_totals */
 #include "utils/datum.h"     /* DatumId / DATUM_*：--datum 解析 */
 #include "ui/overlay.h"     /* NmOverlay / ovl_by_key：--ovl-alpha 解析 */
+#include "ui/offscreen_shot.h"  /* offscreen_shot_main：离屏像素审计（与 map_shot 同源） */
 }
 
 #include "main_window.h"
 #include "qt_font.h"
+
+/* 同 map_shot.c：把 "lat,lon" 解析成两个 double（离屏算路的起终点）。 */
+static int parse_ll(const char *s, double *lat, double *lon)
+{
+    const char *sp = strchr(s, ',');
+    if (!sp) return -1;
+    char buf[128];
+    size_t n = (size_t)(sp - s);
+    if (n >= sizeof(buf)) return -1;
+    memcpy(buf, s, n); buf[n] = '\0';
+    *lat = atof(buf);
+    *lon = atof(sp + 1);
+    return 0;
+}
 
 int main(int argc, char **argv)
 {
@@ -45,6 +60,8 @@ int main(int argc, char **argv)
     int ui_test = 0;                  /* --ui-test：跑无头 UI 自检后退出 */
     int shot_search = 0;              /* --shot-search：截图前先展开搜索框 */
     int shot_track = 0;               /* --shot-track：截图前先展开轨迹/收藏面板 */
+    int shot_offscreen = 0;           /* --shot-offscreen：离屏像素审计（与 map_shot
+                                         逐字节一致），在 C 核心缓冲上跑审计后退出 */
     const char *datum = NULL;         /* --datum=wgs84|cgcs2000|bj54|xa80：坐标系（命令行优先） */
     const char *datum_grid = NULL;    /* --datum-grid=<file>：图幅改正量格网（入口②） */
     const char *gpx_in[8] = {0};      /* --gpx=<file>：启动即导入（可多次，最多 8 个） */
@@ -54,6 +71,14 @@ int main(int argc, char **argv)
      * 给无人值守截图做像素判据用。key 见 ui/overlay.h（alpha_search 等）。 */
     struct { NmOverlay id; int pct; } ovl_set[OVL_COUNT] = {{OVL_TITLE,0}};
     int n_ovl = 0;
+
+    /* 以下 flag 补齐自 map_shot，使 --shot 能复刻 regress.sh 的离屏判据场景 */
+    double lat = 0, lon = 0, zoom = 12.0;
+    int have_center = 0;                 /* 1=给了 --lat/--lon，2=给了 --zoom，3=都给 */
+    const char *from_s = NULL, *to_s = NULL;
+    int fit_route = 0;
+    int open_menu = 0, open_tf = 0, settings_ovl = 0;
+    const char *dmap_demo = NULL; int dmap_demo_pct = 0;
 
     AutoBuildOpt ab;
     memset(&ab, 0, sizeof(ab));
@@ -100,6 +125,7 @@ int main(int argc, char **argv)
         else if (strcmp(argv[i], "--ui-test") == 0) ui_test = 1;
         else if (strcmp(argv[i], "--shot-search") == 0) shot_search = 1;
         else if (strcmp(argv[i], "--shot-track") == 0) shot_track = 1;
+        else if (strcmp(argv[i], "--shot-offscreen") == 0) shot_offscreen = 1;
         else if (strncmp(argv[i], "--pbf-display=", 14) == 0) {
             pbf_display = argv[i] + 14;
             const char *colon = strrchr(pbf_display, ':');
@@ -114,7 +140,47 @@ int main(int argc, char **argv)
                 }
             }
         }
+        else if (strncmp(argv[i], "--lat=", 6) == 0)  { lat = atof(argv[i] + 6); have_center |= 1; }
+        else if (strncmp(argv[i], "--lon=", 6) == 0)  { lon = atof(argv[i] + 6); have_center |= 2; }
+        else if (strncmp(argv[i], "--zoom=", 7) == 0) { zoom = atof(argv[i] + 7); }
+        else if (strncmp(argv[i], "--from=", 7) == 0) from_s = argv[i] + 7;
+        else if (strncmp(argv[i], "--to=", 5) == 0)   to_s = argv[i] + 5;
+        else if (strcmp(argv[i], "--fit-route") == 0) fit_route = 1;
+        else if (strcmp(argv[i], "--menu") == 0) open_menu = 1;
+        else if (strcmp(argv[i], "--panel=tf") == 0) open_tf = 1;
+        else if (strcmp(argv[i], "--settings-ovl") == 0) settings_ovl = 1;
+        else if (strncmp(argv[i], "--dmap-demo=", 12) == 0) {
+            dmap_demo = argv[i] + 12;
+            const char *colon = strrchr(dmap_demo, ':');
+            if (colon && colon[1] >= '0' && colon[1] <= '9') {
+                dmap_demo_pct = atoi(colon + 1);
+                size_t n = (size_t)(colon - dmap_demo);
+                static char dbuf[128];
+                if (n < sizeof(dbuf)) { memcpy(dbuf, dmap_demo, n); dbuf[n] = '\0'; dmap_demo = dbuf; }
+            }
+        }
+        /* 以下 flag 仅 --shot-offscreen（offscreen_shot_main）使用：这里忽略，
+           原样转发给 offscreen_shot_main 解析。这样 regress 把离屏审计从
+           map_shot 迁到 navmap_qt --shot-offscreen 时，参数完全兼容。 */
+        else if (strncmp(argv[i], "--out=", 6) == 0) { /* 交给 offscreen_shot_main */ }
+        else if (strncmp(argv[i], "--max-class=", 12) == 0) { /* 同上 */ }
+        else if (strncmp(argv[i], "--resize-font=", 14) == 0) { /* 同上 */ }
+        else if (strncmp(argv[i], "--route=", 8) == 0) { /* 同上 */ }
+        else if (strcmp(argv[i], "--sim") == 0) { /* 同上 */ }
+        else if (strncmp(argv[i], "--sim-sec=", 11) == 0) { /* 同上 */ }
+        else if (strncmp(argv[i], "--sim-deviate=", 14) == 0) { /* 同上 */ }
         else { fprintf(stderr, "未知参数 %s\n", argv[i]); return 2; }
+    }
+
+    /* ★ 离屏像素审计通道（#86）：--shot-offscreen 在**任何 Qt 初始化之前**就走
+     *   共享的 offscreen_shot_main（纯 C、零 SDL、不需要显示环境），在 C 核心
+     *   地图缓冲上跑与 map_shot 逐字节一致的像素审计后退出。
+     *   —— 与现有的 --shot（抓整个 Qt 窗口做视觉验收）走两条不同路径：
+     *      · --shot-offscreen：C 核心缓冲审计（保 74/4 回归基线，regress 用）；
+     *      · --shot         ：抓 Qt 前端自己的 chrome（验证 Qt 控件渲染）。
+     *   两者不冲突，--shot 那段视觉验收逻辑原样保留。 */
+    if (shot_offscreen) {
+        return offscreen_shot_main(argc, argv);
     }
 
     QApplication app(argc, argv);
@@ -213,6 +279,44 @@ int main(int argc, char **argv)
            (unsigned long long)tn, (unsigned long long)te);
     printf("字体: %s  %d pt\n",
            a.font_used[0] ? a.font_used : "(无)", a.font_size);
+
+    /* === 离屏截图对齐 map_shot：视图/算路/浮层（regress 像素判据用）===
+     * 与 map_shot.c 同语义；交互模式给这些 flag 也无副作用。 */
+    if (have_center & 1) a.view.lat = lat;
+    if (have_center & 2) a.view.lon = lon;
+    if (zoom > 0)        a.view.zoom = zoom;
+    a.view.w = w; a.view.h = h;
+    if (settings_ovl) { a.settings_open = 1; a.settings_ovl = 1; }
+    if (open_tf)      a.tf_open = 1;
+    if (open_menu)    a.menu_open = 1;
+    if (dmap_demo) {
+        int prov = -1;
+        for (int i = 0; i < a.ms.n; i++)
+            if (strcmp(a.ms.srcs[i].name, dmap_demo) == 0) { prov = i; break; }
+        if (prov < 0) fprintf(stderr, "提示: 找不到省份 %s 供 --dmap-demo\n", dmap_demo);
+        else {
+            MapSrc *s = &a.ms.srcs[prov];
+            s->pbf_display_mode = 1; s->loaded = 1; s->has_features = 0;
+            s->dmap_inflight = 1; s->dmap_progress = dmap_demo_pct;
+            a.view.lat = ((double)s->bbox[0] + s->bbox[2]) / 2e7;
+            a.view.lon = ((double)s->bbox[1] + s->bbox[3]) / 2e7;
+            a.view.zoom = 8;
+            int32_t eb[4] = { s->bbox[0], s->bbox[1], s->bbox[2], s->bbox[3] };
+            mapset_set_view(&a.ms, eb);
+        }
+    }
+    if (from_s || to_s) {
+        if (!from_s || !to_s) { printf("ASSERT-FAIL --from 与 --to 必须成对给\n"); return 1; }
+        double alat, alon, blat, blon;
+        if (parse_ll(from_s, &alat, &alon) != 0 || parse_ll(to_s, &blat, &blon) != 0) {
+            printf("ASSERT-FAIL 起终点格式应为 lat,lon\n"); return 1;
+        }
+        if (app_nav_plan_sync(&a, alat, alon, blat, blon) != 0) {
+            printf("ASSERT-FAIL 算路失败：%s\n", a.nav_msg[0] ? a.nav_msg : "(未知)");
+            return 1;
+        }
+        if (have_center != 3 || fit_route) app_nav_fit(&a);
+    }
 
     fflush(stdout);
     MainWindow win(&a);
