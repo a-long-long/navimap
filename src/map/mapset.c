@@ -4,6 +4,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <math.h>
+#include <inttypes.h>
 
 #include "map/coordkey.h"
 #include "utils/geo.h"
@@ -81,9 +82,9 @@ static int disp_open(MapSrc *s)
     int64_t tile_e7 = 0, lat0 = 0, lon0 = 0;
     long ncols = 0, nrows = 0;
     while (fgets(line, sizeof(line), f)) {
-        if (sscanf(line, "tile_e7 %lld", &tile_e7) == 1) continue;
-        if (sscanf(line, "lat0 %lld", &lat0) == 1) continue;
-        if (sscanf(line, "lon0 %lld", &lon0) == 1) continue;
+        if (sscanf(line, "tile_e7 %" PRId64, &tile_e7) == 1) continue;
+        if (sscanf(line, "lat0 %" PRId64, &lat0) == 1) continue;
+        if (sscanf(line, "lon0 %" PRId64, &lon0) == 1) continue;
         if (sscanf(line, "ncols %ld", &ncols) == 1) continue;
         if (sscanf(line, "nrows %ld", &nrows) == 1) continue;
         if (strncmp(line, "ntiles", 6) == 0) { got = 1; break; }

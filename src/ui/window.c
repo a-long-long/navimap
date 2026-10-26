@@ -989,8 +989,10 @@ static void paint_dmap_overlay(Raster *rs, App *a)
         int tw = font_text_w(a->font, txt);
         int pw = tw + 16, ph = 22;
         int x = sx - pw / 2, y = sy - ph / 2;
-        if (x < 4) x = 4;  if (x + pw > W - 4) x = W - pw - 4;
-        if (y < 4) y = 4;  if (y + ph > H - 4) y = H - ph - 4;
+        if (x < 4) x = 4;
+        if (x + pw > W - 4) x = W - pw - 4;
+        if (y < 4) y = 4;
+        if (y + ph > H - 4) y = H - ph - 4;
 
         uint8_t r = failed ? 120 : 28, g = failed ? 40 : 34, b = failed ? 40 : 48;
         raster_fill_rect(rs, x, y, pw, ph, r, g, b, 210);

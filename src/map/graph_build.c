@@ -1035,11 +1035,13 @@ static int write_disp_tiles(Graph *g, const char *dir, const char *src,
         int32_t fo0 = 180*10000000, fo1 = -180*10000000;
         int got = 0;
         for (uint32_t k = 0; k < rc; k++) {
-            uint32_t idx = nm_get_u32(pr->p + ((size_t)ro + k) * 4);
+            uint32_t idx = nm_get_u32((const uint8_t *)pr->p + ((size_t)ro + k) * 4);
             if ((uint64_t)idx >= g->n_ids) continue;
             int32_t la = g->lat[idx], lo = g->lon[idx];
-            if (la < fa0) fa0 = la; if (la > fa1) fa1 = la;
-            if (lo < fo0) fo0 = lo; if (lo > fo1) fo1 = lo;
+            if (la < fa0) fa0 = la;
+            if (la > fa1) fa1 = la;
+            if (lo < fo0) fo0 = lo;
+            if (lo > fo1) fo1 = lo;
             got = 1;
         }
         if (!got) continue;
@@ -1047,8 +1049,10 @@ static int write_disp_tiles(Graph *g, const char *dir, const char *src,
         long r0 = (long)((fo0 - lo0) / tile_e7), r1 = (long)((fo1 - lo0) / tile_e7);
         long tcw = (c1 - c0 + 1), tch = (r1 - r0 + 1);
         if (tcw * tch > 64) { c0 = c1 = (c0 + c1) / 2; r0 = r1 = (r0 + r1) / 2; } /* 过大只落中心 */
-        if (c0 < 0) c0 = 0; if (c1 >= ncols) c1 = ncols - 1;
-        if (r0 < 0) r0 = 0; if (r1 >= nrows) r1 = nrows - 1;
+        if (c0 < 0) c0 = 0;
+        if (c1 >= ncols) c1 = ncols - 1;
+        if (r0 < 0) r0 = 0;
+        if (r1 >= nrows) r1 = nrows - 1;
         uint8_t rec[NM_LINE_BYTES]; memset(rec, 0, sizeof(rec));
         nm_put_u64(rec + LF_OSM_ID,  (uint64_t)lr[i].osm_id);
         nm_put_u32(rec + LF_REF_OFF, 0);
@@ -1060,7 +1064,7 @@ static int write_disp_tiles(Graph *g, const char *dir, const char *src,
             for (long c = c0; c <= c1; c++) {
                 uint64_t tc = (uint64_t)r * (uint64_t)ncols + (uint64_t)c;
                 if (disp_append(&dtL[tc], &dtP[tc], rec, NM_LINE_BYTES,
-                                pr->p, ro, rc, LF_REF_OFF) != 0) goto fail;
+                                (const uint8_t *)pr->p, ro, rc, LF_REF_OFF) != 0) goto fail;
                 used[tc] = 1;
             }
     }
@@ -1072,11 +1076,13 @@ static int write_disp_tiles(Graph *g, const char *dir, const char *src,
         int32_t fo0 = 180*10000000, fo1 = -180*10000000;
         int got = 0;
         for (uint32_t k = 0; k < rc; k++) {
-            uint32_t idx = nm_get_u32(pr->p + ((size_t)ro + k) * 4);
+            uint32_t idx = nm_get_u32((const uint8_t *)pr->p + ((size_t)ro + k) * 4);
             if ((uint64_t)idx >= g->n_ids) continue;
             int32_t la = g->lat[idx], lo = g->lon[idx];
-            if (la < fa0) fa0 = la; if (la > fa1) fa1 = la;
-            if (lo < fo0) fo0 = lo; if (lo > fo1) fo1 = lo;
+            if (la < fa0) fa0 = la;
+            if (la > fa1) fa1 = la;
+            if (lo < fo0) fo0 = lo;
+            if (lo > fo1) fo1 = lo;
             got = 1;
         }
         if (!got) continue;
@@ -1084,8 +1090,10 @@ static int write_disp_tiles(Graph *g, const char *dir, const char *src,
         long r0 = (long)((fo0 - lo0) / tile_e7), r1 = (long)((fo1 - lo0) / tile_e7);
         long tcw = (c1 - c0 + 1), tch = (r1 - r0 + 1);
         if (tcw * tch > 64) { c0 = c1 = (c0 + c1) / 2; r0 = r1 = (r0 + r1) / 2; }
-        if (c0 < 0) c0 = 0; if (c1 >= ncols) c1 = ncols - 1;
-        if (r0 < 0) r0 = 0; if (r1 >= nrows) r1 = nrows - 1;
+        if (c0 < 0) c0 = 0;
+        if (c1 >= ncols) c1 = ncols - 1;
+        if (r0 < 0) r0 = 0;
+        if (r1 >= nrows) r1 = nrows - 1;
         uint8_t rec[NM_AREA_BYTES]; memset(rec, 0, sizeof(rec));
         nm_put_u64(rec + AF_OSM_ID,  (uint64_t)ar[i].osm_id);
         nm_put_u32(rec + AF_REF_OFF, 0);
@@ -1095,7 +1103,7 @@ static int write_disp_tiles(Graph *g, const char *dir, const char *src,
             for (long c = c0; c <= c1; c++) {
                 uint64_t tc = (uint64_t)r * (uint64_t)ncols + (uint64_t)c;
                 if (disp_append(&dtA[tc], &dtP[tc], rec, NM_AREA_BYTES,
-                                pr->p, ro, rc, AF_REF_OFF) != 0) goto fail;
+                                (const uint8_t *)pr->p, ro, rc, AF_REF_OFF) != 0) goto fail;
                 used[tc] = 1;
             }
     }

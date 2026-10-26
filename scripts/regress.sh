@@ -540,9 +540,12 @@ fi
 #   ③ 把 chrome.c 的 rtext 改回乘系数（文字跟着一起淡）
 #      ⇒ "前景（文字/图标）没有保持清晰" FAIL。
 ovl_shot() {   # $1=key $2=pct $3=输出
+    # ★ map_shot 的输出由 run() 自己重定向进 $log；这里**不要**再对 run 调用
+    #   挂重定向 —— 那会把 run() 的 OK/FAIL 结果行一起吞掉，计数器照加、
+    #   结果行看不见，footer 对不上账（踩过：6 项隐形失败）。
     run "ovl_$1_$2" "ASSERT-OK" env SDL_VIDEODRIVER="${SDL_VIDEODRIVER:-dummy}" \
         "$BUILD/map_shot" --graph="$GRAPH" --lat=39.94 --lon=116.405 --zoom=13 \
-        --w=800 --h=600 --ovl-alpha="$1=$2" --out="$3" > /dev/null 2>&1
+        --w=800 --h=600 --ovl-alpha="$1=$2" --out="$3"
 }
 # 标题栏矩形 0,0,800,30（CHROME_TITLE_H=30）；右栏四按钮 750,88,42,184
 # ★ 标题栏在 map_shot 里**只有底板没有文字**（map_shot 不加载字体，"NavMap"
@@ -615,9 +618,13 @@ if [ -x "$BUILD/navmap_qt.exe" ] || [ -x "$BUILD/navmap_qt" ]; then
             --ovl-alpha=alpha_search=$pv --shot="$SHOTS/ovl_qts_$pv.bmp" \
             > "$SHOTS/ovl_qts_$pv.log" 2>&1
     done
+    # ★ --rect 必须框住**整个按钮**：判据 3（逐浮层独立）要求矩形外零变化，
+    #   按钮几何随平台字体度量浮动（Linux 实测 10,38,84,36 / Windows 曾是
+    #   10,31,74,36），矩形取两者并集再各留 ~6px 余量 ⇒ 两台机器都不假红。
+    #   真误伤（串浮层）是标题栏那种上万 px 的整块变化，不会被这点余量放过去。
     if python3 "$ROOT/scripts/ovl_px.py" "$SHOTS/ovl_qts_100.bmp" \
             "$SHOTS/ovl_qts_75.bmp" "$SHOTS/ovl_qts_0.bmp" \
-            --rect=10,31,74,36 --fgrect=37,38,32,18 --fg-min=60 --pct=75 \
+            --rect=10,25,95,55 --fgrect=37,38,32,18 --fg-min=60 --pct=75 \
             > "$SHOTS/ovl_qts.log" 2>&1; then
         pass=$((pass + 1)); printf '%-28s OK   (Qt 搜索按钮：底板 75%% + 「搜索」字清晰)\n' "qt_ovl_text"
     else

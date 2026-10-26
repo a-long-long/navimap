@@ -528,7 +528,7 @@ int main(int argc, char **argv)
          * 用来确认车道数据确实喂进了底部指令条（b_lanes）。 */
         if (mi >= 0 && mi < a.man.n) {
             int midx = a.man.v[mi].idx;
-            if (midx >= 1 && midx < a.rr.n) {
+            if (midx >= 1 && midx < (int)a.rr.n) {
                 int seg = midx - 1;
                 int prov = a.rr.pts[midx].prov;
                 const char *ls = mapset_edge_lanes(&a.ms, prov, a.rr.edge_idx[seg]);
@@ -676,9 +676,11 @@ int main(int argc, char **argv)
         }
         long bp = count_overlay_pixels(surf, 48, 34, 8, 232,
                                            app_ovl_a(&a, OVL_NOMAP));
-        /* 阈值 200：半透明后"近色"容差会撞上路网的零星像素（实测 22~33 px），
-         * 判 >0 会假红；横幅本体是几万像素，200 足够把两者分开。 */
-        if (bp > 200) {
+        /* 阈值 2000：横幅改 75% 半透明后判的是"混合后近色（容差 8）"，会撞上
+         * 密集路网/注记的深色像素 —— 实测 8 省 z13 假阳性 222~525 px（判 200
+         * 全假红，截图目视确认根本没有横幅、cov=COV_HAS_ROAD）；真横幅
+         * r_nomap 实测 10341 px。2000 与两侧各隔 4 倍以上。 */
+        if (bp > 2000) {
             printf("ASSERT-FAIL    有地图却画出了无地图提示横幅（%ld px）\n", bp);
             fail = 1;
         }

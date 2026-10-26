@@ -53,8 +53,10 @@ static int feat_bbox(const NMBinFile *nodes, const uint8_t *poly,
         if ((uint64_t)idx >= nn) continue;
         const uint8_t *nr = nodes->data + (uint64_t)idx * NM_NODE_BYTES;
         int32_t la = nm_get_i32(nr + NF_LAT), lo = nm_get_i32(nr + NF_LON);
-        if (la < a0) a0 = la; if (la > a1) a1 = la;
-        if (lo < o0) o0 = lo; if (lo > o1) o1 = lo;
+        if (la < a0) a0 = la;
+        if (la > a1) a1 = la;
+        if (lo < o0) o0 = lo;
+        if (lo > o1) o1 = lo;
         got = 1;
     }
     if (!got) return -1;
@@ -86,7 +88,7 @@ static int cat_find(const Cat *arr, int n, uint64_t osm, uint64_t sh)
 /* 校验一层：拼接缓冲 cat 必须覆盖整省与 eb 相交的该层全部要素。
  * 返回丢失数（写入 *total_concat / *total_hit）。 */
 static int check_layer(const MapSrc *s, const char *name,
-                       const NMBinFile *whole, int off_field, int cnt_field,
+                       int off_field, int cnt_field,
                        const int32_t eb[4], uint64_t *total_concat, uint64_t *total_hit)
 {
     const NMBinFile *cat   = (strcmp(name, "areas") == 0) ? &s->areas : &s->lines;
@@ -192,8 +194,8 @@ int main(int argc, char **argv)
 
     /* 等价性：拼接缓冲必须覆盖整省与 eb 相交的全部要素 */
     uint64_t ca, ha, cl, hl;
-    int ma = check_layer(s, "areas", NULL, AF_REF_OFF, AF_REF_CNT, eb, &ca, &ha);
-    int ml = check_layer(s, "lines", NULL, LF_REF_OFF, LF_REF_CNT, eb, &cl, &hl);
+    int ma = check_layer(s, "areas", AF_REF_OFF, AF_REF_CNT, eb, &ca, &ha);
+    int ml = check_layer(s, "lines", LF_REF_OFF, LF_REF_CNT, eb, &cl, &hl);
     CHECK(ma == 0, "areas 层：%d 条视口要素在拼接缓冲中找不到（丢失！）\n", ma);
     CHECK(ml == 0, "lines 层：%d 条视口要素在拼接缓冲中找不到（丢失！）\n", ml);
     printf("  等价性: areas 视口 %" PRIu64 " 条 / 拼接 %" PRIu64 " 条；"

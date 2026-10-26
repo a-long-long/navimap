@@ -20,7 +20,7 @@ typedef struct { int x0, y0, x1, y1, done; } RSeg;
  *
  * ★★ 规则与 chrome.c 一致：**只淡底板，前景（文字 / 图标）保持清晰**。
  *   · 底板、描边（nfill / nrect）：按 alpha 比例淡；
- *   · 文字、图标（ntext / nline）：不参与线性淡出 ——
+ *   · 文字、图标（ntext）：不参与线性淡出 ——
  *     alpha=0 ⇒ 整个浮层隐藏（前景也不画）；alpha>0 ⇒ 前景完全不透明。
  *   J 先生 2026-10-25 明确要求"只淡底板、文字保持清晰"：前景一起淡的话，
  *   浅色底板上的文字会糊成灰，反而看不清。
@@ -44,11 +44,6 @@ static void ntext(Font *f, Raster *rs, int x, int y, const char *t,
                   uint8_t r, uint8_t g, uint8_t b, int shadow)
 {
     font_draw_a(f, rs, x, y, t, r, g, b, shadow, fg(255));
-}
-static void nline(Raster *rs, int x0, int y0, int x1, int y1,
-                  uint8_t r, uint8_t g, uint8_t b)
-{
-    raster_line_rgba(rs, x0, y0, x1, y1, r, g, b, fg(255));
 }
 
 int paint_route(Raster *rs, const MapView *v,

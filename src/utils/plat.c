@@ -982,6 +982,11 @@ static void tts_backend_speak(const char *text)
     }
     tts_speak_once(text);
 #else
+    /* festival 会话是常驻进程：没起来就先尝试启动（无 festival 可执行文件时
+     * 返回 0、g_festival 仍为 NULL，行为与原来一致，静默退回单句引擎）。
+     * 原先漏了这步调用 ⇒ festival_session_start 成了死函数、且 Linux 下
+     * festival 路径永远走不到（g_festival 恒为 NULL）。 */
+    if (!g_festival) festival_session_start();
     if (g_festival && nm_proc_alive(g_festival)) {
         if (nm_proc_write(g_festival, text) > 0 && nm_proc_write(g_festival, "\n") > 0) return;
         nm_proc_close(g_festival);

@@ -277,9 +277,23 @@ static void run_positive(const char *base)
             if (!fc[i] || !fc[i][0]) all_ok = 0;
         check(all_ok, "字体候选每项都是非空路径");
 #if !defined(_WIN32) && !defined(__APPLE__)
-        check(fc && n >= 1 && strcmp(fc[0],
-                  "/usr/share/fonts/truetype/yozo/CESI_SS_GB18030.TTF") == 0,
-              "Linux 首选字体仍是 CESI 宋体（不能因为跨平台改掉偏好）");
+        /* 2026-10-25 起字体策略改为"内置 Noto 优先（与 OsmAnd 同源，跨机器
+         * 随 exe 部署）、系统字体兜底"（plat.c kBundledNoto 注释）。这条钉住
+         * 新契约的两半：① 有内置 fonts/ 目录时首选必须是 NotoSans-Regular；
+         * ② CESI 宋体必须仍在链里（兜底不被丢）；③ 没有内置目录时首选
+         * 退回 CESI 宋体（老契约保留为降级路径）。 */
+        int cesi_pos = -1, noto_pos = -1;
+        for (size_t i = 0; fc && i < n; i++) {
+            if (strstr(fc[i], "CESI_SS_GB18030.TTF"))  cesi_pos = (int)i;
+            if (strstr(fc[i], "NotoSans-Regular.ttf")) noto_pos = (int)i;
+        }
+        check(cesi_pos >= 0, "Linux 候选链仍含 CESI 宋体（兜底不被丢）");
+        check(noto_pos < 0 || noto_pos == 0,
+              "Linux 首选字体是内置 Noto（有内置目录时必须排第一）");
+        if (noto_pos < 0)
+            check(fc && n >= 1 && strcmp(fc[0],
+                      "/usr/share/fonts/truetype/yozo/CESI_SS_GB18030.TTF") == 0,
+                  "无内置 fonts/ 时 Linux 首选仍是 CESI 宋体");
 #endif
     }
 }

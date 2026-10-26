@@ -201,9 +201,13 @@ else()
 endif()
 
 # 叶子库 1：navmap_plat（src/utils/plat.c，纯叶子）
+# ★ plat.c 内的线程/互斥（nm_thread_create / NmMutex）用 pthread 实现，故 -pthread
+#   由本库统一承载（"平台差异只在 plat.c"），所有经 nm_link_tool 链 plat 的目标自动带上。
+#   原先漏挂，导致本机 Linux 链接 tts_selftest 等目标时报 pthread_create 未定义
+#   （Windows/MinGW 不需要显式 -pthread，副机自测未踩到）。
 add_library(navmap_plat STATIC src/utils/plat.c)
 target_include_directories(navmap_plat PUBLIC ${CMAKE_SOURCE_DIR}/src)
-target_link_libraries(navmap_plat PUBLIC ${NM_LEAF_SYS_LIBS})
+target_link_libraries(navmap_plat PUBLIC ${NM_LEAF_SYS_LIBS} Threads::Threads)
 if(WIN32)
     target_compile_options(navmap_plat PUBLIC -Wno-format)
 endif()
