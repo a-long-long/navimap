@@ -859,10 +859,13 @@ void app_nav_sim_tick(App *a)
     int arrived = navsim_advance(&a->sim, dt);
     /* 车头就是定位点：模拟 GNSS 永远给出"我在路上" 的位置 */
     navsim_locate(&a->sim, a->sim.car_lat, a->sim.car_lon);
-    /* ★★ 播报必须在 sim_paused 置位**之前**：
-     *   到达那一刻"您已到达目的地附近，导航结束"要能说出来，
-     *   而到达会同时把 sim_paused 置 1（模拟停下）⇒ 先置位就把它吞了
-     *   （实测真 bug：那句收尾语在 GUI 里从来没响过）。
+    /* ★★ 播报在 sim_paused 置位**之前**调用（历史习惯，仍保留）：
+     *   到达那一刻"您已到达目的地附近，导航结束"要能说出来。
+     *   ★ 现在更稳的兜底在 src/ui/voice_wire.c 的 nav_voice_frame：
+     *     它对"到达帧"一律不抑制（常规到达提示 + 收尾语都不受 paused 影响），
+     *     所以本调用的顺序已不是 load-bearing —— 即便先置位再播报，
+     *     语音连线也会把到达帧的播报放出来。判据只盖 voice_wire.c
+     *     （e2e A8 + 负向对照 #9/#10），无需为 window.c 顺序单独写判据。
      *   顺序：先播报（此时 sim_paused 还是旧的 0）⇒ 再置位。 */
     nav_announce_at(a, now);
     if (arrived) {

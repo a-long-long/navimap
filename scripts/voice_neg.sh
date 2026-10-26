@@ -124,26 +124,30 @@ inject "短隧道不丢弃" "$SRC" \
   '            if (tunnel_len >= VOICE_ALARM_MIN_TUNNEL_M) {|||            if (tunnel_len > 0) {'
 
 # ---- 8) 接线层不发声（接线断了） ----
-# ★ 目标从 window.c 迁到 src/ui/voice_wire.c：接线的**唯一实现**已经搬过去了
-#   （window.c 只是薄封装）。上一版注入 window.c 的发声循环 ⇒ 现在的 window.c
-#   里已经没有那个模式了（会报 INJECT-PATTERN-NOT-FOUND）。
-#   注入写法用 `if (n < 0)` 而不是 `i < 0`：后者会让 n 变成"未使用变量"
-#   ⇒ -Werror 直接编译失败 ⇒ 跑的还是旧 exe ⇒ 判据假绿（编译失败不等于抓到）。
-inject "接线：窗口不播报" "$WIRE" "    if (!c->paused) {
-        for (int i = 0; i < n; i++)
-            nm_tts_speak(vf.text[i]);
-    }|||    if (!c->paused) {
-        for (int i = 0; i < n; i++)
-            if (n < 0) nm_tts_speak(vf.text[i]);
-    }"
+# ★ 目标就是 src/ui/voice_wire.c（接线的**唯一实现**，window.c 只是薄封装）。
+#   破坏发声循环体：把 `nm_tts_speak(vf.text[i]);` 套一层永假的 `if (n < 0)`，
+#   这样常规播报一句都不出（A1~A7 期望的转向提示全没 ⇒ 必红）。
+#   ★ 用 `if (n < 0)` 而不是 `i < 0`：后者会让 n 变成"未使用变量"
+#     ⇒ -Werror 直接编译失败 ⇒ 跑的还是旧 exe ⇒ 判据假绿（编译失败不等于抓到）。
+inject "接线：窗口不播报" "$WIRE" \
+  '            nm_tts_speak(vf.text[i]);|||            if (n < 0) nm_tts_speak(vf.text[i]);'
 
-# ---- 9) 收尾语被暂停挡掉（就是那个真 bug 的形状） ----
+# ---- 9) 收尾语被暂停挡掉（就是那个真 bug 的形状，锁 ① 收尾语） ----
 #   复现 GUI 里"到达收尾语从没响过"：把收尾语的播报条件加上 !paused 依赖。
 #   注入后收尾语只在未暂停时播 ⇒ A8（已到达 + 已暂停，断言收尾语仍须播）必红。
 #   ★ 上一版把收尾语"复制"进 paused 块却没删块外那份 ⇒ 块外兜底 ⇒ 假绿。
 #     改用单行条件注入：唯一的 `if (c->sim->arrived && !*c->ann_finished)` 句首加 !paused。
 inject "收尾语被暂停挡掉" "$WIRE" \
   '    if (c->sim->arrived && !*c->ann_finished) {|||    if (!c->paused && c->sim->arrived && !*c->ann_finished) {'
+
+# ---- 10) 常规门控的"到达例外"被删（锁 ② 常规到达提示） ----
+#   复现"旧版把 sim_paused 在到达前就置 1，导致整个 announce 被吞"的形状：
+#   把到达帧例外从常规门控里去掉 ⇒ 到达那帧（paused=1）的常规到达提示被吞。
+#   A8 断言"前方即将到达目的地"在到达+暂停时仍须播 ⇒ 注入后必红。
+#   ★ 上一版 #2/#8 同构的坑：注入不能"加一份受 X 约束的"，必须"改原条件加 X 依赖"；
+#     这里直接把 `int suppress = c->paused && !c->sim->arrived;` 改成 `= c->paused;`。
+inject "常规门控删除到达例外" "$WIRE" \
+  '    int suppress = c->paused && !c->sim->arrived;|||    int suppress = c->paused;'
 
 echo "=== 结果：通过 $pass / 失败 $fail ==="
 restore

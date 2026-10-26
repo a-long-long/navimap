@@ -38,19 +38,22 @@ void nav_voice_frame(NavVoiceCtx *c, uint64_t now_ms)
                        c->sim->arrived, now_ms, &vf);
 
     /* ★★ 暂停时不播常规播报（偏航重算期间不该出声）。
-     *   但**终点收尾语不受暂停影响** —— 官方 stopNavigation(arrived) 的那句
-     *   "您已到达目的地附近，导航结束" 是在**到达**这一刻说的，
-     *   而本项目到达时会把 sim_paused 置 1（模拟停下）⇒
-     *   ★★ 若把收尾语也挡在 paused 后面，这句话**永远播不出来**
-     *     （实测真 bug：GUI 里从来没响过这句）。
-     *   ⇒ 收尾语单独判，不受 paused 影响。 */
-    if (!c->paused) {
+     *   但**到达那一帧是例外**：到达时会把 sim_paused 置 1（模拟停下），
+     *   而这一帧恰恰是收尾语 + 可能尚未播出的到达提示该说的时候
+     *   ⇒ 到达帧不被 paused 抑制（官方 stopNavigation(arrived) 的那句
+     *   是在"到达"这一刻说的，与"暂停"无关）。
+     *   ★ 这一条是"先播报后置位"那个真 bug 的**唯一裁决点**：
+     *     window.c 即便把 sim_paused 在到达前就置 1（旧版 bug 形状），
+     *     nav_voice_frame 照样把到达帧的播报放出来 ⇒
+     *     调用方顺序不再是 load-bearing，判据只需盖这里（e2e A8 + 负向 #9/#10）。 */
+    int suppress = c->paused && !c->sim->arrived;
+    if (!suppress) {
         for (int i = 0; i < n; i++)
             nm_tts_speak(vf.text[i]);
     }
 
     /* 5) 终点收尾语（官方 NavigationDialogs.stopNavigation 的 arrived 分支）。
-     *    ★ 官方这句属于**界面**层，不在 VoiceRouter 里 ⇒ 单独在这里播，
+     *    ★ 永远不受 paused 影响（见上，到达帧例外）。
      *      用 ann_finished 保证只播一次（与 vr.arrived_said 是两件事）。 */
     if (c->sim->arrived && !*c->ann_finished) {
         *c->ann_finished = 1;

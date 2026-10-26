@@ -279,8 +279,9 @@ static int log_has_dist(const Log *lg, const char *sub, double lo, double hi)
  *   差别只有两处：
  *     · 时钟是合成的（now_ms 由步长累加），冷却判据可复现；
  *     · 发声被 DRYRUN 截下来供断言（GUI 里是真念出来）。
- *   ★ 顺序照抄：到达那一帧**先播报后置 paused**（见 window.c 的注释），
- *     否则"您已到达目的地附近，导航结束"会被吞掉。
+ *   ★ 顺序照抄：到达那一帧**先播报后置 paused**（见 window.c 的注释）。
+ *     现在这更多是历史习惯 —— 真正的"到达帧不被 paused 抑制"已由
+ *     src/ui/voice_wire.c 的 nav_voice_frame 兜底（见 A8 / 负向 #9/#10）。
  * ------------------------------------------------------------------------- */
 static void run_sim(Fixture *f, double dt, double max_seconds, Log *lg)
 {
@@ -555,22 +556,30 @@ static void case_a7_finish_phrase(void)
           "A7 到达终点应播一次收尾语\"您已到达目的地附近，导航结束\"");
 }
 
-/* ★★★ A8：收尾语**不受暂停影响**
+/* ★★★ A8：到达帧**不受暂停影响**（锁住"先播报后置位"那个真 bug 的两道闸）
  *
  * 官方 stopNavigation(arrived) 的那句是在"到达"这一刻说的，与"暂停"
- * 无关。本项目到达时会把 sim_paused 置 1（模拟停下）⇒ 如果收尾语也
- * 挡在 paused 后面，它就永远出不来（就是 A7 那个 bug 的另一面）。
+ * 无关。本项目到达时会把 sim_paused 置 1（模拟停下）⇒ 如果到达帧的播报
+ * 被 paused 挡掉，收尾语就永远出不来（A7 那个 bug 的另一面）。
  *
- * 这里直接把状态摆成"已到达 + 已暂停"，断言收尾语**仍然**要播，
- * 而且只播一次（ann_finished 负责去重）。
+ * ★ 这一例把"到达帧例外"的**两道闸**一起锁：
+ *   ① 收尾语 "您已到达目的地附近，导航结束" 必须播（且只播一次）；
+ *   ② 同一帧若还有常规到达提示 "前方即将到达目的地" 也该播（不被暂停吞）。
+ *   两道闸都在 src/ui/voice_wire.c 的 nav_voice_frame 里，是**唯一裁决点**；
+ *   window.c 的"先播报后置位"顺序不再是 load-bearing。
+ *   路线故意设短（总 180m），让未推进的 sim 在到达帧 remain=180<200 ⇒
+ *   常规到达提示会被 voice_tick 产出，从而可被断言。
+ *
+ *   负向对照 #9（收尾语加 !paused 依赖）、#10（常规门控去掉到达例外）
+ *   都会让本例变红。
  */
 static void case_a8_finish_not_blocked_by_pause(void)
 {
     Fixture f;
-    fx_uniform(&f, 2, 200.0, 60.0, NULL);
+    fx_uniform(&f, 2, 90.0, 60.0, NULL);   /* 总 180m < 200 ⇒ 到达帧常规提示可观测 */
     int type[2] = { MAN_START, MAN_ARRIVE };
     const char *road[2] = { "起始路", NULL };
-    double gap[2] = { 0.0, 400.0 };
+    double gap[2] = { 0.0, 100.0 };
     fx_maneuvers(&f, type, road, gap, 2);
     voice_router_reset(&f.vr);
 
@@ -594,15 +603,16 @@ static void case_a8_finish_not_blocked_by_pause(void)
 
     nav_voice_frame(&c, 5000);
     dry_collect(&lg, 5.0);
-    dump("A8-第1次", &lg);
-    CHECK(log_count(&lg, "您已到达目的地附近，导航结束") == 1,
-          "A8 已到达 + 已暂停时，收尾语仍然必须播出来");
-
-    /* 再调一帧 ⇒ 不许重复播 */
     nav_voice_frame(&c, 6000);
     dry_collect(&lg, 6.0);
+    dump("A8", &lg);
+
+    /* ① 收尾语：到达 + 暂停时仍然必须播出来，且只播一次 */
     CHECK(log_count(&lg, "您已到达目的地附近，导航结束") == 1,
-          "A8 收尾语只播一次（ann_finished 去重）");
+          "A8 已到达 + 已暂停时，收尾语仍然必须播出来且只播一次");
+    /* ② 同一帧的常规到达提示也不该被暂停吞（置位顺序不再是 load-bearing） */
+    CHECK(log_count(&lg, "前方即将到达目的地") == 1,
+          "A8 到达帧即便暂停，常规到达提示也该播出来（置位顺序不再是 load-bearing）");
 }
 
 /* ★★★ A9：暂停时**常规**播报要闭嘴
