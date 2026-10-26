@@ -6,8 +6,13 @@
 ## 固定动作
 
 - `sources/` 只放原始 `*.osm.pbf`；`products/` 全可删、`./scripts/sync_maps.sh` 重建。
-- 验收 `./scripts/regress.sh`（66 项；本机 = 42 通过 / 24 失败，全为环境缺失：7 省 PBF /
-  `places_auto.db` / `lm.bin` / objdump 路径）；编译零警告（-Werror）。改渲染补
+- 验收 `./scripts/regress.sh`：跨平台门禁，本机(Windows)与 Linux 主机**环境互补**——
+  - Linux 主机（数据齐全）：**75 通过 / 3 失败**，3 项是环境缺失（lanes.bin / disp.idx / objdump 路径）。
+  - 本机(Windows/MSYS2)：仅 beijing 1 省 graph（sources/ 只有 beijing.osm.pbf，无 7 省源）⇒
+    补**运行期** PATH（`/d/Qt/6.11.2/mingw_64/bin` + `/d/msys64/ucrt64/bin` + `QT_QPA_PLATFORM_PLUGIN_PATH`
+    指 Qt plugins）后 **55 通过 / 24 失败**，24 全为数据缺口（多省 graph / places_auto.db /
+    liaoning/rev.bin / lm.bin）+ 1 项 disp_runtime 边角环境，**零代码回归**。
+  - 全量对齐 75/3 需在那台有完整数据的 Linux 机器跑。编译零警告（-Werror）。改渲染补
   `python3 scripts/bmpdiff.py 旧 新`（要素色→背景色=丢要素）。
 - `navmap_qt --ui-test`（33 项）已进 regress.sh。完成即 commit + push origin main；
   **前端只有 navmap_qt**（原 navimap/map_shot 已删，见「SDL / 渲染边界」）。
@@ -25,6 +30,20 @@
   ⇒ 用 target 属性。`.bat` 必须纯 ASCII。
 - 平台差异只许在 `src/utils/plat.{h,c}`，业务代码零 `#ifdef _WIN32`；负向断言写
   "失败 Outcome 为真"，别把成功断言取反（踩过 8 项假 FAIL）。
+
+## 本机(Windows/MSYS2)运行 regress / navmap_qt 的环境
+
+- ★ 跑 `regress.sh` 或 `navmap_qt --ui-test` / `--shot-offscreen` **前必须 export**（否则 Qt6*.dll /
+  libprotobuf-c-1.dll 找不到 ⇒ rc=127 假失败）：
+  export PATH="/d/Qt/6.11.2/mingw_64/bin:/d/msys64/ucrt64/bin:$PATH"
+  export QT_QPA_PLATFORM=offscreen
+  export QT_QPA_PLATFORM_PLUGIN_PATH="/d/Qt/6.11.2/mingw_64/plugins"
+  （libprotobuf-c-1.dll 在 **ucrt64**/bin，不是 mingw64；regress.sh 的 qt_run 只加 Qt bin，
+   本机需自己补 ucrt64 bin + QT 插件路径。MSYS2 下 POSIX 风格 PATH 对 Windows loader 未必生效，
+   用绝对路径更稳。）
+- ★ 数据缺口是**真·环境限制**：本机 products 仅 beijing 1 省（sources/ 仅 beijing.osm.pbf），
+  多省 graph / places_auto.db / rev.bin / lm.bin 无法生成 ⇒ 相关 regress 用例必 FAIL，非代码。
+  全量 75/3 对齐在那台有完整数据的 Linux 机器跑。
 
 ## Qt 前端（2026-10-25 实证）
 
@@ -117,8 +136,9 @@
 - ★ 负向对照的注入点必须**可观测**：锚到 `arrived_said` 先置位的地方 =
   永远命中不了 = 假绿。注入写法别让变量变成"未使用"（-Werror ⇒ 编译失败 ⇒
   跑的仍是旧 exe ⇒ 同样假绿）。用 `if (n < 0)` 而不是 `i < 0`。
-- ⚠️ 缺口：`window.c` 里"先播报后置位"的顺序**仍无判据覆盖**（e2e 走 voice_wire.c），
-  要覆盖就得把置位顺序也搬进 `voice_wire.c`。
+- ✅ 缺口已补（`0179e51`）：把"到达帧例外"收归 `voice_wire.c` 成为唯一裁决点，
+  `window.c` 置位顺序不再是 load-bearing；`tools/voice_e2e.c` A8 + `scripts/voice_neg.sh` #9/#10
+  负向对照盖住两道闸（常规播报 + 收尾语都不受 paused 影响）。
 
 ## 设置项与 C/C++
 
