@@ -138,18 +138,12 @@ inject "接线：窗口不播报" "$WIRE" "    if (!c->paused) {
     }"
 
 # ---- 9) 收尾语被暂停挡掉（就是那个真 bug 的形状） ----
-#   把"您已到达目的地附近，导航结束"挪进 paused 保护里 ⇒ A8 判据必须变红。
-inject "收尾语被暂停挡掉" "$WIRE" "    if (!c->paused) {
-        for (int i = 0; i < n; i++)
-            nm_tts_speak(vf.text[i]);
-    }|||    if (!c->paused) {
-        for (int i = 0; i < n; i++)
-            nm_tts_speak(vf.text[i]);
-        if (c->sim->arrived && !*c->ann_finished) {
-            *c->ann_finished = 1;
-            nm_tts_speak(\"您已到达目的地附近，导航结束\");
-        }
-    }"
+#   复现 GUI 里"到达收尾语从没响过"：把收尾语的播报条件加上 !paused 依赖。
+#   注入后收尾语只在未暂停时播 ⇒ A8（已到达 + 已暂停，断言收尾语仍须播）必红。
+#   ★ 上一版把收尾语"复制"进 paused 块却没删块外那份 ⇒ 块外兜底 ⇒ 假绿。
+#     改用单行条件注入：唯一的 `if (c->sim->arrived && !*c->ann_finished)` 句首加 !paused。
+inject "收尾语被暂停挡掉" "$WIRE" \
+  '    if (c->sim->arrived && !*c->ann_finished) {|||    if (!c->paused && c->sim->arrived && !*c->ann_finished) {'
 
 echo "=== 结果：通过 $pass / 失败 $fail ==="
 restore

@@ -193,6 +193,10 @@ run tts_selftest "TTS-OK" "$BUILD/tts_selftest"
 # VoiceRouter / Alarm / AlarmType / Units / Alarms）。
 run voice_selftest "VOICE-OK" "$BUILD/voice_selftest"
 
+# ---- 语音播报**端到端**（走生产接线 nav_voice_frame，验证"窗口真的播了"）----
+# 用 NAVIMAP_TTS_DRYRUN 截下 nm_tts_speak 交出去的话来断言；单函数自测抓不到接线 bug。
+run voice_e2e "VOICE-E2E-OK" "$BUILD/voice_e2e"
+
 # ---- 多方案对比（阶段 12）----
 run alts_selftest "ALTS-OK" "$BUILD/alts_selftest"
 
