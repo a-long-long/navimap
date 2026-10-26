@@ -4,6 +4,7 @@
 #include <string.h>
 #include <stdlib.h>
 #include <time.h>
+#include <dirent.h>             /* 目录扫描：C 前端无文件对话框，GPX 走"配置目录"约定 */
 
 #include "ui/voice_wire.h"
 #include "render/paint.h"
@@ -334,6 +335,7 @@ void app_ovl_alpha_reset(App *a)
 static void nav_drop_route(App *a)
 {
     if (a->have_rr) { route_result_free(&a->rr); a->have_rr = 0; }
+    a->mode = 0;                          /* 路线没了 ⇒ 回到浏览模式（顶栏页签同步） */
     if (a->have_alts) { route_result_set_free(&a->ralts); a->have_alts = 0; a->sel_alt = 0; }
     maneuver_free(&a->man);
     a->nav_msg[0] = '\0';
@@ -492,6 +494,7 @@ void app_nav_poll(App *a)
         a->rr = a->ralts.rr[0];
         memset(&a->ralts.rr[0], 0, sizeof(RouteResult));
         a->have_rr = 1;
+    a->mode = 1;                         /* 有了路线 ⇒ 导航模式（顶栏页签 + 导航 chrome 显示） */
         maneuver_build(&a->rr, &a->ms, &a->man);
         nav_announce_reset(a);
         a->nav_msg[0] = '\0';               /* 面板顶行回到"全程 X 约 Y 分钟" */
@@ -533,6 +536,7 @@ void app_nav_select_alt(App *a, int k)
     memset(&a->ralts.rr[k], 0, sizeof(RouteResult));
     a->sel_alt = k;
     a->have_rr = 1;
+    a->mode = 1;                         /* 有了路线 ⇒ 导航模式（顶栏页签 + 导航 chrome 显示） */
     maneuver_build(&a->rr, &a->ms, &a->man);
     nav_announce_reset(a);
     if (a->sim_on) {                                  /* 模拟中切换：路线从头走 */
@@ -911,6 +915,7 @@ int app_nav_plan_sync(App *a, double alat, double alon, double blat, double blon
     a->rr = a->ralts.rr[0];
     memset(&a->ralts.rr[0], 0, sizeof(RouteResult));
     a->have_rr = 1;
+    a->mode = 1;                         /* 有了路线 ⇒ 导航模式（顶栏页签 + 导航 chrome 显示） */
     maneuver_build(&a->rr, &a->ms, &a->man);
     nav_announce_reset(a);
     a->nav_msg[0] = '\0';
@@ -1392,4 +1397,44 @@ int app_gpx_del_track(App *a, int idx)
     gpx_store_del_track(&a->gpx, idx);
     a->need_redraw = 1;
     return 0;
+}
+
+/* 扫描目录下的 *.gpx 逐个导入（C 前端没有文件对话框的妥协方案：把文件丢进
+ * <config>/gpx/ 再一键导入）。目录不存在 ⇒ 返回 0（不是错误，只是没有可导入的）。
+ * 进度/结果打到 stderr（C 前端从终端启动，stderr 可见）。 */
+int app_gpx_import_dir(App *a, const char *dir)
+{
+    if (!a || !dir || !*dir) return -1;
+    DIR *d = opendir(dir);
+    if (!d) return 0;                      /* 目录不存在 = 0 条，不是失败 */
+    int added = 0;
+    char path[2048];
+    struct dirent *e;
+    while ((e = readdir(d)) != NULL) {
+        const char *nm = e->d_name;
+        size_t L = strlen(nm);
+        if (L < 4u || strcmp(nm + L - 4, ".gpx") != 0) continue;
+        if (nm_path_join(path, sizeof(path), dir, nm) != 0) continue;
+        int rc = app_gpx_import(a, path);
+        if (rc > 0) added += rc;
+        else if (rc < 0) fprintf(stderr, "[gpx] 导入失败: %s\n", path);
+    }
+    closedir(d);
+    if (added > 0) fprintf(stderr, "[gpx] 从 %s 导入了 %d 条轨迹\n", dir, added);
+    else            fprintf(stderr, "[gpx] %s 下没有可导入的 .gpx 文件\n", dir);
+    a->need_redraw = 1;
+    return added;
+}
+
+/* 导出全部（轨迹 + 收藏）到 <config>/export.gpx。 */
+int app_gpx_export_default(App *a)
+{
+    if (!a) return -1;
+    const char *cfg = nm_config_dir();
+    char path[2048];
+    if (!cfg || nm_path_join(path, sizeof(path), cfg, "export.gpx") != 0) return -1;
+    int rc = app_gpx_export(a, path);
+    if (rc == 0) fprintf(stderr, "[gpx] 已导出到 %s\n", path);
+    else         fprintf(stderr, "[gpx] 导出失败\n");
+    return rc;
 }

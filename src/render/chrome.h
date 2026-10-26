@@ -39,7 +39,8 @@ typedef enum {
     CH_COMPASS,
     CH_ALT_BASE,            /* 多方案对比面板：第 k 个方案 = CH_ALT_BASE + k（k<ROUTE_ALT_K） */
     CH_MENU_ITEM,           /* 具体项下标在 a->chrome_menu_item */
-    CH_SETTINGS             /* 设置面板内命中（行/按钮在 a->settings_row/btn） */
+    CH_SETTINGS,            /* 设置面板内命中（行/按钮在 a->settings_row/btn） */
+    CH_TF                   /* 轨迹/收藏管理面板内命中（在 a->tf_row/tf_btn） */
 } ChromeID;
 
 /* 画全部 chrome（在地图画完之后调用） */

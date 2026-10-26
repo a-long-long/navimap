@@ -23,6 +23,7 @@ static void draw_settings_panel(Raster *rs, App *a);
 #define COL_W    42      /* 右栏按钮宽度 */
 #define BTN      40      /* 右栏/按钮边长 */
 #define GAP      8
+#define TF_MAXV  8       /* 轨迹/收藏面板每节最多可见行数（超出显示"…还有 N 条"） */
 
 typedef struct {
     int w, h;
@@ -174,6 +175,9 @@ static const char *MENU_ITEMS[] = {
     "缩放到路线",
     "跟随车头",
     "设置",
+    "导入 GPX",
+    "导出 GPX",
+    "轨迹 / 收藏",
     "退出",
 };
 int chrome_menu_count(void) { return (int)(sizeof(MENU_ITEMS)/sizeof(MENU_ITEMS[0])); }
@@ -220,8 +224,10 @@ static void draw_topbar(Raster *rs, App *a, const CLay *L)
                       "搜索地点、道路…", 150, 156, 168, 0);
     }
 
-    /* 模式页签 */
-    int navOn = a->have_rr;
+    /* 模式页签：高亮由 a->mode 决定（已接通：有路线时置 1、清路线时置 0，
+     * 用户也可手动切）。之前这里看 have_rr，导致页签高亮与 mode 脱节、且 mode
+     * 写了没人读 ⇒ 是个假开关。 */
+    int navOn = (a->mode == 1 && a->have_rr);
     RectI tabs[2] = { L->tbrowse, L->tnav };
     const char *lab[2] = { "浏览", "导航" };
     int on[2] = { !navOn, navOn };
@@ -263,7 +269,7 @@ static void draw_rcol(Raster *rs, App *a, const CLay *L)
 static void draw_navtop(Raster *rs, App *a, const CLay *L)
 {
     ovl_begin(a, OVL_NAVTOP);
-    if (!a->have_rr) return;
+    if (!a->have_rr || a->mode == 0) return;
     rfill(rs, L->navtop.x, L->navtop.y, L->navtop.w, L->navtop.h, 30, 90, 200, 255);
     rfill(rs, L->nback.x, L->nback.y, L->nback.w, L->nback.h, 255, 255, 255, 255);
     rline(rs, L->nback.x + 16, L->nback.y + 4, L->nback.x + 6, L->nback.y + 12, 30, 90, 200);
@@ -285,7 +291,7 @@ static void draw_navbottom(Raster *rs, App *a, const CLay *L)
     ovl_begin(a, OVL_NAVBOTTOM);
     (void)L;
     /* 偏航重算中 → 顶部弹出"重新规划中…" */
-    if (!(a->sim_on && a->sim_paused && a->nav_busy && a->have_rr)) return;
+    if (!(a->sim_on && a->sim_paused && a->nav_busy && a->have_rr) || a->mode == 0) return;
     if (!a->font) return;
     int bw = 200, bh = 30, bx = (L->w - bw)/2, by = TH_TITLE + TH_TOP + 6;
     rfill(rs, bx, by, bw, bh, 232, 150, 40, 240);
@@ -295,7 +301,7 @@ static void draw_navbottom(Raster *rs, App *a, const CLay *L)
 static void draw_steps(Raster *rs, App *a, const CLay *L)
 {
     ovl_begin(a, OVL_STEPS);
-    if (!a->have_rr || a->man.n == 0) return;
+    if (!a->have_rr || a->mode == 0 || a->man.n == 0) return;
     int x = L->steps.x, y = L->steps.y, w = L->steps.w, h = L->steps.h;
     rfill(rs, x, y, w, h, 250, 251, 253, 246);
     rstroke(rs, x, y, w, h, 150, 158, 172, 255);
@@ -319,7 +325,7 @@ static void draw_steps(Raster *rs, App *a, const CLay *L)
 static void draw_alts(Raster *rs, App *a, const CLay *L)
 {
     ovl_begin(a, OVL_ALTS);
-    if (!a->have_alts || L->alts.w == 0) return;
+    if (!a->have_alts || !a->have_rr || a->mode == 0 || L->alts.w == 0) return;
     int nfeas = 0;
     for (int k = 0; k < a->ralts.n; k++)
         if (a->ralts.err[k] == 0) nfeas++;
@@ -439,6 +445,150 @@ static void draw_compass(Raster *rs, App *a, const CLay *L)
     if (a->font) rtext(a->font, rs, nx - 4, ny - 12, "N", 210, 60, 50, 0);
 }
 
+/* ===================== 轨迹 / 收藏管理面板（OVL_TRACK） =====================
+ * C 自绘前端之前只有 Qt 有这个面板，导致"能加（Ctrl+d）不能管"。这里补一个
+ * 列表面板：收藏、轨迹两节，每行一个 × 删除，每节一个「清空」。布局由 tf_layout
+ * 统一算（绘制与命中测试共用，避免两边不一致）。命中结果存 a->tf_row / a->tf_btn，
+ * 由 chrome_act 的 CH_TF 分支消费。 */
+
+/* 算出面板与各控件矩形（绘制、命中测试共用）。favRows/trkRows 各 TF_MAXV 个。 */
+static void tf_layout(const App *a, RectI *panel, int *favVis, int *trkVis,
+                      RectI favRows[TF_MAXV], RectI trkRows[TF_MAXV],
+                      RectI *favClear, RectI *trkClear, RectI *closeBtn)
+{
+    int w = a->view.w, h = a->view.h;
+    const int W = 360;
+    int nw = a->gpx.n_wpt, nt = a->gpx.n_trk;
+    int fv = nw > TF_MAXV ? TF_MAXV : nw;
+    int tv = nt > TF_MAXV ? TF_MAXV : nt;
+    /* 固定开销：标题40 + 收藏头30 + 间距8 + 轨迹头30 + 底12 = 120；每行 26。 */
+    int avail = (h - 20) - 120;
+    if (avail < 26 * 2) avail = 26 * 2;
+    int maxRows = avail / 26;
+    while (fv + tv > maxRows && (fv > 0 || tv > 0)) {
+        if (fv > tv) fv--; else if (tv > 0) tv--; else break;
+    }
+    int H = 120 + (fv + tv) * 26;
+    if (H > h - 20) H = h - 20;
+    panel->x = (w - W) / 2; panel->y = (h - H) / 2; panel->w = W; panel->h = H;
+    int x = panel->x, y = panel->y;
+    closeBtn->x = x + W - 30; closeBtn->y = y + 8; closeBtn->w = 22; closeBtn->h = 22;
+    int fy = y + 40;
+    favClear->x = x + W - 92; favClear->y = fy; favClear->w = 72; favClear->h = 22;
+    int ry = fy + 28;
+    for (int i = 0; i < fv; i++) {
+        favRows[i].x = x + 12; favRows[i].y = ry; favRows[i].w = W - 24; favRows[i].h = 24;
+        ry += 26;
+    }
+    int ty = fy + 28 + fv * 26 + 8;
+    trkClear->x = x + W - 92; trkClear->y = ty; trkClear->w = 72; trkClear->h = 22;
+    ry = ty + 28;
+    for (int i = 0; i < tv; i++) {
+        trkRows[i].x = x + 12; trkRows[i].y = ry; trkRows[i].w = W - 24; trkRows[i].h = 24;
+        ry += 26;
+    }
+    *favVis = fv; *trkVis = tv;
+}
+
+static void draw_tf_panel(Raster *rs, App *a)
+{
+    if (!a->tf_open) return;
+    ovl_begin(a, OVL_TRACK);
+    RectI panel, favRows[TF_MAXV], trkRows[TF_MAXV], favClear, trkClear, closeBtn;
+    int fv, tv;
+    tf_layout(a, &panel, &fv, &tv, favRows, trkRows, &favClear, &trkClear, &closeBtn);
+    rfill(rs, panel.x, panel.y, panel.w, panel.h, 250, 251, 253, 252);
+    rstroke(rs, panel.x, panel.y, panel.w, panel.h, 120, 128, 144, 255);
+    if (!a->font) return;
+    rtext(a->font, rs, panel.x + 14, panel.y + 12, "轨迹 / 收藏", 30, 36, 48, 0);
+    /* 关闭 × */
+    rline(rs, closeBtn.x + 5, closeBtn.y + 5, closeBtn.x + 17, closeBtn.y + 17, 120, 60, 50);
+    rline(rs, closeBtn.x + 17, closeBtn.y + 5, closeBtn.x + 5, closeBtn.y + 17, 120, 60, 50);
+
+    char buf[64];
+    /* 收藏节 */
+    int fy = panel.y + 40;
+    rtext(a->font, rs, panel.x + 14, fy + 4, "收藏", 40, 46, 60, 0);
+    snprintf(buf, sizeof(buf), "(%d)", a->gpx.n_wpt);
+    rtext(a->font, rs, panel.x + 50, fy + 4, buf, 90, 96, 110, 0);
+    rfill(rs, favClear.x, favClear.y, favClear.w, favClear.h, 220, 90, 80, 255);
+    rtext(a->font, rs, favClear.x + 22, favClear.y + 4, "清空", 255, 255, 255, 0);
+    int ry = fy + 28;
+    for (int i = 0; i < fv; i++) {
+        RectI r = favRows[i];
+        if (i & 1) rfill(rs, r.x, r.y, r.w, r.h, 238, 242, 248, 255);
+        char nm[40]; snprintf(nm, sizeof(nm), "%.36s", a->gpx.wpt[i].name);
+        rtext(a->font, rs, r.x + 6, r.y + 5, nm, 36, 42, 56, 0);
+        RectI xb = { r.x + r.w - 24, r.y + 2, 20, 20 };
+        rfill(rs, xb.x, xb.y, xb.w, xb.h, 200, 80, 70, 255);
+        rline(rs, xb.x + 5, xb.y + 5, xb.x + 15, xb.y + 15, 255, 255, 255);
+        rline(rs, xb.x + 15, xb.y + 5, xb.x + 5, xb.y + 15, 255, 255, 255);
+    }
+    if (a->gpx.n_wpt == 0) rtext(a->font, rs, panel.x + 14, fy + 30, "（空）", 150, 156, 168, 0);
+    else if (a->gpx.n_wpt > fv) {
+        snprintf(buf, sizeof(buf), "…还有 %d 条", a->gpx.n_wpt - fv);
+        rtext(a->font, rs, panel.x + 14, ry, buf, 150, 156, 168, 0);
+    }
+    /* 轨迹节 */
+    int ty = fy + 28 + fv * 26 + 8;
+    rtext(a->font, rs, panel.x + 14, ty + 4, "轨迹", 40, 46, 60, 0);
+    snprintf(buf, sizeof(buf), "(%d)", a->gpx.n_trk);
+    rtext(a->font, rs, panel.x + 50, ty + 4, buf, 90, 96, 110, 0);
+    rfill(rs, trkClear.x, trkClear.y, trkClear.w, trkClear.h, 220, 90, 80, 255);
+    rtext(a->font, rs, trkClear.x + 22, trkClear.y + 4, "清空", 255, 255, 255, 0);
+    ry = ty + 28;
+    for (int i = 0; i < tv; i++) {
+        RectI r = trkRows[i];
+        if (i & 1) rfill(rs, r.x, r.y, r.w, r.h, 238, 242, 248, 255);
+        char nm[40]; snprintf(nm, sizeof(nm), "%.30s  %u点", a->gpx.trk[i].name, a->gpx.trk[i].n);
+        rtext(a->font, rs, r.x + 6, r.y + 5, nm, 36, 42, 56, 0);
+        RectI xb = { r.x + r.w - 24, r.y + 2, 20, 20 };
+        rfill(rs, xb.x, xb.y, xb.w, xb.h, 200, 80, 70, 255);
+        rline(rs, xb.x + 5, xb.y + 5, xb.x + 15, xb.y + 15, 255, 255, 255);
+        rline(rs, xb.x + 15, xb.y + 5, xb.x + 5, xb.y + 15, 255, 255, 255);
+    }
+    if (a->gpx.n_trk == 0) rtext(a->font, rs, panel.x + 14, ty + 30, "（空）", 150, 156, 168, 0);
+    else if (a->gpx.n_trk > tv) {
+        snprintf(buf, sizeof(buf), "…还有 %d 条", a->gpx.n_trk - tv);
+        rtext(a->font, rs, panel.x + 14, ry, buf, 150, 156, 168, 0);
+    }
+}
+
+static int tf_hit(App *a, int x, int y)
+{
+    if (!a->tf_open) return CH_NONE;
+    RectI panel, favRows[TF_MAXV], trkRows[TF_MAXV], favClear, trkClear, closeBtn;
+    int fv, tv;
+    tf_layout(a, &panel, &fv, &tv, favRows, trkRows, &favClear, &trkClear, &closeBtn);
+    if (!IN(panel, x, y))      { a->tf_row = -1; a->tf_btn = 4; return CH_TF; }
+    if (IN(closeBtn, x, y))    { a->tf_row = -1; a->tf_btn = 4; return CH_TF; }
+    if (IN(favClear, x, y))    { a->tf_row = -1; a->tf_btn = 2; return CH_TF; }
+    if (IN(trkClear, x, y))    { a->tf_row = -1; a->tf_btn = 3; return CH_TF; }
+    for (int i = 0; i < fv; i++) {
+        RectI xb = { favRows[i].x + favRows[i].w - 24, favRows[i].y + 2, 20, 20 };
+        if (IN(xb, x, y)) { a->tf_row = i; a->tf_btn = 0; return CH_TF; }
+    }
+    for (int i = 0; i < tv; i++) {
+        RectI xb = { trkRows[i].x + trkRows[i].w - 24, trkRows[i].y + 2, 20, 20 };
+        if (IN(xb, x, y)) { a->tf_row = i; a->tf_btn = 1; return CH_TF; }
+    }
+    a->tf_row = -1; a->tf_btn = -1; return CH_TF;   /* 面板内空白：吞掉，保持打开 */
+}
+
+static void tf_act(App *a)
+{
+    switch (a->tf_btn) {
+    case 4: a->tf_open = 0; break;                                  /* 关闭 */
+    case 0: if (a->tf_row >= 0) app_fav_del(a, a->tf_row); break;    /* 删收藏 */
+    case 1: if (a->tf_row >= 0) app_gpx_del_track(a, a->tf_row); break; /* 删轨迹 */
+    case 2: for (int i = a->gpx.n_wpt - 1; i >= 0; i--) app_fav_del(a, i); break; /* 清空收藏 */
+    case 3: for (int i = a->gpx.n_trk - 1; i >= 0; i--) app_gpx_del_track(a, i); break; /* 清空轨迹 */
+    default: break;                                                  /* 面板内空白 */
+    }
+    a->tf_row = -1; a->tf_btn = -1;
+    a->need_redraw = 1;
+}
+
 void paint_chrome(Raster *rs, App *a)
 {
     if (!rs) return;
@@ -453,6 +603,7 @@ void paint_chrome(Raster *rs, App *a)
     draw_alts(rs, a, &L);
     draw_menu(rs, a, &L);
     draw_settings_panel(rs, a);
+    draw_tf_panel(rs, a);
     draw_nomap(rs, a, &L);
     draw_scale(rs, a, &L);
     draw_compass(rs, a, &L);
@@ -466,6 +617,8 @@ int chrome_hit(App *a, int x, int y)
 
     /* 设置面板优先：打开时所有点击归面板处理，吞掉地图平移 */
     if (a->settings_open) return settings_hit(a, x, y);
+    /* 轨迹/收藏面板优先于地图平移（与设置面板同范式） */
+    if (a->tf_open) return tf_hit(a, x, y);
 
     if (IN(L.wclose, x, y)) return CH_WIN_CLOSE;
     if (IN(L.wmax,   x, y)) return CH_WIN_MAX;
@@ -574,13 +727,27 @@ void chrome_act(App *a, int id, int x, int y)
         case 3: app_nav_fit(a); break;
         case 4: app_nav_sim_follow(a); break;
         case 5: a->settings_open = 1; break;
-        case 6: a->quit = 1; break;
+        case 6: {   /* 导入 GPX：扫描 <config>/gpx/ 下的 *.gpx（C 端无文件对话框） */
+            const char *cfg = nm_config_dir();
+            char d[2048];
+            if (cfg && nm_path_join(d, sizeof(d), cfg, "gpx") == 0) {
+                nm_mkdir_p(d);
+                app_gpx_import_dir(a, d);
+            }
+            break;
+        }
+        case 7: app_gpx_export_default(a); break;   /* 导出到 <config>/export.gpx */
+        case 8: a->tf_open = 1; a->need_redraw = 1; break;  /* 轨迹/收藏管理面板 */
+        case 9: a->quit = 1; break;
         }
         a->menu_open = 0;
         a->need_redraw = 1;
         break;
     case CH_SETTINGS:
         chrome_act_settings(a);
+        break;
+    case CH_TF:
+        tf_act(a);
         break;
     }
 }

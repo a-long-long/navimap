@@ -165,6 +165,14 @@ typedef struct {
     int           ovl_btn;         /* 子面板命中按钮：0=− 1=+ 2=行体（本前端不画的浮层=无效） */
     Settings     *cfg;             /* 配置文件（NULL=未启用） */
 
+    /* ---- 轨迹 / 收藏管理面板（C 自绘前端；OVL_TRACK 前端已含 OVL_FE_C）----
+     * 之前只有 Qt 前端有这个面板 ⇒ C 前端"只能加（Ctrl+d）不能管"。现在 C 端
+     * 也画一个列表面板：每行一个 × 删除，每节一个「清空」。命中结果存这两字段，
+     * 由 chrome.c 写入、chrome_act 消费（与 settings_row/btn 同一套范式）。 */
+    int           tf_open;         /* 面板是否展开 */
+    int           tf_row;          /* 命中的列表项下标（>=0）；-1 = 面板外/关闭/清空类动作 */
+    int           tf_btn;          /* 动作：0=删收藏tf_row 1=删轨迹tf_row 2=清空收藏 3=清空轨迹 4=关闭 -1=面板内空白 */
+
     /* ---- 浮层透明度（每个浮层一份，百分比 0~100，默认 75）----
      * 全部由 ui/overlay.c 的表驱动读写；绘制侧（render/chrome.c、navdraw.c）与
      * Qt 前端都从这儿取。百分比 → 0~255 用 app_ovl_a()（×255/100，100% 恒为 255）。 */
@@ -279,5 +287,11 @@ int  app_gpx_export(App *a, const char *path);   /* 全部（轨迹+收藏）导
 int  app_fav_add(App *a, double lat, double lon);/* 收藏一个点（名字自动按序号起）；0 成功 */
 int  app_fav_del(App *a, int idx);               /* 删第 idx 个收藏；0 成功 */
 int  app_gpx_del_track(App *a, int idx);         /* 删第 idx 条轨迹；0 成功 */
+
+/* C 自绘前端的 GPX 入口（Qt 前端用文件对话框，C 端没有 ⇒ 走"配置目录"约定）：
+ * 把 .gpx 放进 <config>/gpx/ 后选菜单一键导入；导出写到 <config>/export.gpx。
+ * 进度/结果打到 stderr（C 前端从终端启动，stderr 可见）；同时标红重绘。 */
+int  app_gpx_import_dir(App *a, const char *dir);   /* 扫描 dir 下 *.gpx 逐个导入；返回新增轨迹条数 */
+int  app_gpx_export_default(App *a);                /* 导出到 <config>/export.gpx；0 成功 */
 
 #endif

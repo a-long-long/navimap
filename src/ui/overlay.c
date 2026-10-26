@@ -29,7 +29,7 @@ static const OvlMeta OVL_TAB[OVL_COUNT] = {
     { "alpha_scale",     "比例尺",       OVL_FE_C           },
     { "alpha_compass",   "指北针",       OVL_FE_C           },
     { "alpha_search",    "搜索浮层",     OVL_FE_C | OVL_FE_QT },
-    { "alpha_track",     "轨迹/收藏面板", OVL_FE_QT          },
+    { "alpha_track",     "轨迹/收藏面板", OVL_FE_C | OVL_FE_QT },
 };
 
 const char *ovl_key(NmOverlay id)

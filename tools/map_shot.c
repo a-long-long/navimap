@@ -238,6 +238,7 @@ int main(int argc, char **argv)
     int dmap_demo_pct = 0;
     const char *gpx_in[8] = {0};    /* --gpx=<文件>：导入轨迹/收藏后渲染（可多次） */
     int settings_ovl = 0;            /* --settings-ovl：出图前打开浮层透明度子面板 */
+    int open_tf = 0;                 /* --panel=tf：出图前打开轨迹/收藏管理面板（QA 验收用） */
     struct { NmOverlay id; int pct; } ovl_set[OVL_COUNT] = {{OVL_TITLE,0}};
     int n_ovl = 0;                   /* --ovl-alpha=<key>=<pct>：逐浮层透明度 */
     int n_gpx_in = 0;
@@ -318,6 +319,11 @@ int main(int argc, char **argv)
              * 可视证据（面板本身也按 OVL_SETTINGS 的透明度画）。 */
             settings_ovl = 1;
         }
+        else if (strcmp(argv[i], "--panel=tf") == 0) {
+            /* 把「轨迹/收藏」管理面板打开再出图：给"管理面板补回来了"留个
+             * 可视证据（配合 --gpx 可看到面板里真的列出轨迹/收藏）。 */
+            open_tf = 1;
+        }
         else if (strncmp(argv[i], "--ovl-alpha=", 12) == 0) {
             if (n_ovl >= (int)(sizeof(ovl_set) / sizeof(ovl_set[0]))) {
                 fprintf(stderr, "提示: --ovl-alpha 最多 %d 个\n",
@@ -361,6 +367,7 @@ int main(int argc, char **argv)
     a.view.w = w; a.view.h = h;
     a.max_class = max_class;
     if (settings_ovl) { a.settings_open = 1; a.settings_ovl = 1; }
+    if (open_tf) { a.tf_open = 1; }
     /* --ovl-alpha：默认 75% 已在 app_init 里读好，这里再覆盖 */
     for (int i = 0; i < n_ovl; i++)
         app_ovl_alpha_set(&a, ovl_set[i].id, ovl_set[i].pct);
