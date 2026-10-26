@@ -370,7 +370,7 @@ void MapCanvas::drawCompass(QPainter &p)
 void MapCanvas::mousePressEvent(QMouseEvent *e)
 {
     if (e->button() == Qt::RightButton) {
-        app_nav_clear(m_a);                  /* 右键：清起终点/路线（与 SDL 版一致） */
+        app_nav_clear(m_a);                  /* 右键：清起终点/路线 */
         m_a->need_redraw = 1;
         return;
     }
@@ -436,7 +436,7 @@ void MapCanvas::mouseReleaseEvent(QMouseEvent *e)
     m_panning = m_rotating = false;
     if (was_rotating) return;
     if (!was_panning) return;
-    /* 拖动与点击的判别：位移 ≤4px 算点击（与 SDL 版同口径） */
+    /* 拖动与点击的判别：位移 ≤4px 算点击 */
 #if QT_VERSION >= QT_VERSION_CHECK(6, 0, 0)
     const QPointF ep = e->position();
 #else

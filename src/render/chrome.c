@@ -663,7 +663,8 @@ int chrome_hit(App *a, int x, int y)
 /* ===================== 动作派发 ===================== */
 
 /* 注：CH_WIN_MIN / CH_WIN_MAX 依赖 SDL 窗口句柄（a->win 已随核心去 SDL 化移除），
- * 改由 window_sdl.c 的事件循环直接处理，这里不再管。 */
+ * SDL GUI 壳也已于 #88 一并删除 ⇒ 这两个命中类型在 C 核心侧**没有动作**，
+ * 不再由任何事件循环处理（Qt 前端有自己的窗口按钮）。 */
 void chrome_act(App *a, int id, int x, int y)
 {
     (void)x; (void)y;

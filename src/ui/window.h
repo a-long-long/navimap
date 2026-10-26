@@ -55,14 +55,13 @@ typedef struct {
     uint64_t   elapsed_ms;
 } SearchUI;
 
-/* 窗口 + 主循环。
- * Wayland 注意：只用 SDL2 抽象，不碰 X11/GTK 的 API；窗口真实尺寸要
- * PumpEvents 之后才拿得到（本机实测会被窗口管理器夹小），所以按"上限分配、
- * 运行期以实际为准"处理，不假设创建时请求的尺寸就是最终尺寸。
+/* 应用状态（窗口/画布/主循环全归前端自持）。
+ * ★ C 核心**零 SDL、零窗口系统依赖**：本结构只放跨前端共享的地图/搜索/设置
+ *   状态。窗口尺寸与事件循环由 navmap_qt 自己管（Qt 抽象，不碰 X11/GTK）。
  */
 typedef struct {
-    /* SDL 相关的窗口/画布/纹理由 window_sdl.c 持有（navimap_qt 不链 SDL，
-       它用自己的画布缓冲，二者都通过 app_render_to_buf 调同一套绘制）。 */
+    /* 画布与纹理归前端自持：Qt 前端用自己的 malloc 缓冲（C 核心零 SDL），
+       二者都通过 app_render_to_buf 调同一套绘制。 */
     MapView       view;
     MapSet        ms;                     /* 图集：单省或多省（阶段 4） */
     uint64_t      total_nodes, total_edges;
@@ -216,9 +215,9 @@ static inline uint8_t app_ovl_a(const App *a, NmOverlay id)
  * 出现"视口有图、车头无图"这种混合情况时就会一边弹提示一边判失败。 */
 void app_focus_point(const App *a, double *lat, double *lon);
 
-/* 主循环。★ 实现在 window_sdl.c（**不在** navimap_core 里）：SDL 窗口版专用，
-   链 SDL 的目标（navmap / map_shot）才编入。Qt 前端有自己的主循环，不调它。 */
-void app_run(App *a);
+/* 收尾（释放资源 + 落盘设置）。Qt 前端在退出前调它（qt_main.cpp）。
+   注：原 SDL 窗口版的主循环 app_run 随 window_sdl.c 于 #88 一并移除，
+   交互主循环现在只在 navmap_qt 里；C 核心这边不再有任何主循环。 */
 void app_shutdown(App *a);
 
 /* 设置持久化：app_apply_settings 把配置(cfg)→App 字段；app_persist_settings
@@ -236,8 +235,8 @@ void update_status(App *a, double frame_ms);
  * 重建 Font —— 旧字形纹理全部作废，这里一并释放。字体被关闭时返回 0。 */
 int  app_set_font_size(App *a, int size);
 
-/* 无窗口渲染：把一帧画进调用方持有的像素缓冲（供 map_shot 无人值守验证、
-   Qt 前端自持画布都走这条；SDL 窗口版在 window_sdl.c 内部也用它）。
+/* 无窗口渲染：把一帧画进调用方持有的像素缓冲（供离屏审计 offscreen_shot、
+   Qt 前端自持画布都走这条；C 核心自己不做窗口/主循环）。
    px 为 w×h 的 32bpp 缓冲，stride 以"像素"计；rmask/gmask/bmask/amask 描述
    打包格式（例如 QImage::Format_RGB32 在 x86 小端为 0x00FF0000/0x0000FF00/
    0x000000FF/0xFF000000）。 */
@@ -271,10 +270,10 @@ void app_search_editing(App *a, const char *utf8); /* IME 组合串（只显示�
 void app_search_backspace(App *a);
 void app_search_move(App *a, int dir);        /* ↑↓ 选择 */
 void app_search_commit(App *a);               /* Enter：定位 + 设为起/终点 */
-/* 同步搜一次（map_shot --q / main --q 用，没有窗口也行）。返回命中条数。 */
+/* 同步搜一次（--q 用，没有窗口也行）。返回命中条数。 */
 int  app_search_query(App *a, const char *q);
 
-/* 同步算一次路线（供 map_shot 无人值守验证：没有窗口、没有主循环）。
+/* 同步算一次路线（供离屏审计无人值守验证：没有窗口、没有主循环）。
    返回 0 成功。 */
 int  app_nav_plan_sync(App *a, double alat, double alon,
                        double blat, double blon);

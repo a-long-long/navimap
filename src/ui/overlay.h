@@ -19,9 +19,9 @@ extern "C" {
  *      而是由本模块显式读写；settings_reset_all 清空条目即回到默认 75%。
  *   2. 值统一存**百分比 0~100**（用户看得懂、面板上是整数），绘制时才转 0~255。
  *      转 255 用 ×255/100 而不是 ×2.55 的浮点截断，保证 100% 恒等于 255（不透明）。
- *   3. ovl_frontends() 说明该浮层在哪个前端存在。SDL/map_shot 是自绘（C 侧），
- *      Qt 前端由真控件承担 ⇒ 同一个设置项在没画它的前端上不生效，UI 里要标出来
- *      而不是假装能调（否则用户调了半天没反应）。
+ *   3. ovl_frontends() 说明该浮层在哪个前端存在。C 核心自绘的是 chrome.c/navdraw.c
+ *      那一套（离屏审计通道走它）；Qt 前端由真控件承担 ⇒ 同一个设置项在没画它的
+ *      前端上不生效，UI 里要标出来而不是假装能调（否则用户调了半天没反应）。
  * ------------------------------------------------------------------------- */
 
 typedef enum {
@@ -50,7 +50,7 @@ typedef enum {
 #define OVL_ALPHA_STEP    5      /* 面板上每次 ±5% */
 
 /* 该浮层在哪个前端真的被画出来（位掩码）。 */
-#define OVL_FE_C  1u             /* C 自绘：SDL navmap / map_shot */
+#define OVL_FE_C  1u             /* C 核心自绘（chrome.c/navdraw.c） */
 #define OVL_FE_QT 2u             /* Qt 前端控件 */
 
 const char *ovl_key(NmOverlay id);        /* "alpha_title" …；越界返回 NULL */

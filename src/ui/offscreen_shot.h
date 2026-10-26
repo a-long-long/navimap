@@ -7,16 +7,14 @@ extern "C" {
 
 /* 离屏像素审计通道的**单一可信源**。
  *
- * 把 tools/map_shot.c 的"参数解析 + 算路/搜索/模拟/GPX 设置 + 渲到内存缓冲
- * + 共享审计(app_offscreen_audit) + 存 24 位 BMP"整条链路抽出来，让
- * map_shot 与 navmap_qt --shot-offscreen 共用同一份逻辑、输出逐字节一致，
- * 从而保住 74/4 回归基线零偏差。
+ * 把"参数解析 + 算路/搜索/模拟/GPX 设置 + 渲到内存缓冲 + 共享审计
+ * (app_offscreen_audit) + 存 24 位 BMP"整条链路收在一处，让
+ * navmap_qt --shot-offscreen 与 regress.sh 的离屏判据共用同一份逻辑。
  *
  * ★ 不依赖 SDL：纯内存缓冲（0x00RRGGBB）+ 内建 24 位 BMP 写出。
- *   —— navmap_qt 不链 SDL，必须零 SDL 依赖；map_shot 迁到这条路径后也顺带
- *      脱了 SDL（"彻底 Qt 化 / 零 SDL"目标的一步）。
+ *   —— navmap_qt 不链 SDL，这条路径必须零 SDL 依赖。
  *   —— ovl_px.py 只读 24 位 BMP，所以这里写 24 位（BGR、行 4 字节对齐、
- *      自下而上存储），与 map_shot 旧 SDL_SaveBMP 出的图判据口径一致。
+ *      自下而上存储）。
  *
  * 返回 app_offscreen_audit 的退出码：0=全部 ASSERT-OK，1=有 ASSERT-FAIL。 */
 int offscreen_shot_main(int argc, char **argv);

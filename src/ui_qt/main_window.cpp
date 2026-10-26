@@ -800,7 +800,7 @@ void MainWindow::buildRightCol()
         toggleTrackPanel();
     });
 
-    /* 菜单按钮：弹出与菜单栏同一份 QMenu（SDLV 版 TopBar 的 ☰ 按钮行为）。
+    /* 菜单按钮：弹出与菜单栏同一份 QMenu。
        Qt 5.11 的 popup 只有 (pos, at) 两参，用 sizeHint 把菜单定位到按钮左侧，
        避免从最底钮向下弹出超出屏幕。 */
     QToolButton *menu = bigbtn(Qt::IconKind::Menu, QStringLiteral("主菜单"));
@@ -950,7 +950,7 @@ void MainWindow::updateDatumTip()
  *     它只对顶层窗口有效，这几个浮层是画布的**子控件**，调了没效果也不报错。
  *   ★ 面板是按需创建的（toggleTrackPanel），所以那个浮层要等它建出来才有
  *     宿主 ⇒ applyOverlayAlpha 必须在面板创建后也调一次。
- * ★ 本前端没有的浮层（标题栏/顶栏/…是 SDL 自绘的）在这里不生效，值照样存。 */
+ * ★ 本前端没有的浮层（标题栏/顶栏/…是 C 核心自绘的）在这里不生效，值照样存。 */
 /* 轨迹/收藏面板的样式表：**底板按 pct 淡，文字/图标保持不透明**。
  * pct<=0 ⇒ 前景色 alpha 也归 0（整个面板不可见）。
  * 与 C 侧 chrome.c / navdraw.c 的规则一致（"只淡底板、文字保持清晰"）。 */
@@ -1026,7 +1026,7 @@ void MainWindow::applyOverlayAlpha()
 
 /* 「浮层透明度…」对话框：每个浮层一根滑杆（0~100%，步 5），拖动即时生效。
  * 本前端不画的浮层（ovl_frontends() 里没有 OVL_FE_QT）滑杆置灰并注明
- * 「SDL 前端」——值照样存（换前端就生效），但不标出来用户会以为坏了。 */
+ * 「C 核心」——值照样存（换前端就生效），但不标出来用户会以为坏了。 */
 void MainWindow::showOverlayAlphaDialog()
 {
     QDialog dlg(this);
@@ -1040,7 +1040,7 @@ void MainWindow::showOverlayAlphaDialog()
         QHBoxLayout *row = new QHBoxLayout();
         QString name = QString::fromUtf8(ovl_label(id));
         const bool inQt = (ovl_frontends(id) & OVL_FE_QT) != 0;
-        if (!inQt) name += QStringLiteral("（SDL 前端）");
+        if (!inQt) name += QStringLiteral("（C 核心）");
         QLabel *lab = new QLabel(name);
         lab->setFixedWidth(150);
         QSlider *sl = new QSlider(Qt::Horizontal);
@@ -1409,7 +1409,7 @@ void MainWindow::tick()
     refreshSteps();
 }
 
-/* ---------------- 键盘（与 SDL 版同口径） ---------------- */
+/* ---------------- 键盘 ---------------- */
 
 void MainWindow::handleKey(int key)
 {

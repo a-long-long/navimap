@@ -1,6 +1,6 @@
-/* navmap_qt —— navimap 的 Qt 前端入口。
+/* navmap_qt —— navimap 的 Qt 前端入口（★ 唯一的交互前端）。
  *
- * 用法与 SDL 版 navimap 完全一致：
+ * 用法：
  *   ./navmap_qt [--graph=products/graph/beijing] [--w=1280] [--h=800]
  *               [--font=<路径.ttf|none>] [--font-size=14]
  *               [--no-autobuild] [--sources=<目录>]
@@ -26,13 +26,13 @@ extern "C" {
 #include "map/mapset.h"     /* mapset_enable_pbf_display / mapset_totals */
 #include "utils/datum.h"     /* DatumId / DATUM_*：--datum 解析 */
 #include "ui/overlay.h"     /* NmOverlay / ovl_by_key：--ovl-alpha 解析 */
-#include "ui/offscreen_shot.h"  /* offscreen_shot_main：离屏像素审计（与 map_shot 同源） */
+#include "ui/offscreen_shot.h"  /* offscreen_shot_main：离屏像素审计通道 */
 }
 
 #include "main_window.h"
 #include "qt_font.h"
 
-/* 同 map_shot.c：把 "lat,lon" 解析成两个 double（离屏算路的起终点）。 */
+/* 同 offscreen_shot.c：把 "lat,lon" 解析成两个 double（离屏算路的起终点）。 */
 static int parse_ll(const char *s, double *lat, double *lon)
 {
     const char *sp = strchr(s, ',');
@@ -60,19 +60,19 @@ int main(int argc, char **argv)
     int ui_test = 0;                  /* --ui-test：跑无头 UI 自检后退出 */
     int shot_search = 0;              /* --shot-search：截图前先展开搜索框 */
     int shot_track = 0;               /* --shot-track：截图前先展开轨迹/收藏面板 */
-    int shot_offscreen = 0;           /* --shot-offscreen：离屏像素审计（与 map_shot
-                                         逐字节一致），在 C 核心缓冲上跑审计后退出 */
+    int shot_offscreen = 0;           /* --shot-offscreen：离屏像素审计，在 C 核心
+                                         缓冲上跑共享审计后退出 */
     const char *datum = NULL;         /* --datum=wgs84|cgcs2000|bj54|xa80：坐标系（命令行优先） */
     const char *datum_grid = NULL;    /* --datum-grid=<file>：图幅改正量格网（入口②） */
     const char *gpx_in[8] = {0};      /* --gpx=<file>：启动即导入（可多次，最多 8 个） */
     int n_gpx_in = 0;
     const char *gpx_out = NULL;       /* --export-gpx=<file>：退出时导出全部轨迹+收藏 */
-    /* --ovl-alpha=<key>=<pct>：逐浮层透明度（与 map_shot 同名同语义），
-     * 给无人值守截图做像素判据用。key 见 ui/overlay.h（alpha_search 等）。 */
+    /* --ovl-alpha=<key>=<pct>：逐浮层透明度，给无人值守截图做像素判据用。
+     * key 见 ui/overlay.h（alpha_search 等）。 */
     struct { NmOverlay id; int pct; } ovl_set[OVL_COUNT] = {{OVL_TITLE,0}};
     int n_ovl = 0;
 
-    /* 以下 flag 补齐自 map_shot，使 --shot 能复刻 regress.sh 的离屏判据场景 */
+    /* 以下 flag 供 --shot-offscreen（offscreen_shot_main）使用 */
     double lat = 0, lon = 0, zoom = 12.0;
     int have_center = 0;                 /* 1=给了 --lat/--lon，2=给了 --zoom，3=都给 */
     const char *from_s = NULL, *to_s = NULL;
@@ -160,8 +160,8 @@ int main(int argc, char **argv)
             }
         }
         /* 以下 flag 仅 --shot-offscreen（offscreen_shot_main）使用：这里忽略，
-           原样转发给 offscreen_shot_main 解析。这样 regress 把离屏审计从
-           map_shot 迁到 navmap_qt --shot-offscreen 时，参数完全兼容。 */
+           原样转发给 offscreen_shot_main 解析（regress 的离屏判据就靠这条
+           路径跑，参数与旧 map_shot 完全兼容）。 */
         else if (strncmp(argv[i], "--out=", 6) == 0) { /* 交给 offscreen_shot_main */ }
         else if (strncmp(argv[i], "--max-class=", 12) == 0) { /* 同上 */ }
         else if (strncmp(argv[i], "--resize-font=", 14) == 0) { /* 同上 */ }
@@ -174,7 +174,7 @@ int main(int argc, char **argv)
 
     /* ★ 离屏像素审计通道（#86）：--shot-offscreen 在**任何 Qt 初始化之前**就走
      *   共享的 offscreen_shot_main（纯 C、零 SDL、不需要显示环境），在 C 核心
-     *   地图缓冲上跑与 map_shot 逐字节一致的像素审计后退出。
+     *   地图缓冲上跑像素审计后退出。
      *   —— 与现有的 --shot（抓整个 Qt 窗口做视觉验收）走两条不同路径：
      *      · --shot-offscreen：C 核心缓冲审计（保 74/4 回归基线，regress 用）；
      *      · --shot         ：抓 Qt 前端自己的 chrome（验证 Qt 控件渲染）。
@@ -195,7 +195,8 @@ int main(int argc, char **argv)
 
     /* ★ Qt 前端**不初始化也不链接 SDL**：画布缓冲自己管（见 map_canvas.cpp），
      * 窗口/事件全是 Qt 的。
-     * 以前这里必须 SDL_Init(SDL_INIT_VIDEO|SDL_INIT_NOPARACHUTE) 并设
+     * ★★ 历史坑（SDL GUI 壳已于 #88 删除，但教训留着）：当年这里必须
+     * SDL_Init(SDL_INIT_VIDEO|SDL_INIT_NOPARACHUTE) 并设
      * SDL_HINT_NO_SIGNAL_HANDLERS——因为 SDL 默认会给 SIGINT/SIGTERM 装
      * "parachute"处理器，把退出请求塞进 SDL 事件队列等 SDL_PollEvent 消费，
      * 而 Qt 应用不轮询 SDL 事件，信号就被整个吞掉（实测 timeout 8 发 TERM
@@ -280,8 +281,8 @@ int main(int argc, char **argv)
     printf("字体: %s  %d pt\n",
            a.font_used[0] ? a.font_used : "(无)", a.font_size);
 
-    /* === 离屏截图对齐 map_shot：视图/算路/浮层（regress 像素判据用）===
-     * 与 map_shot.c 同语义；交互模式给这些 flag 也无副作用。 */
+    /* === 离屏截图的视图/算路/浮层设置（regress 像素判据用）===
+     * 与 offscreen_shot_main 同语义；交互模式给这些 flag 也无副作用。 */
     if (have_center & 1) a.view.lat = lat;
     if (have_center & 2) a.view.lon = lon;
     if (zoom > 0)        a.view.zoom = zoom;

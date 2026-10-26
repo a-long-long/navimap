@@ -7,7 +7,7 @@
  * 启动自愈：源 pbf 还在，产物却没了/坏了 —— 那就当场重建，别让人去记命令。
  *
  * 为什么需要它：src/ 里从来没有 system/popen/exec，程序是纯加载。实测把
- * products/graph/tianjin 删掉后，map_shot 只打印一句"既不是省目录也没有
+ * products/graph/tianjin 删掉后，离屏通道只打印一句"既不是省目录也没有
  * nodes.bin"就空跑，graph_check 直接 ASSERT-FAIL —— 没有任何自愈能力。
  * 而转换本身是确定性的（删掉重建后 nodes.bin 的 md5 与删前完全一致），
  * 所以"检测到缺失就重转"是安全的，不存在"重建出不一样的东西"的风险。

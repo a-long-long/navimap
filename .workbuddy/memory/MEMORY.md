@@ -10,7 +10,11 @@
   `places_auto.db` / `lm.bin` / objdump 路径）；编译零警告（-Werror）。改渲染补
   `python3 scripts/bmpdiff.py 旧 新`（要素色→背景色=丢要素）。
 - `navmap_qt --ui-test`（33 项）已进 regress.sh。完成即 commit + push origin main；
-  三前端（navmap / navmap_qt / map_shot）链接一致。Windows 构建用 `./scripts/build_win.sh`。
+  **前端只有 navmap_qt**（原 navimap/map_shot 已删，见「SDL / 渲染边界」）。
+  Windows 构建用 `./scripts/build_win.sh`。
+- ★★ **删掉"实现所在的文件"时，必须 grep 该文件提供的符号在别处的声明**
+  （本项目实例：删 `window_sdl.c` ⇒ `window.h` 的 `app_run` 成了悬空声明；
+  无人调用 ⇒ 链接不报错，但它是"声明了却永远不存在"的假 API）。
 
 ## 构建环境（Windows/MSYS2）
 
@@ -52,8 +56,14 @@
 
 ## SDL / 渲染边界
 
-- SDL 只许出现在 `navimap_sdl`(window_sdl.c) 与 `map_shot`；`navimap_core` 与 `navmap_qt`
-  **零 SDL**。渲染入口 `app_render_to_buf`，像素格式从 surface 读。
+- ★ **SDL GUI 壳已彻底移除**（2026-10-26 #88）：`navmap_sdl`/`window_sdl.c`/`navimap`/
+  `map_shot` 全部删除。交互前端唯一是 `navmap_qt`；离屏出图唯一是
+  `src/ui/offscreen_shot.c`（`offscreen_shot_main`，**零 SDL**：malloc 缓冲 + 内建
+  24 位 BMP writer）。SDL 现只出现在 `blend_equiv`/`clip_equiv`（去 SDL 化门禁对照体）。
+- ★★ **审计计数源走 C 核心地图缓冲**：`offscreen_shot_main` 设 `a.qt_ui=0` ⇒ C 核心把
+  chrome/横幅/搜索框全画进缓冲 ⇒ 与旧 map_shot 逐字节一致。**⇒ 不可删
+  `chrome.c`/`paint.c`/`navdraw.c`**（window.c:1258 调 `paint_chrome`），删了既编译不过
+  也破 74/4 像素基线。共享审计模块 = `src/render/audit.{c,h}`。
 - 自写光栅必须与 SDL 软渲染逐像素等价（实证 3 个真 bug：alpha 两次除法 /
   `raster_rect` 角点只画一次 / 裁剪逐字复刻 `SDL_rect_impl.h`）。门禁 `blend_equiv` / `clip_equiv`。
 - `--shot` 截图路径必须显式刷新状态栏（主循环不启动 ⇒ 状态栏空白），否则**截图在撒谎**。

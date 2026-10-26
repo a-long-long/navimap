@@ -92,7 +92,7 @@ int main(int argc, char **argv)
      *   但仍可能比"最快"那条长一点点（同走廊两条近似路径互相 0.3% 抖动）。
      *   所以判据用 5% 容差：能抓出"最短其实绕了远路"的真 bug，又不会因
      *   近似噪声误报（alts_selftest 实测 最短 9.9km < 最快 10.8km；
-     *   map_shot 天安门→鸟巢 最短 11.85 ≈ 最快 11.82，均通过）。 */
+     *   离屏通道 天安门→鸟巢 最短 11.85 ≈ 最快 11.82，均通过）。 */
     CHECK(alts.err[1] == 0, "最短(err[1]) 可行，实际 err=%d", alts.err[1]);
     if (alts.err[0] == 0 && alts.err[1] == 0) {
         CHECK(alts.total_m[1] <= alts.total_m[0] * 1.05 + 1.0,

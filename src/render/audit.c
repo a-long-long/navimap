@@ -1,13 +1,12 @@
 /* audit.c —— 离屏像素审计（共享模块）
  *
- * 把 tools/map_shot.c 的"像素计数 + 断言 + 日志打印"搬到对 RGB 字节序缓冲
- * （C 核心地图缓冲 / SDL surface / QImage::Format_RGB32 同源）的判定上，
- * 让 map_shot 与 navmap_qt --shot 共用同一份逻辑，保证两前端像素判据逐位一致。
+ * 把"像素计数 + 断言 + 日志打印"从离屏通道里抽出来，落到对 RGB 字节序缓冲
+ * （C 核心地图缓冲 / QImage::Format_RGB32 同源）的判定上，让
+ * navmap_qt --shot-offscreen 与 regress.sh 的离屏判据共用同一份逻辑。
  *
  * ★ 计数一律按**字节**比色：p[2]=R, p[1]=G, p[0]=B，alpha 字节忽略。
- *   这样无论缓冲来自 SDL surface（alpha 字节 = 0x00）还是 QImage::Format_RGB32
- *   （alpha 字节 = 0xFF），只要 R/G/B 三字节相同，计数就完全相同 —— 跨两种
- *   缓冲零偏差，也绕开 SDL_MapRGBA / 字节序带来的精确不相等。
+ *   这样无论缓冲的 alpha 字节是 0x00 还是 0xFF，只要 R/G/B 三字节相同，
+ *   计数就完全相同 —— 跨缓冲零偏差，也绕开精确配色相等的脆弱性。
  */
 #include <stdio.h>
 #include <stdlib.h>
@@ -76,11 +75,11 @@ static long count_overlay_px(const uint8_t *buf, int stride, int w, int h,
 }
 
 /* 在 C 核心地图缓冲上做全套像素计数 + 断言 + 日志打印。
- * 返回 0=全部 ASSERT-OK；1=有 ASSERT-FAIL。打印行与 map_shot.c 逐字一致。 */
+ * 返回 0=全部 ASSERT-OK；1=有 ASSERT-FAIL。 */
 int app_offscreen_audit(const App *a, const uint8_t *buf, int w, int h, int stride,
                         const PaintStats *st, const AuditCtx *c)
 {
-    /* GPX 可见性判定（与 map_shot 同口径，用 a->view 投影）。
+    /* GPX 可见性判定（用 a->view 投影）。
      * 软件渲染不混色，画上去就是原值 ⇒ 可以精确数像素。
      * ★ 判据与"有几条**看得见**的轨迹"挂钩，而不是"大于 0"：轨迹整段落在
      *   视口外时画面本来就该没有轨迹像素（合法情况，不能算失败）；

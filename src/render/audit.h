@@ -1,16 +1,16 @@
 /* audit.h —— 离屏像素审计（共享模块）
  *
- * 把原本只活在 tools/map_shot.c 里的"像素计数 + 断言 + 日志打印"抽出来，
- * 让 map_shot（SDL surface 像素）与 navmap_qt --shot（map_canvas 的 m_px）
- * 共用同一份逻辑，保证两前端像素判据逐位一致（保 74/4 回归基线不出偏差）。
+ * 把"像素计数 + 断言 + 日志打印"从离屏通道里抽出来，让
+ * navmap_qt --shot-offscreen（C 核心地图缓冲）与 regress.sh 的离屏判据
+ * 共用同一份逻辑，保证像素判据逐位一致（保 74/4 回归基线不出偏差）。
  *
  * ★ 计数一律按**字节**比色：C 核心缓冲是 RGB 字节序（p[2]=R, p[1]=G, p[0]=B，
- *   alpha 字节忽略）。map_shot 的 SDL 32 位 surface 与 map_canvas 的
+ *   alpha 字节忽略）。offscreen_shot 的 malloc 缓冲与 Qt 画布的
  *   QImage::Format_RGB32 都是这个布局，字节比对能跨两种缓冲一致，
- *   也绕开 SDL_MapRGBA / 字节序带来的精确不相等。
+ *   也绕开精确配色相等的脆弱性。
  *
  * 本头自带 ui/window.h（App / PaintStats 全量定义 + app_ovl_a / app_focus_point），
- * 并用 extern "C" 包住，使它能同时被 C（map_shot.c）与 C++（qt_main.cpp）包含。
+ * 并用 extern "C" 包住，使它能同时被 C 与 C++ 包含。
  */
 #ifndef NM_RENDER_AUDIT_H
 #define NM_RENDER_AUDIT_H
@@ -33,7 +33,7 @@ typedef struct {
 } AuditCtx;
 
 /* 在 C 核心地图缓冲 buf（RGB 字节序，stride 以字节计）上做全套像素计数 + 断言，
- * 打印与 map_shot.c 完全一致的日志行（route_pixels / gpx_trk_px / gpx_fav_px /
+ * 打印全部审计日志行（route_pixels / gpx_trk_px / gpx_fav_px /
  * coverage / nomap_banner_px / search_box_px / done_pixels / 各 ASSERT-FAIL / ASSERT-OK）。
  * 返回 0=全部 ASSERT-OK；1=有 ASSERT-FAIL。 */
 int app_offscreen_audit(const App *a, const uint8_t *buf, int w, int h, int stride,

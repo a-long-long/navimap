@@ -78,7 +78,7 @@ int app_init(App *a, const char *graph_dir, int w, int h,
     a->sim_speed_idx = SIM_SPEED_DEFAULT;
     a->sim_follow = 1;
     /* 互斥量用平台抽象层（不直接碰 pthread / CRITICAL_SECTION）。
-       app_init 早于 app_run，但 nm_mutex 不依赖任何窗口系统，这里直接建。 */
+       nm_mutex 不依赖任何窗口系统，这里直接建。 */
     a->nav_mu = nm_mutex_create();     /* 算路线程与主线程之间的那点状态 */
     if (!a->nav_mu) fprintf(stderr, "提示: 建不了互斥量，导航功能不可用\n");
 
@@ -634,8 +634,8 @@ void app_search_open(App *a)
     }
     a->su.active = 1;
     a->su.editing[0] = '\0';
-    /* 注：SDL 窗口版在 window_sdl.c 的事件处理里负责 SDL_StartTextInput，
-       本函数是平台无关的；Qt 前端由 QLineEdit 自带 IME，无需额外动作。 */
+    /* 注：文本输入由前端自持（Qt 端 QLineEdit 自带 IME，无需额外动作），
+       本函数是平台无关的。 */
     if (a->su.text[0]) app_search_query(a, a->su.text);
     a->need_redraw = 1;
 }
@@ -876,7 +876,7 @@ void app_nav_sim_tick(App *a)
     a->need_redraw = 1;
 }
 
-/* 同步算一次（无窗口、无主循环时用，见 map_shot --from/--to）。
+/* 同步算一次（无窗口、无主循环时用，见 navmap_qt --shot-offscreen --from/--to）。
    与后台线程走同一套吸附 + 结算逻辑，只是不另起线程。 */
 int app_nav_plan_sync(App *a, double alat, double alon, double blat, double blon)
 {
@@ -885,7 +885,7 @@ int app_nav_plan_sync(App *a, double alat, double alon, double blat, double blon
     NavResult res;
     memset(&res, 0, sizeof(res));
     /* 同上：走 router_route_alts，吸附撞上死节点会换候选重试（PLAN.md §51.1）。
-       同步路径也给多方案，便于 map_shot 一并验证。 */
+       同步路径也给多方案，便于离屏审计一并验证。 */
     int rc = router_route_alts(a->router, alat, alon, blat, blon,
                                &res.alts, &f, &t, &res.a_snap_m, &res.b_snap_m);
     if (rc == -1) {
@@ -1266,8 +1266,8 @@ int app_render_to_buf(App *a, void *px, int w, int h, size_t stride,
     a->view.w = w;
     a->view.h = h;
 
-    /* 绑定到调用方持有的 32bpp 像素缓冲：窗口版在 window_sdl.c 的离屏
-     * surface 上、Qt 前端在自己的 QImage 缓冲上、map_shot 在 SDL_Surface 上。
+    /* 绑定到调用方持有的 32bpp 像素缓冲：Qt 前端在自己的 QImage 缓冲上、
+     * 离屏审计在 src/ui/offscreen_shot.c 的 malloc 缓冲上。
      * 字形走 stb_truetype 的 CPU 缓存（见 font.c），与渲染目标生命周期无关，
      * 这里不再每帧 drop 纹理。 */
     Raster rs;
@@ -1277,7 +1277,8 @@ int app_render_to_buf(App *a, void *px, int w, int h, size_t stride,
     return 0;
 }
 
-/* SDL 离屏画布 + 主循环见 window_sdl.c（仅 navmap / map_shot 链 SDL）。 */
+/* 主循环与离屏画布：交互主循环在 navmap_qt（Qt 端），离屏出图在
+   src/ui/offscreen_shot.c。C 核心这边两者都不做。 */
 
 void update_status(App *a, double frame_ms)
 {

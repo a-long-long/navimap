@@ -1,19 +1,19 @@
-/* offscreen_shot —— 离屏像素审计通道（map_shot 与 navmap_qt --shot-offscreen 共用）
+/* offscreen_shot —— 离屏像素审计通道（navmap_qt --shot-offscreen 的实现）
  *
- * 存在理由同 map_shot：本机没有 xvfb-run、也没有 valgrind，GUI 只能由人在
- * Wayland 会话里肉眼看。渲染对不对（有没有路、投影歪不歪、LOD 生不生效、
- * 浮层透不透明、轨迹画没画上去）必须能无人值守验证，所以做一个离屏渲染通道：
- * 出来的图可以直接打开看，也可以做像素级断言。
+ * 存在理由：本机没有 xvfb-run、也没有 valgrind，GUI 只能由人在 Wayland 会话里
+ * 肉眼看。渲染对不对（有没有路、投影歪不歪、LOD 生不生效、浮层透不透明、
+ * 轨迹画没画上去）必须能无人值守验证，所以做一个离屏渲染通道：出来的图可以
+ * 直接打开看，也可以做像素级断言。
  *
- * ★ 本文件是这条通道的**单一可信源**：map_shot（tools/map_shot.c 只剩 3 行壳）
- *   与 navmap_qt --shot-offscreen 都调 offscreen_shot_main()，保证两个前端的
- *   离屏判据逐字节一致，保住 74/4 回归基线。
+ * ★ 本文件是这条通道的**单一可信源**：navmap_qt --shot-offscreen 调
+ *   offscreen_shot_main()，regress.sh 的离屏判据（shot / app_route / gpx_render /
+ *   ovl_shot）全部走它。旧 map_shot 壳已于 #88 删除。
  *
- * ★ 零 SDL 依赖：以前 map_shot 用 SDL_CreateRGBSurface + SDL_SaveBMP，现在改
- *   成 malloc 一块 0x00RRGGBB 内存缓冲 + 内建 24 位 BMP 写出。Qt 前端本就不链
- *   SDL，这条路径也必须零 SDL；map_shot 迁过来后也顺带脱了 SDL。
+ * ★ 零 SDL 依赖：早期版本用 SDL_CreateRGBSurface + SDL_SaveBMP，现在改成
+ *   malloc 一块 0x00RRGGBB 内存缓冲 + 内建 24 位 BMP 写出（Qt 前端本就不链 SDL，
+ *   这条路径必须零 SDL）。
  *
- * 用法（与旧 map_shot 完全一致）：
+ * 用法：
  *   navmap_qt --shot-offscreen --graph=products/graph/beijing --out=/tmp/shot.bmp \
  *             --lat=39.90 --lon=116.40 --zoom=12 --w=1280 --h=800 \
  *             [--from=lat,lon --to=lat,lon --fit-route] \
@@ -342,7 +342,8 @@ int offscreen_shot_main(int argc, char **argv)
     App a;
     if (app_init(&a, graph, w, h, font, font_size, &ab) != 0) return 1;
     a.qt_ui = 0;   /* 离屏审计通道：让 C 核心把 chrome（无图横幅/搜索框/标题栏）
-                      画进缓冲，与旧 map_shot 逐字节一致，保住 74/4 基线。 */
+                      画进缓冲 —— 审计的计数源必须是 C 核心缓冲，不能换成
+                      Qt 控件，否则像素判据失去意义。 */
     if (pbf_display) {
         if (mapset_enable_pbf_display(&a.ms, pbf_display, pbf_lru) != 0) {
             fprintf(stderr, "提示: PBF 显示层不可用（%s），改用 nmbin 产物\n", pbf_display);
