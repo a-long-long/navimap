@@ -42,6 +42,7 @@ class QTimer;
 class QToolButton;
 class QWidget;
 class MapCanvas;
+class DownloadDialog;   /* 下载地图对话框（全球 Geofabrik 列表）*/
 
 class MainWindow : public QMainWindow {
 public:
@@ -122,6 +123,11 @@ private:
     void locate();                       /* 定位按钮：回到关注点 */
     void layoutOverlays();               /* 两个浮层贴到画布上（画布尺寸变了要重贴） */
 
+    /* ---- 下载地图（菜单「下载地图…」+ 浏览到区域外自动提示）---- */
+    void showDownloadDialog();           /* 打开下载对话框（全球 Geofabrik 列表） */
+    void promptDownloadOutside();        /* 浏览到已下载区域外时弹出的提示框 */
+    void onMapsDownloaded(const QString &name);  /* 下载+转换完成后重载图集 */
+
     App          *m_a;
     MapCanvas    *m_canvas;
     QWidget      *m_searchOverlay = nullptr; /* 左上角浮层容器（挂在画布上） */
@@ -141,6 +147,8 @@ private:
     bool          m_trackPanelOpen = false;  /* 轨迹面板是否"逻辑上打开"（0% 时不真的显示） */
     QString       m_lastPick;            /* 最近一次选中的地点（按钮提示用） */
     int           m_step_count = -1;     /* 步骤面板增量刷新哨兵 */
+    DownloadDialog *m_dlDlg = nullptr;    /* 下载地图对话框（懒创建） */
+    bool          m_covPrompted = false; /* 区域外提示是否已弹过（回到有图才复位）*/
 };
 
 #endif

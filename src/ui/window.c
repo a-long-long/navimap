@@ -91,6 +91,13 @@ int app_init(App *a, const char *graph_dir, int w, int h,
     if (mapset_load_repair(&a->ms, graph_dir, ab, NULL) != 0) return -1;
     mapset_totals(&a->ms, &a->total_nodes, &a->total_edges);
 
+    /* 记下图集根目录与自愈选项，供 app_reload_maps 在"下载新省后"重扫使用
+     * （否则 reload 时既不知道去哪扫、也不知道要不要现场重建）。 */
+    if (graph_dir)
+        snprintf(a->graph_dir, sizeof(a->graph_dir), "%s", graph_dir);
+    if (ab) a->ab = *ab;
+    else { a->ab.enable = 1; a->ab.src_dir = NULL; a->ab.tool = NULL; }
+
     /* 字体可选。优先级：命令行 --font > 环境变量 NAVIMAP_FONT > 默认宋体候选链。
        "none"/空串 表示显式关闭文字标注（纯图形模式）。 */
     if (!font_path) font_path = getenv("NAVMAP_FONT");
@@ -180,6 +187,22 @@ int app_init(App *a, const char *graph_dir, int w, int h,
     }
     mv_init(&a->view, clat, clon, czoom, w, h);
     dedup_init(&a->dd);
+    return 0;
+}
+
+int app_reload_maps(App *a)
+{
+    if (!a || !a->graph_dir[0]) return -1;
+    /* 释放旧图集，清零（mapset_load 内部按空结构重新初始化，旧指针不能留着）。
+     * 单线程：只在主循环 tick 里被调用，reload 完成前不会再有渲染拿旧 ms。 */
+    mapset_free(&a->ms);
+    memset(&a->ms, 0, sizeof(a->ms));
+    if (mapset_load_repair(&a->ms, a->graph_dir, &a->ab, NULL) != 0) {
+        /* 失败：ms 已是空壳，调用方应退出或重建，别拿去渲染 */
+        a->total_nodes = a->total_edges = 0;
+        return -1;
+    }
+    mapset_totals(&a->ms, &a->total_nodes, &a->total_edges);
     return 0;
 }
 

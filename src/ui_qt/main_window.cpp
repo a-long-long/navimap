@@ -4,6 +4,9 @@
 #include "qt_icon_button.hpp"
 #include "utils/datum.h"   /* 坐标系（大地基准）：枚举与标签 */
 #include "settings/settings.h"  /* settings_set_int：切基准后落盘 */
+#include "download_dialog.h"     /* 下载地图对话框（全球 Geofabrik 列表） */
+#include <QMessageBox>
+#include <QDir>
 
 #include <QMenuBar>
 #include <QSlider>
@@ -529,6 +532,8 @@ void MainWindow::buildMenus()
            [this]() { app_nav_sim_follow(m_a); });
     addAct(m_menuMain, QStringLiteral("昼 / 夜 切换"), QKeySequence(Qt::Key_D), this,
            [this]() { m_a->day_night = !m_a->day_night; m_a->need_redraw = 1; });
+    addAct(m_menuMain, QStringLiteral("下载地图…"), QKeySequence(), this,
+           [this]() { showDownloadDialog(); });
     m_menuMain->addSeparator();
     addAct(m_menuMain, QStringLiteral("退出"), QKeySequence(Qt::CTRL | Qt::Key_Q), this,
            [this]() { m_a->quit = 1; close(); });
@@ -1407,6 +1412,71 @@ void MainWindow::tick()
 {
     m_canvas->tick();                    /* 收割/推进/按需渲染 */
     refreshSteps();
+
+    /* 浏览到已下载区域外 → 自动弹窗提示下载（一次性，回到有图才复位）。
+     * 用 cov_checked 把关：首帧还没真正查过覆盖时（cov_state 仍是初始 0=COV_NONE）
+     * 不误弹。COV_NONE/COV_BBOX_ONLY 来自 coverage.h，与 C 核心同一套判据。 */
+    bool outside = m_a->cov_checked &&
+                   (m_a->cov_state == COV_NONE || m_a->cov_state == COV_BBOX_ONLY);
+    if (outside && !m_covPrompted) {
+        m_covPrompted = true;
+        promptDownloadOutside();
+    } else if (!outside) {
+        m_covPrompted = false;
+    }
+}
+
+void MainWindow::showDownloadDialog()
+{
+    /* graph_dir 是 products/graph（或单省目录）；项目根 = graph_dir/../.. ，
+     * sources/ 与 scripts/ 都从根推导，避免依赖进程 cwd。 */
+    QString gd = QString::fromLocal8Bit(m_a->graph_dir);
+    if (gd.isEmpty()) gd = QStringLiteral("products/graph");
+    QDir dir(gd);
+    dir.cdUp(); dir.cdUp();                       /* products/graph → 项目根 */
+    QString repo    = dir.absolutePath();
+    QString sources = repo + QStringLiteral("/sources");
+
+    if (!m_dlDlg) {
+        m_dlDlg = new DownloadDialog(sources, repo, this);
+        m_dlDlg->setOnFinished([this](const QString &name) { onMapsDownloaded(name); });
+    }
+    m_dlDlg->show();
+    m_dlDlg->raise();
+    m_dlDlg->activateWindow();
+}
+
+void MainWindow::promptDownloadOutside()
+{
+    QDialog *d = new QDialog(this);
+    d->setAttribute(Qt::WA_DeleteOnClose);       /* 关掉即销毁，不挡后续弹窗 */
+    d->setWindowTitle(QString::fromUtf8("需要下载地图"));
+    auto *v = new QVBoxLayout(d);
+    QLabel *lab = new QLabel(QString::fromUtf8(
+        "您已浏览到已下载地图之外（位置 %.4f, %.4f）。\n该区域没有路网数据，地图为空。\n\n是否现在下载对应地区的地图？")
+        .arg(m_a->cov_lat, 0, 'f', 4).arg(m_a->cov_lon, 0, 'f', 4));
+    lab->setWordWrap(true);
+    auto *hb = new QHBoxLayout;
+    auto *go    = new QPushButton(QString::fromUtf8("去下载地图"));
+    auto *later = new QPushButton(QString::fromUtf8("稍后"));
+    connect(go, &QPushButton::clicked, d, [this, d]() { d->accept(); showDownloadDialog(); });
+    connect(later, &QPushButton::clicked, d, &QDialog::reject);
+    hb->addStretch(1); hb->addWidget(go); hb->addWidget(later);
+    v->addWidget(lab); v->addLayout(hb);
+    d->resize(360, 180);
+    d->show();           /* 非模态：地图还能看，用户可先观察再决定 */
+}
+
+void MainWindow::onMapsDownloaded(const QString &name)
+{
+    if (app_reload_maps(m_a) == 0) {
+        m_a->need_redraw = 1;
+        QMessageBox::information(this, QString::fromUtf8("下载完成"),
+            QString::fromUtf8("已下载并加载地图：%1").arg(name));
+    } else {
+        QMessageBox::warning(this, QString::fromUtf8("加载失败"),
+            QString::fromUtf8("地图已下载，但重新加载图集失败，请重启程序。"));
+    }
 }
 
 /* ---------------- 键盘 ---------------- */

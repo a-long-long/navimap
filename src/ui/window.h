@@ -121,6 +121,9 @@ typedef struct {
     int           cov_checked;
     double        cov_lat, cov_lon;
     char          cov_hint[1024]; /* 完整提示（含下载来源），位置变化时打印一次 */
+    /* ---- 图集根目录 + 自愈选项（供"下载新省后无需重启重加载"）---- */
+    char          graph_dir[1024]; /* app_init 传入的图集根（products/graph 或单省目录） */
+    AutoBuildOpt  ab;              /* 自愈选项（reload 时用同一份） */
     Font         *font_big;      /* 指令条的大字号（font_size * 2） */
 
     /* ---- 搜索（阶段 7）----
@@ -196,6 +199,10 @@ typedef struct {
  *     sources/ 与 graph_extract；只想关掉就传 &{ .enable = 0 }。 */
 int  app_init(App *a, const char *graph_dir, int w, int h,
               const char *font_path, int font_size, const AutoBuildOpt *ab);
+
+/* 下载新省并转换后，重扫 graph_dir 重新加载图集（不重启程序）。
+   返回 0 成功；-1 失败（此时 a->ms 已被释放，调用方应退出或重建 App）。 */
+int  app_reload_maps(App *a);
 
 /* 浮层透明度 → 0~255 的 alpha（绘制侧统一走它，别各写一遍换算）。
  * ★ 用 pct*255/100 而不是 pct*2.55：关键是 **100 必须严格等于 255**（不透明），

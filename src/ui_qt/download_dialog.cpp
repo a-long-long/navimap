@@ -1,0 +1,445 @@
+#include "download_dialog.h"
+
+#include <QTreeWidget>
+#include <QTreeWidgetItem>
+#include <QLabel>
+#include <QLineEdit>
+#include <QProgressBar>
+#include <QPushButton>
+#include <QTextEdit>
+#include <QVBoxLayout>
+#include <QHBoxLayout>
+#include <QNetworkAccessManager>
+#include <QNetworkRequest>
+#include <QNetworkReply>
+#include <QFile>
+#include <QDir>
+#include <QProcess>
+#include <QUrl>
+#include <QApplication>
+#include <QClipboard>
+
+/* 树节点存的角色：UserRole = geofabrik path（枝为空串） */
+static const int ROLE_PATH = Qt::UserRole;
+
+namespace {
+    static GeoRegion leaf(const char *nm, const char *p)
+    {
+        GeoRegion g;
+        g.name = QString::fromUtf8(nm);
+        g.path = QString::fromUtf8(p);
+        return g;
+    }
+    static GeoRegion branch(const char *nm, const QVector<GeoRegion> &k)
+    {
+        GeoRegion g;
+        g.name = QString::fromUtf8(nm);
+        g.kids = k;
+        return g;
+    }
+}
+
+DownloadDialog::DownloadDialog(const QString &sourcesDir, const QString &repoRoot,
+                               QWidget *parent)
+    : QDialog(parent), m_sources(sourcesDir), m_repo(repoRoot)
+{
+    setWindowTitle(QString::fromUtf8("下载地图（全球可下载区域 · Geofabrik）"));
+    resize(840, 580);
+
+    m_tree = new QTreeWidget;
+    m_tree->setHeaderLabel(QString::fromUtf8("可下载区域"));
+    fillTree(m_tree->invisibleRootItem(), buildRegions());
+    m_tree->expandToDepth(0);
+
+    m_info = new QLabel(QString::fromUtf8("选择左侧一个地区，查看下载链接并下载。"));
+    m_url  = new QLineEdit; m_url->setReadOnly(true);
+    m_prog = new QProgressBar; m_prog->setRange(0, 100); m_prog->setValue(0);
+    m_log  = new QTextEdit; m_log->setReadOnly(true);
+    m_dl   = new QPushButton(QString::fromUtf8("下载并转换")); m_dl->setEnabled(false);
+    m_copy = new QPushButton(QString::fromUtf8("复制下载链接")); m_copy->setEnabled(false);
+    m_close= new QPushButton(QString::fromUtf8("关闭"));
+
+    connect(m_tree, &QTreeWidget::itemSelectionChanged, this, &DownloadDialog::onSelChanged);
+    connect(m_dl,    &QPushButton::clicked, this, &DownloadDialog::startDownload);
+    connect(m_copy,  &QPushButton::clicked, this, &DownloadDialog::copyUrl);
+    connect(m_close, &QPushButton::clicked, this, &QDialog::accept);
+
+    m_nam = new QNetworkAccessManager(this);
+
+    auto *right = new QWidget;
+    auto *rv = new QVBoxLayout(right);
+    rv->addWidget(m_info);
+    rv->addWidget(m_url);
+    rv->addWidget(m_prog);
+    rv->addWidget(m_log, 1);
+    auto *hb = new QHBoxLayout;
+    hb->addWidget(m_dl); hb->addWidget(m_copy); hb->addStretch(1); hb->addWidget(m_close);
+    rv->addLayout(hb);
+
+    auto *hl = new QHBoxLayout(this);
+    hl->addWidget(m_tree, 1);
+    hl->addWidget(right, 1);
+}
+
+/* ---------------- 区域树（Geofabrik 真实路径）---------------- */
+
+QVector<GeoRegion> DownloadDialog::buildRegions() const
+{
+    /* 中国省级（asia/china/<prov>），本程序主战场，全部列出 */
+    QVector<GeoRegion> cn;
+    cn << leaf("北京", "asia/china/beijing")
+       << leaf("天津", "asia/china/tianjin")
+       << leaf("河北", "asia/china/hebei")
+       << leaf("山西", "asia/china/shanxi")
+       << leaf("内蒙古", "asia/china/inner-mongolia")
+       << leaf("辽宁", "asia/china/liaoning")
+       << leaf("吉林", "asia/china/jilin")
+       << leaf("黑龙江", "asia/china/heilongjiang")
+       << leaf("上海", "asia/china/shanghai")
+       << leaf("江苏", "asia/china/jiangsu")
+       << leaf("浙江", "asia/china/zhejiang")
+       << leaf("安徽", "asia/china/anhui")
+       << leaf("福建", "asia/china/fujian")
+       << leaf("江西", "asia/china/jiangxi")
+       << leaf("山东", "asia/china/shandong")
+       << leaf("河南", "asia/china/henan")
+       << leaf("湖北", "asia/china/hubei")
+       << leaf("湖南", "asia/china/hunan")
+       << leaf("广东", "asia/china/guangdong")
+       << leaf("广西", "asia/china/guangxi")
+       << leaf("海南", "asia/china/hainan")
+       << leaf("重庆", "asia/china/chongqing")
+       << leaf("四川", "asia/china/sichuan")
+       << leaf("贵州", "asia/china/guizhou")
+       << leaf("云南", "asia/china/yunnan")
+       << leaf("西藏", "asia/china/xizang")
+       << leaf("陕西", "asia/china/shaanxi")
+       << leaf("甘肃", "asia/china/gansu")
+       << leaf("青海", "asia/china/qinghai")
+       << leaf("宁夏", "asia/china/ningxia")
+       << leaf("新疆", "asia/china/xinjiang")
+       << leaf("香港", "asia/china/hongkong")
+       << leaf("澳门", "asia/china/macau")
+       << leaf("台湾", "asia/china/taiwan");
+
+    QVector<GeoRegion> asia;
+    asia << leaf("中国（全国）", "asia/china")
+          << branch("中国·省级", cn)
+          << leaf("日本", "asia/japan")
+          << leaf("韩国", "asia/south-korea")
+          << leaf("朝鲜", "asia/north-korea")
+          << leaf("蒙古", "asia/mongolia")
+          << leaf("印度", "asia/india")
+          << leaf("巴基斯坦", "asia/pakistan")
+          << leaf("孟加拉国", "asia/bangladesh")
+          << leaf("尼泊尔", "asia/nepal")
+          << leaf("不丹", "asia/bhutan")
+          << leaf("斯里兰卡", "asia/sri-lanka")
+          << leaf("哈萨克斯坦", "asia/kazakhstan")
+          << leaf("乌兹别克斯坦", "asia/uzbekistan")
+          << leaf("土库曼斯坦", "asia/turkmenistan")
+          << leaf("吉尔吉斯斯坦", "asia/kyrgyzstan")
+          << leaf("塔吉克斯坦", "asia/tajikistan")
+          << leaf("阿富汗", "asia/afghanistan")
+          << leaf("伊朗", "asia/iran")
+          << leaf("伊拉克", "asia/iraq")
+          << leaf("土耳其", "asia/turkey")
+          << leaf("叙利亚", "asia/syria")
+          << leaf("约旦", "asia/jordan")
+          << leaf("黎巴嫩", "asia/lebanon")
+          << leaf("以色列", "asia/israel")
+          << leaf("巴勒斯坦", "asia/palestine")
+          << leaf("沙特阿拉伯", "asia/saudi-arabia")
+          << leaf("也门", "asia/yemen")
+          << leaf("阿曼", "asia/oman")
+          << leaf("阿联酋", "asia/united-arab-emirates")
+          << leaf("卡塔尔", "asia/qatar")
+          << leaf("科威特", "asia/kuwait")
+          << leaf("巴林", "asia/bahrain")
+          << leaf("格鲁吉亚", "asia/georgia")
+          << leaf("亚美尼亚", "asia/armenia")
+          << leaf("阿塞拜疆", "asia/azerbaijan")
+          << leaf("印度尼西亚", "asia/indonesia")
+          << leaf("马来西亚", "asia/malaysia")
+          << leaf("新加坡", "asia/singapore")
+          << leaf("泰国", "asia/thailand")
+          << leaf("越南", "asia/vietnam")
+          << leaf("菲律宾", "asia/philippines")
+          << leaf("缅甸", "asia/myanmar")
+          << leaf("柬埔寨", "asia/cambodia")
+          << leaf("老挝", "asia/laos")
+          << leaf("文莱", "asia/brunei")
+          << leaf("东帝汶", "asia/timor-leste");
+
+    QVector<GeoRegion> europe;
+    europe << leaf("德国", "europe/germany")
+            << leaf("法国", "europe/france")
+            << leaf("英国", "europe/united-kingdom")
+            << leaf("爱尔兰", "europe/ireland")
+            << leaf("意大利", "europe/italy")
+            << leaf("西班牙", "europe/spain")
+            << leaf("葡萄牙", "europe/portugal")
+            << leaf("荷兰", "europe/netherlands")
+            << leaf("比利时", "europe/belgium")
+            << leaf("卢森堡", "europe/luxembourg")
+            << leaf("瑞士", "europe/switzerland")
+            << leaf("奥地利", "europe/austria")
+            << leaf("列支敦士登", "europe/liechtenstein")
+            << leaf("摩纳哥", "europe/monaco")
+            << leaf("安道尔", "europe/andorra")
+            << leaf("圣马力诺", "europe/san-marino")
+            << leaf("马耳他", "europe/malta")
+            << leaf("丹麦", "europe/denmark")
+            << leaf("瑞典", "europe/sweden")
+            << leaf("挪威", "europe/norway")
+            << leaf("芬兰", "europe/finland")
+            << leaf("冰岛", "europe/iceland")
+            << leaf("爱沙尼亚", "europe/estonia")
+            << leaf("拉脱维亚", "europe/latvia")
+            << leaf("立陶宛", "europe/lithuania")
+            << leaf("波兰", "europe/poland")
+            << leaf("捷克", "europe/czech-republic")
+            << leaf("斯洛伐克", "europe/slovakia")
+            << leaf("匈牙利", "europe/hungary")
+            << leaf("斯洛文尼亚", "europe/slovenia")
+            << leaf("克罗地亚", "europe/croatia")
+            << leaf("波黑", "europe/bosnia-herzegovina")
+            << leaf("塞尔维亚", "europe/serbia")
+            << leaf("黑山", "europe/montenegro")
+            << leaf("科索沃", "europe/kosovo")
+            << leaf("阿尔巴尼亚", "europe/albania")
+            << leaf("北马其顿", "europe/north-macedonia")
+            << leaf("罗马尼亚", "europe/romania")
+            << leaf("摩尔多瓦", "europe/moldova")
+            << leaf("保加利亚", "europe/bulgaria")
+            << leaf("希腊", "europe/greece")
+            << leaf("塞浦路斯", "europe/cyprus")
+            << leaf("俄罗斯（欧洲部分）", "europe/russia")
+            << leaf("乌克兰", "europe/ukraine")
+            << leaf("白俄罗斯", "europe/belarus");
+
+    QVector<GeoRegion> africa;
+    africa << leaf("埃及", "africa/egypt")
+            << leaf("利比亚", "africa/libya")
+            << leaf("突尼斯", "africa/tunisia")
+            << leaf("阿尔及利亚", "africa/algeria")
+            << leaf("摩洛哥", "africa/morocco")
+            << leaf("毛里塔尼亚", "africa/mauritania")
+            << leaf("马里", "africa/mali")
+            << leaf("尼日尔", "africa/niger")
+            << leaf("乍得", "africa/chad")
+            << leaf("苏丹", "africa/sudan")
+            << leaf("南苏丹", "africa/south-sudan")
+            << leaf("厄立特里亚", "africa/eritrea")
+            << leaf("吉布提", "africa/djibouti")
+            << leaf("索马里", "africa/somalia")
+            << leaf("埃塞俄比亚", "africa/ethiopia")
+            << leaf("肯尼亚", "africa/kenya")
+            << leaf("乌干达", "africa/uganda")
+            << leaf("坦桑尼亚", "africa/tanzania")
+            << leaf("卢旺达", "africa/rwanda")
+            << leaf("布隆迪", "africa/burundi")
+            << leaf("刚果（金）", "africa/democratic-republic-of-congo")
+            << leaf("刚果（布）", "africa/congo")
+            << leaf("中非", "africa/central-african-republic")
+            << leaf("喀麦隆", "africa/cameroon")
+            << leaf("加蓬", "africa/gabon")
+            << leaf("尼日利亚", "africa/nigeria")
+            << leaf("贝宁", "africa/benin")
+            << leaf("多哥", "africa/togo")
+            << leaf("加纳", "africa/ghana")
+            << leaf("科特迪瓦", "africa/ivory-coast")
+            << leaf("利比里亚", "africa/liberia")
+            << leaf("塞拉利昂", "africa/sierra-leone")
+            << leaf("几内亚", "africa/guinea")
+            << leaf("塞内加尔", "africa/senegal")
+            << leaf("冈比亚", "africa/gambia")
+            << leaf("马达加斯加", "africa/madagascar")
+            << leaf("南非", "africa/south-africa")
+            << leaf("纳米比亚", "africa/namibia")
+            << leaf("博茨瓦纳", "africa/botswana")
+            << leaf("津巴布韦", "africa/zimbabwe")
+            << leaf("赞比亚", "africa/zambia")
+            << leaf("莫桑比克", "africa/mozambique")
+            << leaf("马拉维", "africa/malawi")
+            << leaf("安哥拉", "africa/angola");
+
+    QVector<GeoRegion> namerica;
+    namerica << leaf("美国（本土）", "north-america/us")
+             << leaf("加拿大", "north-america/canada")
+             << leaf("墨西哥", "north-america/mexico")
+             << leaf("格陵兰", "north-america/greenland")
+             << leaf("百慕大", "north-america/bermuda");
+
+    QVector<GeoRegion> samerica;
+    samerica << leaf("巴西", "south-america/brazil")
+             << leaf("阿根廷", "south-america/argentina")
+             << leaf("智利", "south-america/chile")
+             << leaf("玻利维亚", "south-america/bolivia")
+             << leaf("秘鲁", "south-america/peru")
+             << leaf("厄瓜多尔", "south-america/ecuador")
+             << leaf("哥伦比亚", "south-america/colombia")
+             << leaf("委内瑞拉", "south-america/venezuela")
+             << leaf("圭亚那", "south-america/guyana")
+             << leaf("苏里南", "south-america/suriname")
+             << leaf("乌拉圭", "south-america/uruguay")
+             << leaf("巴拉圭", "south-america/paraguay");
+
+    QVector<GeoRegion> oceania;
+    oceania << leaf("澳大利亚", "australia/australia")
+            << leaf("新西兰", "australia/new-zealand")
+            << leaf("巴布亚新几内亚", "australia/papua-new-guinea")
+            << leaf("斐济", "australia/fiji");
+
+    QVector<GeoRegion> root;
+    root << branch("亚洲", asia)
+         << branch("欧洲", europe)
+         << branch("非洲", africa)
+         << branch("北美洲", namerica)
+         << branch("南美洲", samerica)
+         << branch("大洋洲", oceania);
+    return root;
+}
+
+void DownloadDialog::fillTree(QTreeWidgetItem *parent, const QVector<GeoRegion> &rs)
+{
+    for (const GeoRegion &r : rs) {
+        auto *it = new QTreeWidgetItem(parent);
+        it->setText(0, r.name);
+        it->setData(0, ROLE_PATH, QVariant(r.path));   /* 枝的 path 为空串 */
+        it->setChildIndicatorPolicy(r.kids.isEmpty()
+                                    ? QTreeWidgetItem::DontShowIndicator
+                                    : QTreeWidgetItem::ShowIndicator);
+        if (!r.kids.isEmpty()) fillTree(it, r.kids);
+    }
+}
+
+/* ---------------- 选中 / 信息 ---------------- */
+
+QString DownloadDialog::currentPath() const
+{
+    QTreeWidgetItem *it = m_tree->currentItem();
+    if (!it) return QString();
+    return it->data(0, ROLE_PATH).toString();
+}
+
+QString DownloadDialog::currentUrl() const
+{
+    QString p = currentPath();
+    if (p.isEmpty()) return QString();
+    return QString("https://download.geofabrik.de/%1-latest.osm.pbf").arg(p);
+}
+
+QString DownloadDialog::currentName() const
+{
+    QString p = currentPath();
+    if (p.isEmpty()) return QString();
+    return p.section('/', -1);   /* asia/china/gansu → gansu */
+}
+
+void DownloadDialog::onSelChanged()
+{
+    QString p = currentPath();
+    if (p.isEmpty()) {
+        m_url->clear();
+        m_info->setText(QString::fromUtf8("请选择最末级地区（带下载链接的）查看详情。"));
+        m_dl->setEnabled(false);
+        m_copy->setEnabled(false);
+        return;
+    }
+    m_url->setText(currentUrl());
+    m_info->setText(QString::fromUtf8("将下载：%1\n保存到：%2/%3-latest.osm.pbf")
+                    .arg(currentName()).arg(m_sources).arg(currentName()));
+    m_dl->setEnabled(true);
+    m_copy->setEnabled(true);
+}
+
+void DownloadDialog::copyUrl()
+{
+    QString u = currentUrl();
+    if (!u.isEmpty() && QApplication::clipboard())
+        QApplication::clipboard()->setText(u);
+}
+
+/* ---------------- 下载 ---------------- */
+
+void DownloadDialog::startDownload()
+{
+    QString path = currentPath();
+    if (path.isEmpty()) return;
+
+    m_dlName = currentName();
+    m_target = m_sources + "/" + m_dlName + "-latest.osm.pbf";
+    m_log->append(QString::fromUtf8("开始下载：%1\n  → %2").arg(currentUrl(), m_target));
+
+    m_dl->setEnabled(false); m_copy->setEnabled(false);
+    m_prog->setValue(0);
+
+    QDir().mkpath(m_sources);
+    m_file = new QFile(m_target, this);
+    if (!m_file->open(QIODevice::WriteOnly | QIODevice::Truncate)) {
+        m_log->append(QString::fromUtf8("无法创建目标文件：%1").arg(m_target));
+        m_dl->setEnabled(true);
+        return;
+    }
+
+    QNetworkRequest req(currentUrl());   /* Qt6 默认跟随重定向，无需额外属性 */
+    m_reply = m_nam->get(req);
+    connect(m_reply, &QNetworkReply::downloadProgress,
+            this, &DownloadDialog::onDownloadProgress);
+    connect(m_reply, &QIODevice::readyRead, this, &DownloadDialog::onReadyRead);
+    connect(m_reply, &QNetworkReply::finished, this,
+            [this]() { onReplyFinished(m_reply); });
+}
+
+void DownloadDialog::onReadyRead()
+{
+    if (m_file && m_reply) m_file->write(m_reply->readAll());
+}
+
+void DownloadDialog::onDownloadProgress(qint64 got, qint64 total)
+{
+    if (total > 0) m_prog->setValue((int)(got * 100 / total));
+}
+
+void DownloadDialog::onReplyFinished(QNetworkReply *r)
+{
+    if (m_file) { m_file->close(); delete m_file; m_file = nullptr; }
+
+    if (r->error() != QNetworkReply::NoError) {
+        m_log->append(QString::fromUtf8("下载失败：%1").arg(r->errorString()));
+        m_dl->setEnabled(true); m_copy->setEnabled(true);
+        r->deleteLater(); m_reply = nullptr;
+        return;
+    }
+    m_log->append(QString::fromUtf8("下载完成（%1 字节），开始转换…").arg(m_target));
+    r->deleteLater(); m_reply = nullptr;
+
+    /* 下载完即触发转换：sync_maps.sh 会扫整个 sources/ 把新 PBF 转成可加载的路网。
+     * 异步跑（转换一个省可能几分钟），完成后 downloadFinished 通知主窗口重载。 */
+    m_proc = new QProcess(this);
+    connect(m_proc, &QProcess::readyReadStandardOutput, this, &DownloadDialog::onConvertOutput);
+    connect(m_proc, QOverload<int, QProcess::ExitStatus>::of(&QProcess::finished),
+            this, &DownloadDialog::onConvertFinished);
+    m_proc->setWorkingDirectory(m_repo);
+    m_proc->start(QStringLiteral("bash"),
+                 QStringList() << (m_repo + "/scripts/sync_maps.sh"));
+    m_log->append(QString::fromUtf8("运行 sync_maps.sh（转换 + 建地名库 + 地标表）…"));
+}
+
+void DownloadDialog::onConvertOutput()
+{
+    if (m_proc) m_log->append(QString::fromLocal8Bit(m_proc->readAllStandardOutput()));
+}
+
+void DownloadDialog::onConvertFinished(int code, QProcess::ExitStatus)
+{
+    if (code == 0) {
+        m_log->append(QString::fromUtf8("转换完成 ✓ 地图已就绪。"));
+        if (m_onFinished) m_onFinished(m_dlName);
+    } else {
+        m_log->append(QString::fromUtf8("转换失败（exit %1）。可在终端手动运行 scripts/sync_maps.sh 查看详情。").arg(code));
+    }
+    m_dl->setEnabled(true); m_copy->setEnabled(true);
+    if (m_proc) { m_proc->deleteLater(); m_proc = nullptr; }
+}

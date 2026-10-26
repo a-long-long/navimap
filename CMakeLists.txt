@@ -487,11 +487,11 @@ nm_link_tool(tag_stats)
 #   position()/angleDelta()。配置时给 -DCMAKE_PREFIX_PATH=<Qt前缀> 指定版本，
 #   找不到则跳过本目标，不影响其余全部产物。
 set(QT "")
-find_package(Qt6 COMPONENTS Widgets QUIET)
+find_package(Qt6 COMPONENTS Widgets Network QUIET)
 if(Qt6Widgets_FOUND)
     set(QT Qt6)
 else()
-    find_package(Qt5 COMPONENTS Widgets QUIET)
+    find_package(Qt5 COMPONENTS Widgets Network QUIET)
     if(Qt5Widgets_FOUND)
         set(QT Qt5)
     endif()
@@ -506,8 +506,9 @@ if(QT)
 # #88 后 map_shot 壳已删除，regress 直接吃 navmap_qt --shot-offscreen
 # （见 scripts/regress.sh 的 shot()/app_route/gpx_render/ovl_shot）。
         src/ui_qt/qt_icons.cpp
-        src/ui_qt/main_window.cpp)
-    target_link_libraries(navmap_qt PRIVATE navimap_core ${QT}::Widgets Threads::Threads)
+        src/ui_qt/main_window.cpp
+        src/ui_qt/download_dialog.cpp)
+    target_link_libraries(navmap_qt PRIVATE navimap_core ${QT}::Widgets ${QT}::Network Threads::Threads)
     message(STATUS "Qt 前端: 启用 (${QT} ${${QT}Widgets_VERSION})")
 else()
     message(STATUS "Qt 前端: 未找到 Qt6/Qt5 Widgets，跳过 navmap_qt")
