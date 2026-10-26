@@ -929,3 +929,112 @@ int paint_lines(Raster *rs, const MapView *v,
     }
     return 0;
 }
+
+/* ------------------------------------------------------------------ */
+/* 等高线（SRTM 生成，contours/polyrefs/pts 三件套）                    */
+/* ------------------------------------------------------------------ */
+
+int paint_contours(Raster *rs, const MapView *v,
+                   const NMBinFile *contours, const NMBinFile *polyrefs,
+                   const NMBinFile *pts,
+                   int32_t **bbox_cache, PaintStats *st)
+{
+    uint64_t nc = contours->hdr.rec_count;
+    uint64_t np = polyrefs->hdr.rec_count;
+    uint64_t npts = pts->hdr.rec_count;
+    if (!nc || !np || !npts) return 0;
+    if (!rs) return 0;
+
+    /* 懒初始化每条等高线的 bbox（进程内一次），机制同 paint_lines 的 line_bbox。 */
+    if (bbox_cache && !*bbox_cache) {
+        int32_t *bb = calloc((size_t)nc * 4, sizeof(int32_t));
+        if (!bb) return -1;
+        for (uint64_t i = 0; i < nc; i++) {
+            const uint8_t *cr = contours->data + i * NM_CONTOUR_BYTES;
+            uint32_t off = nm_get_u32(cr + CF_REF_OFF);
+            uint32_t cnt = nm_get_u32(cr + CF_REF_CNT);
+            int32_t a0 = 90 * 10000000, a1 = -90 * 10000000;
+            int32_t o0 = 180 * 10000000, o1 = -180 * 10000000;
+            for (uint32_t k = 0; k < cnt; k++) {
+                uint32_t idx = nm_get_u32(polyrefs->data + ((uint64_t)off + k) * 4);
+                if ((uint64_t)idx >= npts) continue;
+                const uint8_t *pp = pts->data + (uint64_t)idx * NM_CONTOUR_PT_BYTES;
+                int32_t la = nm_get_i32(pp + CP_LAT), lo = nm_get_i32(pp + CP_LON);
+                if (la < a0) a0 = la;
+                if (la > a1) a1 = la;
+                if (lo < o0) o0 = lo;
+                if (lo > o1) o1 = lo;
+            }
+            bb[i * 4] = a0; bb[i * 4 + 1] = o0; bb[i * 4 + 2] = a1; bb[i * 4 + 3] = o1;
+        }
+        *bbox_cache = bb;
+    }
+    int32_t *bb = bbox_cache ? *bbox_cache : NULL;
+
+    MvProj P;
+    mv_proj_begin(v, &P);
+
+    double bbl[4];
+    mv_visible_bbox(v, bbl);
+    double la0 = bbl[0] - 0.02, la1 = bbl[2] + 0.02;
+    double lo0 = bbl[1] - 0.02, lo1 = bbl[3] + 0.02;
+    int32_t vla0 = (int32_t)(la0 * 1e7), vla1 = (int32_t)(la1 * 1e7);
+    int32_t vlo0 = (int32_t)(lo0 * 1e7), vlo1 = (int32_t)(lo1 * 1e7);
+    double zoom = v->zoom;
+
+    for (uint64_t i = 0; i < nc; i++) {
+        /* bbox 预筛（等高线同样没有 tile 索引） */
+        if (bb) {
+            if (bb[i * 4 + 2] < vla0 || bb[i * 4] > vla1 ||
+                bb[i * 4 + 3] < vlo0 || bb[i * 4 + 1] > vlo1)
+                continue;
+        }
+        const uint8_t *cr = contours->data + i * NM_CONTOUR_BYTES;
+        uint8_t cls = cr[CF_CLASS];
+        /* LOD：低 zoom 只画计曲线（每 index 一条，密度低不糊）；
+         * zoom>=11 才把首曲线（密集）也画出来。 */
+        if (zoom < 9.0) continue;
+        if (cls == 0 && zoom < 11.0) continue;
+
+        uint32_t off = nm_get_u32(cr + CF_REF_OFF);
+        uint32_t cnt = nm_get_u32(cr + CF_REF_CNT);
+        if ((uint64_t)off + cnt > np) continue;
+
+        int vis = 0;
+        int px[4096], py[4096];
+        int n = 0;
+        for (uint32_t k = 0; k < cnt && n < 4096; k++) {
+            uint32_t idx = nm_get_u32(polyrefs->data + ((uint64_t)off + k) * 4);
+            if ((uint64_t)idx >= npts) continue;
+            const uint8_t *pp = pts->data + (uint64_t)idx * NM_CONTOUR_PT_BYTES;
+            int32_t ila = nm_get_i32(pp + CP_LAT), ilo = nm_get_i32(pp + CP_LON);
+            double la = (double)ila / 1e7;
+            double lo = (double)ilo / 1e7;
+            if (la >= la0 && la <= la1 && lo >= lo0 && lo <= lo1) vis = 1;
+            int x, y;
+            mv_proj_e7(&P, ila, ilo, &x, &y);
+            px[n] = x; py[n] = y; n++;
+        }
+        if (!vis || n < 2) continue;
+
+        /* 棕色等高线：计曲线（class=1）更深更粗，首曲线（class=0）浅细。 */
+        uint8_t cr_, cg, cb, width;
+        if (cls == 1) {
+            cr_ = 150; cg = 105; cb = 70; width = (zoom < 12.5) ? 1 : 2;
+        } else {
+            cr_ = 195; cg = 170; cb = 145; width = 1;
+        }
+        uint32_t col = raster_rgb(rs, cr_, cg, cb);
+        if (width <= 1) {
+            stroke_begin();
+            for (int k = 0; k < n; k++) stroke_push(rs, px[k], py[k], col);
+            stroke_flush();
+        } else {
+            for (int k = 1; k < n; k++)
+                raster_thick_line(rs, px[k - 1], py[k - 1], px[k], py[k],
+                                  width, col);
+        }
+        st->lines_drawn++;
+    }
+    return 0;
+}

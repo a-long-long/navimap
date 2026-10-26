@@ -455,6 +455,11 @@ endfunction()
 add_executable(pbf_info tools/pbf_info.c)
 nm_link_tool(pbf_info)
 
+# 等高线生成工具：从 SRTM .hgt 瓦片生成 contours/contour_polyrefs/contour_pts 三件套。
+# 零外部依赖（无 GDAL），直接读原始大端 int16 .hgt。
+add_executable(gen_contours tools/gen_contours.c)
+nm_link_tool(gen_contours navmap_map)
+
 
 # PBF 按需解码显示层的等价性校验（"只留 PBF"方案的门禁）
 add_executable(pbfmap_check tools/pbfmap_check.c)

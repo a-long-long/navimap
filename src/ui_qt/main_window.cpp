@@ -562,6 +562,18 @@ void MainWindow::buildMenus()
     mview->addSeparator();
     addAct(mview, QStringLiteral("浮层透明度…"), QKeySequence(), this,
            [this]() { showOverlayAlphaDialog(); });
+    mview->addSeparator();
+    /* 等高线：可勾选，勾选态与 O 键、设置面板三处同步 */
+    {
+        QAction *act = mview->addAction(QStringLiteral("等高线"));
+        act->setCheckable(true);
+        act->setChecked(m_a->show_contours);
+        connect(act, &QAction::triggered, this, [this, act]() {
+            m_a->show_contours = act->isChecked() ? 1 : 0;
+            m_a->need_redraw = 1;
+        });
+        m_contourAct = act;
+    }
 
     /* 坐标系（大地基准）：切基准后经纬网与读数按该基准呈现。勾选态与右栏
      * 坐标网按钮悬停提示里的"当前坐标系"同步（右栏没有下拉框了）。 */
@@ -1535,6 +1547,11 @@ void MainWindow::handleKey(int key)
         break;
     case Qt::Key_BracketLeft:
         app_set_font_size(m_a, m_a->font_size - 1); m_a->need_redraw = 1;
+        break;
+    case Qt::Key_O:
+        m_a->show_contours = !m_a->show_contours;
+        if (m_contourAct) m_contourAct->setChecked(m_a->show_contours);
+        m_a->need_redraw = 1;
         break;
     default:
         if (key >= Qt::Key_0 && key <= Qt::Key_4) {

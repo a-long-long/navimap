@@ -36,6 +36,9 @@
 #define NMBIN_KIND_EDGELIST    10u   /* {node_idx, edge_idx} 对，按 tile 排序 */
 #define NMBIN_KIND_TILES       11u   /* 瓦片目录（渲染空间索引） */
 #define NMBIN_KIND_LANES       12u   /* 每条边的车道转向串 id（u32，CSR 边序） */
+#define NMBIN_KIND_CONTOURS        13u  /* 等高线记录（类 lines.bin，引用 contour_pts 下标） */
+#define NMBIN_KIND_CONTOUR_PTS     14u  /* 等高线独立顶点池（lat/lon e7，8 字节） */
+#define NMBIN_KIND_CONTOUR_POLYREFS 15u /* 等高线引用的顶点下标（u32 序列，指向 contour_pts） */
 
 #define NMBIN_MAX_FIELDS 16
 #define NMBIN_HDR_BYTES  128
@@ -167,6 +170,24 @@ uint64_t nm_get_u64(const uint8_t *p);
 #define AF_REF_CNT  12   /* u32 */
 #define AF_KIND     16   /* u8   AK_BUILDING / AK_WATER / AK_GREEN / AK_OTHER */
 #define AF_RESERVED 17   /* u8[4] */
+
+/* contours.bin：等高线。记录布局复用 lines.bin 的 24 字节槽（偏移同 lines），
+ * 但语义不同：osm_id 槽存"高程（米，u64）"，ref_off/ref_cnt 指向
+ * contours_polyrefs.bin（u32 序列），每个下标再指向 contours_pts.bin 的顶点。
+ * class 字段区分"计曲线（每 index 一条加粗/加深）"与"首曲线"。
+ * 不进 OSM 导入管线，由 gen_contours 直接产出 navimap 专属二进制。 */
+#define NM_CONTOUR_BYTES 24
+#define CF_ELEV      0    /* u64  高程（米）— 复用 lines 的 LF_OSM_ID 槽 */
+#define CF_REF_OFF   8    /* u32 */
+#define CF_REF_CNT   12   /* u32 */
+#define CF_CLASS     16   /* u8   0=首曲线 1=计曲线/索引（加粗加深） */
+#define CF_FLAGS     17   /* u8 */
+#define CF_NAME_ID   20   /* u32 保留（等高线无名） */
+
+/* contour_pts.bin：等高线顶点池（不依赖 OSM 节点）。每条 8 字节。 */
+#define NM_CONTOUR_PT_BYTES 8
+#define CP_LAT  0    /* i32  e7 度 */
+#define CP_LON  4    /* i32  e7 度 */
 
 /* polyrefs.bin：u32 一条 */
 

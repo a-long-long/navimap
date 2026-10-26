@@ -140,6 +140,7 @@ private:
     QWidget      *m_rightOverlay = nullptr; /* 右上角浮层容器（挂在画布上） */
     QToolButton  *m_gridBtn = nullptr;    /* 右栏「坐标网」按钮（悬停提示带当前坐标系） */
     QList<QAction*> m_datumActs;           /* ☰ 菜单里的坐标系动作（与悬停提示同步） */
+    QAction      *m_contourAct = nullptr;  /* 视图菜单「等高线」勾选项（与 O 键同步） */
     /* GPX 轨迹/收藏面板（右栏「轨迹」按钮弹出；挂在画布上的浮层） */
     QWidget      *m_trackPanel = nullptr;
     QWidget      *m_trackRows  = nullptr;   /* 滚动区里的行容器（每条轨迹/收藏一行） */

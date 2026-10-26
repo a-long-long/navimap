@@ -153,6 +153,14 @@ int  paint_lines(Raster *rs, const MapView *v,
                  const NMBinFile *polyrefs,
                  int32_t **bbox_cache, PaintStats *st);
 
+/* 等高线（SRTM 生成，contours/polyrefs/pts 三件套）。bbox_cache 与线要素同机制
+ * （nc*4 个 i32，e7 度），首次传 NULL 就地分配填充。LOD：zoom>=9 才画，
+ * 其中首曲线（class=0，密集）要 zoom>=11 才出现，计曲线（class=1）全程可见。 */
+int  paint_contours(Raster *rs, const MapView *v,
+                   const NMBinFile *contours, const NMBinFile *polyrefs,
+                   const NMBinFile *pts,
+                   int32_t **bbox_cache, PaintStats *st);
+
 /* 在屏幕上标一个点（当前位置/选点） */
 void paint_marker(Raster *rs, int x, int y, int radius,
                   uint8_t rr, uint8_t gg, uint8_t bb);

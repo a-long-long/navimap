@@ -12,6 +12,7 @@ const SettingMeta SETTINGS_SCHEMA[] = {
     { "show_panel",  "导航面板",   ST_BOOL, 1, 0, 1, 1, NULL },
     { "show_poi",    "POI 图标",   ST_BOOL, 1, 0, 1, 1, NULL },
     { "show_labels", "地名标注",   ST_BOOL, 1, 0, 1, 1, NULL },
+    { "show_contours", "等高线",   ST_BOOL, 1, 0, 1, 1, NULL },
     { "voice_on",    "语音播报",   ST_BOOL, 1, 0, 1, 1, NULL },
     { "mode",        "默认页签",   ST_INT,  0, 0, 1, 1, "浏览\0导航\0" },
     { "font_size",   "字号(pt)",   ST_INT, 14, 8, 32, 1, NULL },

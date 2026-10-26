@@ -51,6 +51,11 @@ static void src_close(MapSrc *s)
         nmbin_close(&s->areas);
         nmbin_close(&s->polyrefs);
     }
+    if (s->has_contours) {
+        nmbin_close(&s->contours);
+        nmbin_close(&s->contour_polyrefs);
+        nmbin_close(&s->contour_pts);
+    }
     if (s->has_tiles) {
         nmbin_close(&s->tiles);
         nmbin_close(&s->edgelist);
@@ -61,6 +66,7 @@ static void src_close(MapSrc *s)
     src_free_disp(s);     /* 回收 tile 拼接缓冲（普通省空操作） */
     free(s->area_bbox);
     free(s->line_bbox);
+    free(s->contour_bbox);
     memset(s, 0, sizeof(*s));
 }
 
@@ -349,6 +355,22 @@ static int src_open_files(MapSrc *s)
             fprintf(stderr, "图集: %s 无 lines/areas/polyrefs，只显示路网\n", s->name);
     }
 
+    /* 等高线（SRTM 生成）可选：三件套齐备才算有。与 features 平级，不依赖 disp tile。 */
+    s->has_contours = 1;
+    snprintf(p, sizeof(p), "%s/contours.bin", s->dir);
+    if (nmbin_open(p, &s->contours) != 0) s->has_contours = 0;
+    if (s->has_contours) {
+        snprintf(p, sizeof(p), "%s/contour_polyrefs.bin", s->dir);
+        if (nmbin_open(p, &s->contour_polyrefs) != 0) s->has_contours = 0;
+    }
+    if (s->has_contours) {
+        snprintf(p, sizeof(p), "%s/contour_pts.bin", s->dir);
+        if (nmbin_open(p, &s->contour_pts) != 0) s->has_contours = 0;
+    }
+    if (s->has_contours)
+        fprintf(stderr, "图集: %s 有等高线（%llu 条）\n", s->name,
+                (unsigned long long)s->contours.hdr.rec_count);
+
     /* 空间索引可选：两者齐备才算有 */
     s->has_tiles = 1;
     snprintf(p, sizeof(p), "%s/tiles.bin", s->dir);
@@ -430,6 +452,11 @@ static void src_unload(MapSrc *s)
         nmbin_close(&s->areas);
         nmbin_close(&s->polyrefs);
     }
+    if (s->has_contours) {
+        nmbin_close(&s->contours);
+        nmbin_close(&s->contour_polyrefs);
+        nmbin_close(&s->contour_pts);
+    }
     if (s->has_tiles) {
         nmbin_close(&s->tiles);
         nmbin_close(&s->edgelist);
@@ -440,6 +467,7 @@ static void src_unload(MapSrc *s)
     s->has_lanes = 0;
     free(s->area_bbox);
     free(s->line_bbox);
+    free(s->contour_bbox);
     memset(&s->nodes, 0, sizeof(s->nodes));
     memset(&s->edges, 0, sizeof(s->edges));
     memset(&s->restrictions, 0, sizeof(s->restrictions));
@@ -454,6 +482,7 @@ static void src_unload(MapSrc *s)
     s->has_tiles = 0;
     s->area_bbox = NULL;
     s->line_bbox = NULL;
+    s->contour_bbox = NULL;
     /* name/dir/bbox/dup_of 保留 */
 }
 

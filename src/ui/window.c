@@ -63,6 +63,7 @@ int app_init(App *a, const char *graph_dir, int w, int h,
     a->day_night  = settings_get_bool(a->cfg, "day_night", 0);
     a->show_poi    = settings_get_bool(a->cfg, "show_poi", 1);
     a->show_labels = settings_get_bool(a->cfg, "show_labels", 1);
+    a->show_contours = settings_get_bool(a->cfg, "show_contours", 1);
     a->voice_on    = settings_get_bool(a->cfg, "voice_on", 1);
     a->mode        = settings_get_int(a->cfg, "mode", 0);
     /* ★ app_init 是**逐字段**读设置的（不经过 app_apply_settings——那个只给
@@ -292,6 +293,7 @@ void app_apply_settings(App *a)
     a->show_panel   = settings_get_bool(a->cfg, "show_panel", 1);
     a->show_poi     = settings_get_bool(a->cfg, "show_poi", 1);
     a->show_labels  = settings_get_bool(a->cfg, "show_labels", 1);
+    a->show_contours = settings_get_bool(a->cfg, "show_contours", 1);
     a->voice_on     = settings_get_bool(a->cfg, "voice_on", 1);
     a->mode         = settings_get_int(a->cfg, "mode", 0);
     a->max_class    = settings_get_int(a->cfg, "max_class", 4);
@@ -309,6 +311,7 @@ void app_persist_settings(App *a)
     settings_set_bool(a->cfg, "show_panel",  a->show_panel);
     settings_set_bool(a->cfg, "show_poi",    a->show_poi);
     settings_set_bool(a->cfg, "show_labels", a->show_labels);
+    settings_set_bool(a->cfg, "show_contours", a->show_contours);
     settings_set_bool(a->cfg, "voice_on",    a->voice_on);
     settings_set_int(a->cfg,  "mode",        a->mode);
     settings_set_int(a->cfg,  "font_size",   a->font_size);
@@ -1131,6 +1134,18 @@ static void paint_frame(Raster *rs, App *a, PaintStats *st)
         if (s->has_features)
             paint_lines(rs, &a->view, &s->nodes, &s->lines, &s->polyrefs,
                        &s->line_bbox, st);
+    }
+    /* 等高线：独立于线/面要素，叠加在路网之上、地名之下。受 show_contours 门控。 */
+    if (a->show_contours) {
+        for (int i = 0; i < a->ms.n; i++) {
+            MapSrc *s = &a->ms.srcs[i];
+            if (!bbox_hits(s->bbox, vb)) continue;
+            if (s->dup_of >= 0) continue;
+            if (!s->loaded) continue;
+            if (s->has_contours)
+                paint_contours(rs, &a->view, &s->contours, &s->contour_polyrefs,
+                               &s->contour_pts, &s->contour_bbox, st);
+        }
     }
     TICK(ms_lines);
     if (a->font) {

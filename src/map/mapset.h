@@ -27,6 +27,13 @@ typedef struct {
     int       has_restr;
     NMBinFile lines, areas, polyrefs;   /* 线/面要素（旧目录可没有） */
     int       has_features;             /* 三者齐备才为 1 */
+    /* ---- 等高线（SRTM 生成，可选）----
+     * 三件套与 lines/areas 平级：contours.bin（记录，类 lines）+ contour_polyrefs.bin
+     * （u32 顶点下标序列）+ contour_pts.bin（独立顶点池 lat/lon e7）。
+     * 不进 OSM 导入管线，由 gen_contours 直接产出；与 disp tile 无关（整省一份）。 */
+    NMBinFile contours, contour_polyrefs, contour_pts;
+    int       has_contours;             /* 三者齐备才为 1 */
+    int32_t  *contour_bbox;            /* 等高线缓存（paint_contours 懒填，nc*4 个 i32） */
     /* ★ 显示层的"来源"：0 = 从 nmbin 打开（默认）；1 = 从 PBF 运行时解码。
      * 两种模式下 lines/areas/polyrefs 的内容**逐字节相同**（8 省实测），
      * 所以渲染端不区分，只看 has_features。 */

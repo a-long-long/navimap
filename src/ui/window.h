@@ -159,6 +159,7 @@ typedef struct {
      * 由 chrome.c 写入、window.c 的 chrome_act 消费。 */
     int           show_poi;        /* POI 图标开关 */
     int           show_labels;     /* 地名标注开关 */
+    int           show_contours;   /* 等高线开关（SRTM 生成，受设置面板 / O 键控制） */
     int           settings_open;   /* 设置面板是否展开（仅 SDL 自绘 chrome） */
     int           settings_row;    /* 面板命中行：>=0 schema 下标，-1 关闭，-2 重置全部 */
     int           settings_btn;    /* 命中按钮：0=左/− 1=右/+ 2=行体（切换） */
