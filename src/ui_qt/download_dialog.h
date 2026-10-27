@@ -11,6 +11,7 @@ class QLineEdit;
 class QProgressBar;
 class QPushButton;
 class QTextEdit;
+class QCheckBox;
 class QNetworkAccessManager;
 class QNetworkReply;
 class QProcess;
@@ -65,6 +66,7 @@ private:
     QString        currentPath() const;   /* 选中叶子的 geofabrik 路径（枝为空） */
     QString        currentUrl()  const;   /* 完整下载 URL */
     QString        currentName() const;   /* 文件名（不含扩展名），如 gansu */
+    void           runContoursGeneration(); /* 生成等高线（若 m_contourCb 勾选） */
 
     QTreeWidget   *m_tree  = nullptr;
     QLabel        *m_info  = nullptr;
@@ -73,6 +75,7 @@ private:
     QTextEdit     *m_log   = nullptr;
     QPushButton   *m_dl    = nullptr;
     QPushButton   *m_copy  = nullptr;
+    QCheckBox          *m_contourCb = nullptr;  /* "同时生成 SRTM 等高线" 勾选框 */
     QPushButton   *m_close = nullptr;
 
     QNetworkAccessManager *m_nam   = nullptr;

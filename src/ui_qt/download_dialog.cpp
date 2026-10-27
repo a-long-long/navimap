@@ -7,6 +7,7 @@
 #include <QProgressBar>
 #include <QPushButton>
 #include <QTextEdit>
+#include <QCheckBox>
 #include <QVBoxLayout>
 #include <QHBoxLayout>
 #include <QNetworkAccessManager>
@@ -61,6 +62,7 @@ DownloadDialog::DownloadDialog(const QString &sourcesDir, const QString &repoRoo
     m_dl   = new QPushButton(QString::fromUtf8("下载并转换")); m_dl->setEnabled(false);
     m_copy = new QPushButton(QString::fromUtf8("复制下载链接")); m_copy->setEnabled(false);
     m_close= new QPushButton(QString::fromUtf8("关闭"));
+    m_contourCb = new QCheckBox(QString::fromUtf8("同时生成 SRTM 等高线"));
 
     connect(m_tree, &QTreeWidget::itemSelectionChanged, this, &DownloadDialog::onSelChanged);
     connect(m_dl,    &QPushButton::clicked, this, &DownloadDialog::startDownload);
@@ -75,6 +77,8 @@ DownloadDialog::DownloadDialog(const QString &sourcesDir, const QString &repoRoo
     rv->addWidget(m_url);
     rv->addWidget(m_prog);
     rv->addWidget(m_log, 1);
+    rv->addWidget(m_contourCb);
+    rv->addSpacing(6);
     auto *hb = new QHBoxLayout;
     hb->addWidget(m_dl); hb->addWidget(m_copy); hb->addStretch(1); hb->addWidget(m_close);
     rv->addLayout(hb);
@@ -542,9 +546,114 @@ void DownloadDialog::onConvertFinished(int code, QProcess::ExitStatus)
     if (code == 0) {
         m_log->append(QString::fromUtf8("转换完成 ✓ 地图已就绪。"));
         if (m_onFinished) m_onFinished(m_dlName);
+        // 生成等高线（如果用户勾选了）
+        if (m_contourCb && m_contourCb->isChecked()) {
+            runContoursGeneration();
+        }
     } else {
         m_log->append(QString::fromUtf8("转换失败（exit %1）。可在终端手动运行 scripts/sync_maps.sh 查看详情。").arg(code));
+    /* 运行等高线生成（若工具可用）*/
+void DownloadDialog::runContoursGeneration()
+{
+    // 省目录路径
+    QString provDir = m_repo + "/products/graph/" + m_dlName;
+    
+    // 用 pbf_info 获取 PBF 的 bbox
+    QString pbfPath = m_sources + "/" + m_dlName + "-latest.osm.pbf";
+    if (!QFile::exists(pbfPath)) {
+        m_log->append(QString::fromUtf8("  [等高线] PBF 文件不存在，跳过生成。"));
+        return;
     }
-    m_dl->setEnabled(true); m_copy->setEnabled(true);
-    if (m_proc) { m_proc->deleteLater(); m_proc = nullptr; }
+    
+    // 检查 pbf_info 工具是否存在
+    QString pbfInfo = m_repo + "/build/tools/pbf_info.exe";
+    if (!QFile::exists(pbfInfo)) {
+        m_log->append(QString::fromUtf8("  [等高线] pbf_info 工具未编译，跳过生成。"));
+        return;
+    }
+    
+    QProcess proc;
+    proc.setWorkingDirectory(m_repo);
+    proc.start(pbfInfo, QStringList() << pbfPath);
+    if (!proc.waitForFinished(5000)) {
+        m_log->append(QString::fromUtf8("  [等高线] pbf_info 运行超时，跳过生成。"));
+        return;
+    }
+    
+    // 解析输出，寻找 "bbox_observed"（由 pbf_info 输出）
+    QByteArray out = proc.readAllStandardOutput();
+    QList<QByteArray> lines = out.split('\n');
+    double lat0 = 0.0, lon0 = 0.0, lat1 = 0.0, lon1 = 0.0;
+    bool found = false;
+    for (const QByteArray &line : lines) {
+        if (line.startsWith("bbox_observed")) {
+            QList<QByteArray> parts = line.split(' ');
+            if (parts.size() >= 6) {
+                lat0 = parts[2].toDouble() / 1e9;
+                lon0 = parts[3].toDouble() / 1e9;
+                lat1 = parts[4].toDouble() / 1e9;
+                lon1 = parts[5].toDouble() / 1e9;
+                found = true;
+                break;
+            }
+        }
+    }
+    if (!found) {
+        m_log->append(QString::fromUtf8("  [等高线] 无法从 PBF 提取 bbox，跳过生成。"));
+        return;
+    }
+    m_log->append(QString::fromUtf8("  [等高线] 区域范围：%1,%2 – %3,%4")
+                  .arg(lat0, 0, 'f', 4).arg(lon0, 0, 'f', 4)
+                  .arg(lat1, 0, 'f', 4).arg(lon1, 0, 'f', 4));
+    
+    // 创建 SRTM 缓存目录（在项目根下）
+    QString srtmDir = m_repo + "/srtm_cache";
+    if (!QDir().mkpath(srtmDir)) {
+        m_log->append(QString::fromUtf8("  [等高线] 无法创建 SRTM 缓存目录，跳过生成。"));
+        return;
+    }
+    
+    // 等高线可执行文件路径
+    QString contourExe = m_repo + "/build/gen_contours.exe";
+    if (!QFile::exists(contourExe)) {
+        m_log->append(QString::fromUtf8("  [等高线] gen_contours 工具未编译，跳过生成。"));
+        return;
+    }
+    
+    m_log->append(QString::fromUtf8("  [等高线] 正在生成等高线（自动下载 SRTM DEM）…"));
+    // 构造命令
+    QString bboxStr = QString("%1,%2,%3,%4").arg(lat0).arg(lon0).arg(lat1).arg(lon1);
+    QStringList args;
+    args << "--out-dir=" + provDir
+         << "--hgt-dir=" + srtmDir
+         << "--bbox=" + bboxStr
+         << "--interval=20"
+         << "--index=100"
+         << "--download";  // 自动下载
+    
+    QProcess genProc;
+    genProc.setWorkingDirectory(m_repo);
+    genProc.start(contourExe, args);
+    connect(&genProc, &QProcess::readyReadStandardOutput,
+            [this, &genProc]() {
+                m_log->append(QString::fromUtf8("  [等高线] %1").arg(
+                    QString::fromLocal8Bit(genProc.readAllStandardOutput()).trimmed()));
+            });
+    connect(&genProc, &QProcess::readyReadStandardError,
+            [this, &genProc]() {
+                m_log->append(QString::fromUtf8("  [等高线]⚠ %1").arg(
+                    QString::fromLocal8Bit(genProc.readAllStandardError()).trimmed()));
+            });
+    if (!genProc.waitForFinished(120000)) {  // 2 分钟超时
+        m_log->append(QString::fromUtf8("  [等高线] 生成超时（2 分钟），已强制停止。"));
+        genProc.kill();
+        return;
+    }
+    int rc = genProc.exitCode();
+    if (rc == 0) {
+        m_log->append(QString::fromUtf8("  [等高线] 生成完成 ✓ 地图目录已包含等高线数据。"));
+    } else {
+        m_log->append(QString::fromUtf8("  [等高线] 生成失败（exit %1）。可在命令行手动运行：%2 %3")
+                      .arg(rc).arg(QFileInfo(contourExe).fileName()).arg(args.join(" ")));
+    }
 }
