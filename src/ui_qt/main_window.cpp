@@ -597,6 +597,41 @@ void MainWindow::buildMenus()
            [this]() { favCenter(); });
     addAct(mgpx, QStringLiteral("轨迹 / 收藏面板"), QKeySequence(), this,
            [this]() { toggleTrackPanel(); });
+
+    /* 显示 / 播报开关：原 SDL 设置面板承载的开关，#88 拆 SDL 壳后由 Qt 菜单接管。
+     * 三个均可勾选，勾选态与对应快捷键（语音=V 键）同步，与 O 键等高线同理。
+     * 字段由 app_persist_settings 在退出时落盘，这里只切运行时值 + 请求重绘。 */
+    QMenu *mset = menuBar()->addMenu(QStringLiteral("设置(&P)"));
+    {
+        QAction *act = mset->addAction(QStringLiteral("语音播报"));
+        act->setCheckable(true);
+        act->setChecked(m_a->voice_on);
+        connect(act, &QAction::triggered, this, [this, act]() {
+            m_a->voice_on = act->isChecked() ? 1 : 0;
+            m_a->need_redraw = 1;
+        });
+        m_voiceAct = act;
+    }
+    {
+        QAction *act = mset->addAction(QStringLiteral("POI 图标"));
+        act->setCheckable(true);
+        act->setChecked(m_a->show_poi);
+        connect(act, &QAction::triggered, this, [this, act]() {
+            m_a->show_poi = act->isChecked() ? 1 : 0;
+            m_a->need_redraw = 1;
+        });
+        m_poiAct = act;
+    }
+    {
+        QAction *act = mset->addAction(QStringLiteral("地名标注"));
+        act->setCheckable(true);
+        act->setChecked(m_a->show_labels);
+        connect(act, &QAction::triggered, this, [this, act]() {
+            m_a->show_labels = act->isChecked() ? 1 : 0;
+            m_a->need_redraw = 1;
+        });
+        m_labelsAct = act;
+    }
 }
 
 /* ---------------- 顶栏：搜索按钮 + 模式页签 + 路线摘要 ----------------
@@ -1551,6 +1586,11 @@ void MainWindow::handleKey(int key)
     case Qt::Key_O:
         m_a->show_contours = !m_a->show_contours;
         if (m_contourAct) m_contourAct->setChecked(m_a->show_contours);
+        m_a->need_redraw = 1;
+        break;
+    case Qt::Key_V:
+        m_a->voice_on = !m_a->voice_on;
+        if (m_voiceAct) m_voiceAct->setChecked(m_a->voice_on);
         m_a->need_redraw = 1;
         break;
     default:
