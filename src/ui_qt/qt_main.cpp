@@ -16,6 +16,9 @@
  */
 #include <QApplication>
 #include <QImage>
+#include <QFileDialog>
+#include <QMessageBox>
+#include <QDir>
 
 #include <cstdio>
 #include <cstring>
@@ -44,6 +47,22 @@ static int parse_ll(const char *s, double *lat, double *lon)
     *lat = atof(buf);
     *lon = atof(sp + 1);
     return 0;
+}
+
+/* 判定一个目录是否为有效地图目录：单省（含 nodes.bin）或图集（子目录含
+ * manifest.txt / nodes.bin）。与 mapset_load 的判定一致，用于双击场景自动
+ * 回退解析地图路径。 */
+static bool is_graph_dir(const char *path)
+{
+    QDir d(QString::fromUtf8(path));
+    if (!d.exists()) return false;
+    if (d.exists(QStringLiteral("nodes.bin"))) return true;
+    for (QString s : d.entryList(QDir::Dirs | QDir::NoDotAndDotDot)) {
+        QDir sd(d.filePath(s));
+        if (sd.exists(QStringLiteral("manifest.txt")) ||
+            sd.exists(QStringLiteral("nodes.bin"))) return true;
+    }
+    return false;
 }
 
 int main(int argc, char **argv)
@@ -205,10 +224,70 @@ int main(int argc, char **argv)
      * 进程纹丝不动，只能 SIGKILL）。现在不碰 SDL，这个坑整个消失：
      * Qt 的信号处理是 Qt 自己的，与 SDL 无关。 */
 
+    /* ★ 双击 exe 时工作目录 = exe 所在目录，默认相对路径 products/graph/beijing
+     * 解析不到 ⇒ app_init 直接 return 1、窗口根本没建出来，用户只看到"点了没反应"。
+     * 这里按候选回退解析出真实地图目录：显式 --graph → 相对 cwd → 从 exe 目录
+     * 向上各层找 products/graph/beijing → 扫描图集 → NAVMAP_GRAPH 环境变量 →
+     * 最后弹窗让用户选。都不中才报错退出（且弹框而非静默退出）。 */
+    static char g_graph_buf[4096];
+    const char *resolved = graph;
+    {
+        QString chosen;
+        if (is_graph_dir(graph)) {
+            chosen = QString::fromUtf8(graph);
+        } else {
+            QString exeDir = QCoreApplication::applicationDirPath();
+            QStringList cands;
+            cands << QDir::currentPath() + "/products/graph/beijing";
+            for (int k = 0; k <= 3; k++) {
+                QString base = exeDir;
+                for (int u = 0; u < k; u++) base += "/..";
+                cands << base + "/products/graph/beijing";
+                QDir gd(base + "/products/graph");
+                if (gd.exists()) {
+                    for (QString pv : gd.entryList(QDir::Dirs | QDir::NoDotAndDotDot))
+                        if (is_graph_dir(gd.filePath(pv).toUtf8().constData()))
+                            cands << gd.filePath(pv);
+                }
+            }
+            if (const char *env = getenv("NAVMAP_GRAPH"))
+                cands << QString::fromLocal8Bit(env);
+            for (const QString &c : cands)
+                if (is_graph_dir(c.toUtf8().constData())) { chosen = c; break; }
+        }
+        if (chosen.isEmpty()) {
+            QFileDialog dlg(nullptr,
+                QStringLiteral("选择地图目录（含 nodes.bin 的省目录，或其父级的图集根）"),
+                QString(), QString());
+            dlg.setFileMode(QFileDialog::Directory);
+            dlg.setOption(QFileDialog::ShowDirsOnly, true);
+            if (dlg.exec() == QDialog::Accepted) {
+                QString sel = dlg.selectedFiles().value(0);
+                if (is_graph_dir(sel.toUtf8().constData())) chosen = sel;
+            }
+        }
+        if (chosen.isEmpty()) {
+            QMessageBox::critical(nullptr, QStringLiteral("NavMap"),
+                QStringLiteral("未找到地图数据。请用 start.bat 启动，或在命令行加 --graph=<地图目录>。"));
+            return 1;
+        }
+        QByteArray ba = chosen.toUtf8();
+        if ((size_t)ba.size() + 1 < sizeof(g_graph_buf)) {
+            memcpy(g_graph_buf, ba.constData(), (size_t)ba.size() + 1);
+            resolved = g_graph_buf;
+        }
+        fprintf(stderr, "[qt-main] 地图目录: %s\n", resolved);
+    }
+
     /* C 核心生命周期：app_init 装图集/字体/搜索库；qt_ui=1 让 paint_frame
      * 跳过自绘 chrome（由 Qt 控件承担）。 */
     App a;
-    if (app_init(&a, graph, w, h, font, font_size, &ab) != 0) return 1;
+    if (app_init(&a, resolved, w, h, font, font_size, &ab) != 0) {
+        QMessageBox::critical(nullptr, QStringLiteral("NavMap"),
+            QString::fromUtf8(resolved) +
+            QStringLiteral("\n地图加载失败，请检查路径与数据完整性（需含 nodes.bin 或省子目录）。"));
+        return 1;
+    }
     a.qt_ui = 1;
     /* --ovl-alpha：默认 75% 已在 app_init 里读好，这里再覆盖（先于窗口构造，
      * 这样 MainWindow 一建好浮层就按这个值挂 QGraphicsOpacityEffect）。 */
