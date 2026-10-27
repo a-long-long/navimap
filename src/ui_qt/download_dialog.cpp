@@ -552,7 +552,10 @@ void DownloadDialog::onConvertFinished(int code, QProcess::ExitStatus)
         }
     } else {
         m_log->append(QString::fromUtf8("转换失败（exit %1）。可在终端手动运行 scripts/sync_maps.sh 查看详情。").arg(code));
-    /* 运行等高线生成（若工具可用）*/
+    }
+}
+
+/* 运行等高线生成（若工具可用）*/
 void DownloadDialog::runContoursGeneration()
 {
     // 省目录路径
@@ -565,8 +568,10 @@ void DownloadDialog::runContoursGeneration()
         return;
     }
     
-    // 检查 pbf_info 工具是否存在
-    QString pbfInfo = m_repo + "/build/tools/pbf_info.exe";
+    // 检查 pbf_info 工具是否存在（构建产物在 build/ 顶层，历史曾在 build/tools/，两者都探）
+    QString pbfInfo = m_repo + "/build/pbf_info.exe";
+    if (!QFile::exists(pbfInfo))
+        pbfInfo = m_repo + "/build/tools/pbf_info.exe";
     if (!QFile::exists(pbfInfo)) {
         m_log->append(QString::fromUtf8("  [等高线] pbf_info 工具未编译，跳过生成。"));
         return;
