@@ -220,6 +220,7 @@ int main(int argc, char **argv)
 {
     g_argv0 = argv[0];
     const char *out_dir = NULL, *hgt_dir = NULL, *bbox = NULL;
+    const char *prefix = "contour";  // 默认前缀
     double lat0 = 0, lon0 = 0, lat1 = 0, lon1 = 0;
     double interval = 20.0, index_int = 100.0;
 
@@ -230,6 +231,7 @@ int main(int argc, char **argv)
         else if (!strncmp(a, "--bbox=", 7))        bbox = a + 7;
         else if (!strncmp(a, "--interval=", 11))   interval = atof(a + 11);
         else if (!strncmp(a, "--index=", 8))       index_int = atof(a + 8);
+        else if (!strncmp(a, "--prefix=", 9))      prefix = a + 9;  // 新增前缀参数
         else if (!strcmp(a, "--download"))         g_do_download = 1;
         else if (!strncmp(a, "--download=", 11))   { g_do_download = 1; g_dl_mirror = a + 11; }
         else if (!strncmp(a, "--downloader=", 13)) g_dl_override = a + 13;
@@ -237,6 +239,7 @@ int main(int argc, char **argv)
             fprintf(stderr,
                 "用法: gen_contours --out-dir=DIR --hgt-dir=DIR "
                 "--bbox=lat0,lon0,lat1,lon1 [--interval=M] [--index=M]\n"
+                "      --prefix=NAME      输出文件前缀（默认 \"contour\" → NAME_contours.bin）\n"
                 "      --download[=MIRROR]  缺失的 SRTM 瓦片自动从 MIRROR 下载"
                 "（默认 AWS skadi），需 python3 与网络\n"
                 "      --downloader=PATH    指定 download_srtm.py 路径（默认自动探测）\n");
@@ -351,11 +354,11 @@ int main(int argc, char **argv)
     fprintf(stderr, "DEM 网格 %dx%d，高程范围 %.0f..%.0f m，间隔 %.0f m（计曲线 %.0f m）\n",
             nx, ny, hmin, hmax, interval, index_int);
 
-    /* ---------- 3. 准备输出三件套 ---------- */
+    /* ---------- 3. 准备输出三件套（使用前缀命名） ---------- */
     char p_cont[4096], p_poly[4096], p_pts[4096];
-    snprintf(p_cont, sizeof(p_cont), "%s/contours.bin", out_dir);
-    snprintf(p_poly, sizeof(p_poly), "%s/contour_polyrefs.bin", out_dir);
-    snprintf(p_pts,  sizeof(p_pts),  "%s/contour_pts.bin", out_dir);
+    snprintf(p_cont, sizeof(p_cont), "%s/%s_contours.bin", out_dir, prefix);
+    snprintf(p_poly, sizeof(p_poly), "%s/%s_contour_polyrefs.bin", out_dir, prefix);
+    snprintf(p_pts,  sizeof(p_pts),  "%s/%s_contour_pts.bin", out_dir, prefix);
 
     NMBinWriter *wc  = nmbin_create(p_cont, NMBIN_KIND_CONTOURS, NM_CONTOUR_BYTES, "gen_contours");
     NMBinWriter *wp  = nmbin_create(p_poly, NMBIN_KIND_CONTOUR_POLYREFS, 4, "gen_contours");
@@ -635,8 +638,8 @@ int main(int argc, char **argv)
               nmbin_finalize(wpt) == 0) ? 0 : 1;
     if (overflow)
         fprintf(stderr, "警告：顶点数达到上限，等高线被截断（调大 MAX_PTS 或加粗 --interval）\n");
-    fprintf(stderr, "等高线生成完成：%llu 条，%llu 个顶点 → %s\n",
-            (unsigned long long)total_contours, (unsigned long long)total_pts, out_dir);
+    fprintf(stderr, "等高线生成完成：%llu 条，%llu 个顶点 → %s (前缀: %s)\n",
+            (unsigned long long)total_contours, (unsigned long long)total_pts, out_dir, prefix);
 
 cleanup:
     if (tiles) { for (int k = 0; k < ntiles; k++) free(tiles[k].g); free(tiles); }

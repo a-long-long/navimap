@@ -606,10 +606,11 @@ void DownloadDialog::runContoursGeneration()
                   .arg(lat0, 0, 'f', 4).arg(lon0, 0, 'f', 4)
                   .arg(lat1, 0, 'f', 4).arg(lon1, 0, 'f', 4));
     
-    // 首先检查是否已存在等高线文件（避免重复生成）
-    QString contPath = provDir + "/contours.bin";
+    // 首先检查是否已存在该区域的等高线文件（避免重复生成）
+    QString contPath = provDir + "/" + m_dlName + "_contours.bin";
+    if (!QFile::exists(contPath)) contPath = provDir + "/contours.bin";  // 旧命名回退
     if (QFile::exists(contPath)) {
-        m_log->append(QString::fromUtf8("  [等高线] 检测到已存在等高线文件，跳过生成。"));
+        m_log->append(QString::fromUtf8("  [等高线] 检测到已存在 %1，跳过生成。").arg(contPath));
         return;
     }
     
@@ -639,13 +640,8 @@ void DownloadDialog::runContoursGeneration()
         }
     }
     
-    if (totalTiles > 0 && existingTiles == totalTiles) {
-        // 所有需要的 SRTM 瓦片都已存在，跳过下载，只生成等高线
-        m_log->append(QString::fromUtf8("  [等高线] 区域内 %1 张 SRTM 瓦片已全部存在，仅生成等高线。").arg(totalTiles));
-        args.removeOne("--download");
-    } else if (existingTiles > 0) {
-        m_log->append(QString::fromUtf8("  [等高线] 区域内 %1/%2 张 SRTM 瓦片已存在，只下载缺失的瓦片。").arg(existingTiles).arg(totalTiles));
-    }
+    // 瓦片去重：仅当 existingTiles < totalTiles 才在下方追加 --download（见后文）
+
     
     QString contourExe = m_repo + "/build/gen_contours.exe";
     if (!QFile::exists(contourExe)) {
@@ -661,15 +657,16 @@ void DownloadDialog::runContoursGeneration()
         m_log->append(QString::fromUtf8("  [等高线] 区域内 %1/%2 张 SRTM 瓦片已存在，自动下载缺失的瓦片。").arg(existingTiles).arg(totalTiles));
     }
     
-    // 构造命令
+    // 构造命令：等高线文件按区域命名（<name>_contours.bin 等）
     QString bboxStr = QString("%1,%2,%3,%4").arg(lat0).arg(lon0).arg(lat1).arg(lon1);
     QStringList args;
     args << "--out-dir=" + provDir
          << "--hgt-dir=" + srtmDir
+         << "--prefix=" + m_dlName
          << "--bbox=" + bboxStr
          << "--interval=20"
          << "--index=100";
-    
+
     // 只有当有缺失瓦片时才添加 --download 参数
     if (existingTiles < totalTiles) {
         args << "--download";  // 自动下载缺失瓦片

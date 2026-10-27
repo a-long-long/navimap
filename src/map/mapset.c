@@ -355,17 +355,28 @@ static int src_open_files(MapSrc *s)
             fprintf(stderr, "图集: %s 无 lines/areas/polyrefs，只显示路网\n", s->name);
     }
 
-    /* 等高线（SRTM 生成）可选：三件套齐备才算有。与 features 平级，不依赖 disp tile。 */
+    /* 等高线（SRTM 生成）可选：三件套齐备才算有。与 features 平级，不依赖 disp tile。
+       命名按区域：<name>_contours.bin 等；回退无前缀 contours.bin（旧/测试产物）。 */
     s->has_contours = 1;
-    snprintf(p, sizeof(p), "%s/contours.bin", s->dir);
-    if (nmbin_open(p, &s->contours) != 0) s->has_contours = 0;
-    if (s->has_contours) {
-        snprintf(p, sizeof(p), "%s/contour_polyrefs.bin", s->dir);
-        if (nmbin_open(p, &s->contour_polyrefs) != 0) s->has_contours = 0;
+    char pc[4096], pp[4096], pt[4096];
+    snprintf(pc, sizeof(pc), "%s/%s_contours.bin",        s->dir, s->name);
+    snprintf(pp, sizeof(pp), "%s/%s_contour_polyrefs.bin", s->dir, s->name);
+    snprintf(pt, sizeof(pt), "%s/%s_contour_pts.bin",      s->dir, s->name);
+    if (nmbin_open(pc, &s->contours) != 0) {
+        snprintf(pc, sizeof(pc), "%s/contours.bin", s->dir);
+        if (nmbin_open(pc, &s->contours) != 0) s->has_contours = 0;
     }
     if (s->has_contours) {
-        snprintf(p, sizeof(p), "%s/contour_pts.bin", s->dir);
-        if (nmbin_open(p, &s->contour_pts) != 0) s->has_contours = 0;
+        if (nmbin_open(pp, &s->contour_polyrefs) != 0) {
+            snprintf(pp, sizeof(pp), "%s/contour_polyrefs.bin", s->dir);
+            if (nmbin_open(pp, &s->contour_polyrefs) != 0) s->has_contours = 0;
+        }
+    }
+    if (s->has_contours) {
+        if (nmbin_open(pt, &s->contour_pts) != 0) {
+            snprintf(pt, sizeof(pt), "%s/contour_pts.bin", s->dir);
+            if (nmbin_open(pt, &s->contour_pts) != 0) s->has_contours = 0;
+        }
     }
     if (s->has_contours)
         fprintf(stderr, "图集: %s 有等高线（%llu 条）\n", s->name,
