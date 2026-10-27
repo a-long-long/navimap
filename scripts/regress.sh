@@ -324,6 +324,18 @@ run tile_guard_needed "TILE-SELFTEST-DIFF-OK" "$BUILD/tile_selftest" --graph="$G
 
 run tile_xcheck "不一致的坐标 : 0" "$BUILD/tile_xcheck"
 run coverage    "覆盖=有路网"  "$BUILD/coverage_cli"
+
+# 无图区提示的"反查 + 一键下载"整链（2026-10-27）：
+# 把"这里没有地图数据"改成"这是哪儿（国家/省/市/区）+ 该下哪一块 + 预选到那一项"，
+# 其中两处会**静默失效**：反查结果没传到弹窗、selectByLeaf 找不到叶子。
+# 两者都不报错、界面照样打开，只是按钮点下去停在树根 ⇒ 必须做成退出码。
+# 用 (30,110)（重庆方向、未下载）当样本：它不在 8 省任何 bbox 内，必然走反查分支。
+if [ -x "$BUILD/navmap_qt" ] || [ -x "$BUILD/navmap_qt.exe" ]; then
+    run nomap_prompt "nomap_select" qt_run \
+        "$(exefile2 "$BUILD/navmap_qt")" --graph="$GRAPH" \
+        --lat=30.0 --lon=110.0 --zoom=10 --w=1280 --h=800 \
+        --shot=/tmp/navimap_regress/nomap.png --shot-nomap
+fi
 run search      "查询 中关村"  "$BUILD/search_cli"
 # 地名库自检：每条 place 都得能反查出 bigram，kind 不许超出 PLK_ROAD。
 # 以前缺这条判据的代价是实打实踩到的：places_build 刚加上路名那一刻，库里

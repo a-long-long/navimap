@@ -981,15 +981,37 @@ static void app_update_coverage(App *a)
 
     char prov[64];
     a->cov_state = mapset_coverage(&a->ms, lat, lon, 3000, prov, sizeof(prov));
+    memset(&a->cov_place, 0, sizeof(a->cov_place));
+    a->cov_place.nearest_km = -1;
+
     if (a->cov_state == COV_NONE || a->cov_state == COV_BBOX_ONLY) {
-        coverage_hint(&a->ms, lat, lon, a->cov_state, prov,
+        /* 反查"这是哪儿"：省一级走 map 层（bbox + 省名表），市/区走 render 层
+         * （地名库）。★ 只在无图区做——有图时不查库，浏览热路径零开销。 */
+        coverage_locate(&a->ms, lat, lon, &a->cov_place);
+        if (a->has_places)
+            label_nearest_admin(&a->places, lat, lon,
+                                a->cov_place.city, sizeof(a->cov_place.city),
+                                a->cov_place.district, sizeof(a->cov_place.district));
+
+        coverage_hint(&a->ms, lat, lon, a->cov_state, &a->cov_place,
                       a->cov_hint, sizeof(a->cov_hint));
-        /* 完整指引（含下载来源）打一次就够，横幅上只放浓缩版 */
+        /* 完整指引打一次就够，横幅上只放浓缩版 */
         fprintf(stderr, "\n[无地图区域] %s\n", a->cov_hint);
     } else {
         a->cov_hint[0] = '\0';
     }
 }
+
+/* 公开入口：见 window.h。内部实现就是 paint_frame 用的那个 app_update_coverage，
+ * 但那个是 static 且要求"位置变了才重算"。自检/截图路径是"位置没变也要拿到结果"，
+ * 所以这里先把 cov_checked 清掉强制重算一次（成本可接受：只在显式调用时发生）。 */
+void app_refresh_coverage(App *a)
+{
+    if (!a) return;
+    a->cov_checked = 0;
+    app_update_coverage(a);
+}
+
 
 
 
@@ -1291,7 +1313,7 @@ static void paint_frame(Raster *rs, App *a, PaintStats *st)
     app_update_coverage(a);
     if (a->cov_state == COV_NONE || a->cov_state == COV_BBOX_ONLY)
         paint_nomap_banner(rs, &a->view, a->font, a->font_size + 8, a->cov_state,
-                           app_ovl_a(a, OVL_NOMAP));
+                           &a->cov_place, app_ovl_a(a, OVL_NOMAP));
 
     /* nav-desktop 风格 chrome（自绘标题栏 / 顶栏 / 右栏 / 导航栏 /
        步骤面板 / 主菜单 / 无图卡片 / 比例尺 / 指北针 / 昼夜）叠在最上层；

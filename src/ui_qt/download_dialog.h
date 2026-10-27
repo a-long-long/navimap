@@ -32,6 +32,16 @@ public:
     DownloadDialog(const QString &sourcesDir, const QString &repoRoot,
                    QWidget *parent = nullptr);
 
+    /* 预选一个地区（按 Geofabrik 叶子名，如 "hebei"）：展开祖先、选中叶子并滚动到
+     * 可见处。供"浏览到无图区 → 反查省 → 一键下载该地区"使用。
+     * 返回是否找到；找不到时对话框保持原样（调用方据此决定提示语）。 */
+    bool selectByLeaf(const QString &leaf);
+
+    /* 当前选中项的叶子名（如 "chongqing"）；无选中返回空串。
+     * 自检用：只验"selectByLeaf 返回 true"不够——同名叶子可能出现在别的国家，
+     * 真正要钉的是"选中的那一行就是期望的那个"。 */
+    QString currentLeafForTest() const;
+
     /* 下载 + 转换都成功后回调；name 为省/地区名（不含扩展名），便于提示。
      * 用回调代替 Qt 信号槽：本项目 Qt 前端刻意不用 Q_OBJECT，免去 moc 步骤。 */
     void setOnFinished(std::function<void(const QString &name)> cb)

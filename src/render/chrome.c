@@ -385,15 +385,20 @@ static void draw_nomap(Raster *rs, App *a, const CLay *L)
     ovl_begin(a, OVL_NOMAP);
     (void)L;
     if (a->ms.n != 0) return;     /* 仅图集完全没加载时显示 */
-    int w = 360, h = 96, x = (L->w - w)/2, y = (L->h - h)/2;
+    int w = 400, h = 116, x = (L->w - w)/2, y = (L->h - h)/2;
     rfill(rs, x, y, w, h, 252, 253, 255, 250);
     rstroke(rs, x, y, w, h, 230, 120, 90, 255);
     if (!a->font) return;
     rtext(a->font, rs, x + 20, y + 16, "未加载地图数据", 200, 70, 50, 0);
+    /* 图集为空 ⇒ 没有任何省 bbox，反查无从谈起（coverage_locate 会返回空）。
+     * 所以这里只能给"去哪儿下"的通用指引；具体到某省的定位由浏览到无图区时
+     * 的横幅 / Qt 弹窗负责（那条路径才有坐标可反查）。 */
     rtext(a->font, rs, x + 20, y + 44,
-              "把 *.osm.pbf 放进 sources/ 后运行", 90, 96, 110, 0);
+              "打开『地图 → 下载全球地图』选国家/省份", 90, 96, 110, 0);
     rtext(a->font, rs, x + 20, y + 66,
-              "scripts/sync_maps.sh", 90, 96, 110, 0);
+              "下载后会自动转换并加载，无需手工跑脚本", 90, 96, 110, 0);
+    rtext(a->font, rs, x + 20, y + 88,
+              "也可以把 *.osm.pbf 放进 sources/ 让它自愈重建", 90, 96, 110, 0);
 }
 
 static void draw_scale(Raster *rs, App *a, const CLay *L)

@@ -340,6 +340,40 @@ QString DownloadDialog::currentName() const
     return p.section('/', -1);   /* asia/china/gansu → gansu */
 }
 
+/* 按叶子名预选：递归找 path 最后一段 == leaf 的节点（如 "hebei" 命中
+ * asia/china/hebei）。找到后展开所有祖先再选中，否则 setCurrentItem 选中了
+ * 也看不见。setCurrentItem 会发 itemSelectionChanged → onSelChanged（幂等，
+ * 只刷 URL/信息行），所以不重复调用。 */
+bool DownloadDialog::selectByLeaf(const QString &leaf)
+{
+    if (leaf.isEmpty() || !m_tree) return false;
+
+    std::function<QTreeWidgetItem *(QTreeWidgetItem *)> walk =
+        [&](QTreeWidgetItem *parent) -> QTreeWidgetItem * {
+        for (int i = 0; i < parent->childCount(); i++) {
+            QTreeWidgetItem *it = parent->child(i);
+            QString path = it->data(0, ROLE_PATH).toString();
+            if (!path.isEmpty() && path.section('/', -1) == leaf) return it;
+            if (QTreeWidgetItem *sub = walk(it)) return sub;   /* 枝继续往下找 */
+        }
+        return nullptr;
+    };
+
+    QTreeWidgetItem *hit = walk(m_tree->invisibleRootItem());
+    if (!hit) return false;
+
+    for (QTreeWidgetItem *p = hit->parent(); p; p = p->parent()) p->setExpanded(true);
+    m_tree->setCurrentItem(hit);
+    m_tree->scrollToItem(hit);
+    return true;
+}
+
+QString DownloadDialog::currentLeafForTest() const
+{
+    QString p = currentPath();
+    return p.isEmpty() ? QString() : p.section('/', -1);
+}
+
 void DownloadDialog::onSelChanged()
 {
     QString p = currentPath();

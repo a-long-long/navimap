@@ -3,6 +3,7 @@
 
 #include <stdint.h>
 #include "map/map_view.h"
+#include "map/coverage.h"        /* CovPlace：无图横幅要报"这是哪儿" */
 #include "route/route.h"
 #include "route/maneuver.h"
 #include "search/search.h"
@@ -54,11 +55,12 @@ void paint_nav_banner(Raster *rs, const MapView *v, Font *f, Font *fbig,
                       int line_h, int line_h_big, const NavBanner *b,
                       uint8_t ovl_a);
 
-/* 顶部横幅："这里没有地图数据" + 去哪下载、下载后怎么办。
+/* 顶部横幅："这里没有地图数据" + **这是哪儿**（国家/省/市/区）+ 该下哪一块。
  * cov_state 取自 mapset_coverage（COV_NONE / COV_BBOX_ONLY 才值得画）。
+ * pl 是反查结果（coverage_locate + label_nearest_admin 拼成），可为 NULL。
  * f 为 NULL 时（--font=none）只画色条，不画字——提示不能因为没字体就消失。 */
 void paint_nomap_banner(Raster *rs, const MapView *v, Font *f, int line_h,
-                        int cov_state, uint8_t ovl_a);
+                        int cov_state, const CovPlace *pl, uint8_t ovl_a);
 
 /* 右下角缩放按钮。返回 0/1 表示 (px,py) 是否落在按钮里，供窗口命中测试；
    画和判定用同一份坐标，避免"画在这、点在那"。 */

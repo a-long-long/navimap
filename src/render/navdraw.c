@@ -546,24 +546,59 @@ void paint_nav_panel(Raster *rs, const RouteResult *rr,
 }
 
 void paint_nomap_banner(Raster *rs, const MapView *v, Font *f, int line_h,
-                        int cov_state, uint8_t ovl_a)
+                        int cov_state, const CovPlace *pl, uint8_t ovl_a)
 {
     if (!rs || !v) return;
     if (cov_state != COV_NONE && cov_state != COV_BBOX_ONLY) return;
     g_ovl_a = ovl_a;   /* 顶部无图提示条整体半透明 */
 
-    const char *lines[3];
-    int n = 3;
-    if (cov_state == COV_NONE) {
-        lines[0] = "该区域没有地图数据";
-        lines[1] = "下载该地区的 OSM 数据（*.osm.pbf）放进 sources/，再运行 ./scripts/sync_maps.sh";
-        lines[2] = "https://download.geofabrik.de/asia/china/";
+    /* 四行：状态 / 这是哪儿 / 该下哪块 / 怎么装。
+     * 文案与 coverage_hint() 同源（都读 CovPlace），避免两处说法漂移；横幅这里
+     * 只是压短——C 核心自绘 + 离屏审计都走这条路径。 */
+    const char *country  = (pl && pl->country[0])  ? pl->country  : "";
+    const char *prov     = (pl && pl->prov[0])     ? pl->prov     : "";
+    const char *city     = (pl && pl->city[0])     ? pl->city     : "";
+    const char *district = (pl && pl->district[0]) ? pl->district : "";
+
+    char l0[160], l1[256], l2[192], l3[192];
+
+    snprintf(l0, sizeof(l0), "%s",
+             (cov_state == COV_NONE)
+                 ? "该区域没有地图数据"
+                 : "附近没有路网数据（水域 / 尚未采集的区域）");
+
+    /* "这是哪儿"：查到几层报几层；在已加载省之外时补上离最近省有多远 */
+    if (pl && pl->nearest_km > 1.0) {
+        snprintf(l1, sizeof(l1), "位置：%s%s%s，距最近的省（%s）约 %.0f km",
+                 country, *country ? " · " : "", "已加载范围之外",
+                 *prov ? prov : "—", pl->nearest_km);
+    } else if (*country || *prov || *city || *district) {
+        snprintf(l1, sizeof(l1), "位置：%s%s%s%s%s%s%s",
+                 country,  *country  ? " · " : "",
+                 prov,     *prov     ? " · " : "",
+                 city,     *city     ? " · " : "",
+                 district);
     } else {
-        lines[0] = "附近没有路网数据（水域 / 尚未采集的区域）";
-        lines[1] = "如需该区域地图，下载 OSM 数据放进 sources/ 后运行 ./scripts/sync_maps.sh";
-        lines[2] = "https://extract.bbbike.org/";
+        snprintf(l1, sizeof(l1), "位置：无法判断（未加载任何省份数据）");
     }
 
+    if (pl && pl->dl_label[0])
+        snprintf(l2, sizeof(l2), "建议下载：%s", pl->dl_label);
+    else
+        snprintf(l2, sizeof(l2), "建议下载：在『地图 → 下载全球地图』里按国家/省份选择");
+
+    /* ★ 不写"按 X 键"：D 已被昼夜切换占用、Ctrl+D 是加收藏，横幅不该引导用户
+     *   去按一个会触发别的事的键。统一指向菜单项（Qt 前端里那是真入口）。 */
+    snprintf(l3, sizeof(l3), "『地图 → 下载全球地图』可直接定位到该地区");
+
+    const char *lines[4] = { l0, l1, l2, l3 };
+    int n = 4;
+
+    /* ★ 行距与高度都按 paint_nav_banner 的同一套口径算（那里是被视觉验收过的）：
+     *   基线从 line_h 起（不是从 7 起，否则首行会顶到边框外），
+     *   每行步进 line_h + 6（不是 +4，否则中文行会互相压住）。
+     *   历史坑：初版照抄了旧的 3 行版 `y+7 + i*(line_h+4)`，4 行时行距不够、
+     *   首行还超出底板 —— 截图里能直接看到文字压在边框上。 */
     int wmax = 0;
     if (f) for (int i = 0; i < n; i++) {
         int tw = font_text_w(f, lines[i]);
@@ -571,10 +606,16 @@ void paint_nomap_banner(Raster *rs, const MapView *v, Font *f, int line_h,
     } else {
         wmax = 520;
     }
+    int row_step = line_h + 6;
     int bw = wmax + 24;
     if (bw > v->w - 40) bw = v->w - 40;
     if (bw < 200) bw = 200;
-    int bh = (f ? n * (line_h + 4) : 2 * line_h) + 14;
+    /* ★ 首行基线的算法：font_draw_a 的 y 是**基线**，字形往上长一个字高。
+     *   line_h 传进来是 font_size + 8 ⇒ 字高 ≈ line_h - 8。
+     *   所以基线至少要 by + (line_h - 8) 才不让首行顶出底板；
+     *   取 by + line_h 再多留几像素余量。实测 by+10 会把首行裁掉上半截。 */
+    int top_pad = line_h;                  /* 首行基线相对底板顶的偏移 */
+    int bh = top_pad + (n - 1) * row_step + 12;
     int bx = (v->w - bw) / 2;
     int by = 12;
 
@@ -583,7 +624,7 @@ void paint_nomap_banner(Raster *rs, const MapView *v, Font *f, int line_h,
 
     if (!f) return;
     for (int i = 0; i < n; i++) {
-        int ly = by + 7 + i * (line_h + 4);
+        int ly = by + top_pad + i * row_step;   /* 基线 */
         if (i == 0) ntext(f, rs, bx + 12, ly, lines[0], 255, 208, 96, 0);
         else        ntext(f, rs, bx + 12, ly, lines[i], 238, 240, 245, 0);
     }

@@ -115,12 +115,15 @@ typedef struct {
 
     /* ---- 无地图区域提示 ----
      * "关注点"（模拟导航中=车头位置，否则=视口中心）落到没有数据的地方时，
-     * 顶部弹一条横幅告诉用户去哪下载。cov_lat/lon 是上次检查的位置：
-     * 细判要查瓦片索引，位置没实质移动就不重算。 */
+     * 顶部弹一条横幅告诉用户**这是哪儿**（国家/省/市/区）以及**该下哪一块**。
+     * cov_lat/lon 是上次检查的位置：细判要查瓦片索引，位置没实质移动就不重算。
+     * cov_place 由 map 层的 coverage_locate()（国家/省）+ render 层的
+     * label_nearest_admin()（市/区）拼成；只在无图区算一次，不在渲染热路径。 */
     int           cov_state;      /* COV_* ，来自 mapset_coverage */
     int           cov_checked;
     double        cov_lat, cov_lon;
-    char          cov_hint[1024]; /* 完整提示（含下载来源），位置变化时打印一次 */
+    CovPlace      cov_place;      /* 反查结果（国家/省/市/区 + 建议下载项） */
+    char          cov_hint[1024]; /* 完整提示，位置变化时打印一次 */
     /* ---- 图集根目录 + 自愈选项（供"下载新省后无需重启重加载"）---- */
     char          graph_dir[1024]; /* app_init 传入的图集根（products/graph 或单省目录） */
     AutoBuildOpt  ab;              /* 自愈选项（reload 时用同一份） */
@@ -205,6 +208,13 @@ int  app_init(App *a, const char *graph_dir, int w, int h,
 /* 下载新省并转换后，重扫 graph_dir 重新加载图集（不重启程序）。
    返回 0 成功；-1 失败（此时 a->ms 已被释放，调用方应退出或重建 App）。 */
 int  app_reload_maps(App *a);
+
+/* 立刻重算"关注点有没有地图 + 这是哪儿"（cov_state / cov_place / cov_hint）。
+ * 平时由 paint_frame 自动调用，只需在渲染前主动触发一次的场景才用得到：
+ *   · --shot 截图路径不跑主循环 ⇒ 不画帧就拿不到反查结果，弹窗会读到空值；
+ *   · 自检要断言反查结果时，不该依赖"上一帧恰好画过"。
+ * 位置移动不足约 450 m 时内部直接返回（不会每次真去查瓦片）。 */
+void app_refresh_coverage(App *a);
 
 /* 浮层透明度 → 0~255 的 alpha（绘制侧统一走它，别各写一遍换算）。
  * ★ 用 pct*255/100 而不是 pct*2.55：关键是 **100 必须严格等于 255**（不透明），

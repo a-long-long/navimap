@@ -1317,6 +1317,81 @@ void MainWindow::openTrackPanelForShot()
     layoutOverlays();
 }
 
+/* 无图区弹窗 + 预选下载的无头验收（--shot-nomap）。
+ *
+ * 为什么要它：本轮把"无图区提示"从一句"没有数据"改成"反查国家/省/市/区 +
+ * 一键下载该地区"，其中最容易静默失效的两处是
+ *   ① 反查结果没传到弹窗（两处各读一份数据，天然会漂移）；
+ *   ② DownloadDialog::selectByLeaf 找不到叶子（拼音/路径对不上就静默不选）。
+ * 两者都不会报错、界面照样打开，只是"按钮点下去停在树根，用户还得自己翻"。
+ * 所以这里把它们做成断言：失败返回非 0，进 regress 就能拦住。
+ */
+int MainWindow::runNoMapPromptForShot()
+{
+    int fails = 0;
+
+    /* ★ 必须先主动刷一次：--shot 不跑主循环，paint_frame 没被调用过，
+     *   cov_place 还是全零（实测就这么踩到：反查全 "—"，看着像反查坏了，
+     *   其实是"还没算"）。这里强制重算，把"没算"和"算错"区分开。 */
+    app_refresh_coverage(m_a);
+    const CovPlace &pl = m_a->cov_place;
+
+    /* 有图区跑这个自检没有意义（本来就不该弹窗，反查也按设计留空）。
+     * 明确区分"没到无图区"与"反查坏了"——否则在有图的位置跑一次就一片假 FAIL。 */
+    if (m_a->cov_state != COV_NONE && m_a->cov_state != COV_BBOX_ONLY) {
+        printf("nomap_reverse  跳过（当前位置有地图数据，cov_state=%d）\n",
+               m_a->cov_state);
+        return 0;
+    }
+
+    printf("nomap_reverse  国家=%s 省=%s%s 市=%s 区=%s 距离=%.0fkm 建议=%s\n",
+           pl.country[0] ? pl.country : "—",
+           pl.prov[0] ? pl.prov : "—", pl.prov_guessed ? "(推断)" : "",
+           pl.city[0] ? pl.city : "—",
+           pl.district[0] ? pl.district : "—",
+           pl.nearest_km,
+           pl.dl_label[0] ? pl.dl_label : "—");
+
+    /* ① 反查必须给出"该下哪一块"，否则"一键下载"无从谈起 */
+    if (!pl.dl_name[0] || !pl.dl_label[0]) {
+        printf("ASSERT-FAIL    反查没给出建议下载项（dl_name/dl_label 为空）\n");
+        fails++;
+    }
+
+    /* ② 弹窗里必须出现反查到的地名（证明弹窗读的是同一份 CovPlace） */
+    const QString prompt = nomapPromptTextForTest();
+    if (pl.prov[0] && !prompt.contains(QString::fromUtf8(pl.prov))) {
+        printf("ASSERT-FAIL    弹窗里没出现反查到的省「%s」：%s\n",
+               pl.prov, prompt.toUtf8().constData());
+        fails++;
+    }
+
+    /* ③ selectByLeaf 必须真的命中并选中（这是"一键下载"的关键一步） */
+    if (pl.dl_name[0]) {
+        showDownloadDialog();
+        const QString leaf = QString::fromLatin1(pl.dl_name);
+        if (!m_dlDlg || !m_dlDlg->selectByLeaf(leaf)) {
+            printf("ASSERT-FAIL    下载对话框里找不到地区叶子「%s」\n",
+                   pl.dl_name);
+            fails++;
+        } else {
+            /* 选中之后，"将下载的省名"应当等于反查给出的叶子名 —— 这一条把
+             * "找到了但选错行"也拦住（同名叶子在别的国家是可能的）。 */
+            const QString got = m_dlDlg->currentLeafForTest();
+            if (got != leaf) {
+                printf("ASSERT-FAIL    预选到了错的行：期望「%s」实得「%s」\n",
+                       pl.dl_name, got.toUtf8().constData());
+                fails++;
+            } else {
+                printf("nomap_select   预选命中 %s（GitHub 路径已就绪）\n", pl.dl_name);
+            }
+        }
+    }
+    return fails;
+}
+
+
+
 /* 调试/自检用的几何读取器 */
 QSize MainWindow::canvasSize() const
 {
@@ -1493,24 +1568,69 @@ void MainWindow::showDownloadDialog()
     m_dlDlg->activateWindow();
 }
 
+/* 无图区弹窗的文案（抽出来是为了可断言：--shot-nomap 要检查它真的带上了
+ * 反查结果，否则"弹窗一套说法、横幅另一套"这种漂移没人能发现）。 */
+QString MainWindow::nomapPromptTextForTest() const
+{
+    const CovPlace &pl = m_a->cov_place;
+    QStringList parts;
+    if (pl.country[0])  parts << QString::fromUtf8(pl.country);
+    if (pl.prov[0])     parts << QString::fromUtf8(pl.prov);
+    if (pl.city[0])     parts << QString::fromUtf8(pl.city);
+    if (pl.district[0]) parts << QString::fromUtf8(pl.district);
+    QString where = parts.isEmpty() ? QString::fromUtf8("未知区域")
+                                    : parts.join(QString::fromUtf8(" · "));
+    if (pl.nearest_km > 1.0) {
+        where += QString::fromUtf8("（距最近的省份约 %1 km）")
+                     .arg(pl.nearest_km, 0, 'f', 0);
+    }
+
+    QString text = QString::fromUtf8("您已浏览到已下载地图之外（%.4f, %.4f）。\n"
+                                     "该区域没有路网数据，地图为空。\n\n"
+                                     "这是哪儿：%2\n")
+                       .arg(m_a->cov_lat, 0, 'f', 4)
+                       .arg(m_a->cov_lon, 0, 'f', 4)
+                       .arg(where);
+    if (pl.dl_label[0])
+        text += QString::fromUtf8("建议下载：%1").arg(QString::fromUtf8(pl.dl_label));
+    else
+        text += QString::fromUtf8("按国家/省份在下载列表里选择对应地区");
+    return text;
+}
+
 void MainWindow::promptDownloadOutside()
 {
+    /* 反查结果来自 C 核心（coverage_locate 给国家/省，label_nearest_admin 给市/区），
+     * 与地图顶部横幅读的是**同一份** CovPlace ⇒ 不会出现"弹窗说河北、横幅说北京"。 */
+    const CovPlace &pl = m_a->cov_place;
+
     QDialog *d = new QDialog(this);
     d->setAttribute(Qt::WA_DeleteOnClose);       /* 关掉即销毁，不挡后续弹窗 */
     d->setWindowTitle(QString::fromUtf8("需要下载地图"));
     auto *v = new QVBoxLayout(d);
-    QLabel *lab = new QLabel(QString::fromUtf8(
-        "您已浏览到已下载地图之外（位置 %.4f, %.4f）。\n该区域没有路网数据，地图为空。\n\n是否现在下载对应地区的地图？")
-        .arg(m_a->cov_lat, 0, 'f', 4).arg(m_a->cov_lon, 0, 'f', 4));
+
+    QLabel *lab = new QLabel(nomapPromptTextForTest());
     lab->setWordWrap(true);
+    lab->setTextInteractionFlags(Qt::TextSelectableByMouse);
+
     auto *hb = new QHBoxLayout;
-    auto *go    = new QPushButton(QString::fromUtf8("去下载地图"));
+    /* 反查到了具体地区 ⇒ 按钮直接把它预选好，省掉"打开列表再自己找一遍"；
+     * 没反查到（境外/省表未覆盖）⇒ 退化成只打开列表。 */
+    auto *go = new QPushButton(pl.dl_label[0]
+                                   ? QString::fromUtf8("下载 %1").arg(QString::fromUtf8(pl.dl_label))
+                                   : QString::fromUtf8("去下载地图"));
     auto *later = new QPushButton(QString::fromUtf8("稍后"));
-    connect(go, &QPushButton::clicked, d, [this, d]() { d->accept(); showDownloadDialog(); });
+    const QString leaf = QString::fromLatin1(pl.dl_name);
+    connect(go, &QPushButton::clicked, d, [this, d, leaf]() {
+        d->accept();
+        showDownloadDialog();
+        /* 对话框已建好并 show 过，这里再预选——selectByLeaf 内部会展开祖先+滚动 */
+        if (!leaf.isEmpty() && m_dlDlg) m_dlDlg->selectByLeaf(leaf);
+    });
     connect(later, &QPushButton::clicked, d, &QDialog::reject);
     hb->addStretch(1); hb->addWidget(go); hb->addWidget(later);
     v->addWidget(lab); v->addLayout(hb);
-    d->resize(360, 180);
+    d->resize(420, 220);
     d->show();           /* 非模态：地图还能看，用户可先观察再决定 */
 }
 

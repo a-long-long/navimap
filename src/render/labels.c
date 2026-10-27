@@ -69,6 +69,84 @@ void label_cache_free(LabelCache *lc)
     memset(lc, 0, sizeof(*lc));
 }
 
+/* ===========================================================================
+ * 最近的上级行政区（"这是哪儿"）
+ *
+ * 地名库里没有省界/市界多边形，只有带坐标的点 ⇒ 只能报"最近的那个市/区"。
+ * 这在城区完全够用；在省界、市界附近可能报成邻省邻市的，调用方要按"大致
+ * 位置"来用（头文件里已就此写明）。
+ *
+ * 性能：place 表有 place_latlon(lat,lon) 索引，所以先用 lat/lon 的矩形粗筛
+ * （能走索引），再在候选集里按真实平方距离排序。半径按级放大，一找到就停 ——
+ * 城区第一级 0.08°(≈9 km) 就命中，荒漠才会一路放大到 6°。
+ * 只在"无图区提示"这条路径上调用（位置移动 450 m 才重算一次），不在渲染热路径。
+ * ========================================================================= */
+static int nearest_admin_point(sqlite3 *db, double lat, double lon,
+                               int kind_lo, int kind_hi, char *out, size_t cap)
+{
+    if (out && cap) out[0] = '\0';
+    if (!db) return 0;
+
+    /* 经度方向按 cos(lat) 压缩后再比距离，否则中纬度会把东西方向拉长 30% */
+    double clat = cos(lat * 3.14159265358979 / 180.0);
+    double kx = clat * clat;
+    if (kx < 0.01) kx = 0.01;
+
+    /* 半径只放大到约 67 km（0.6°）：再大就会在无人区报出几百公里外的市名，
+     * 那种"反查结果"比不报更有害。城区第一级 0.08°(≈9 km) 基本就命中了。 */
+    static const double RADII[] = { 0.08, 0.25, 0.60 };
+    const char *sql =
+        "SELECT name FROM place"
+        " WHERE kind BETWEEN ?1 AND ?2"
+        "   AND lat BETWEEN ?3 AND ?4 AND lon BETWEEN ?5 AND ?6"
+        " ORDER BY (lat-?7)*(lat-?7) + (lon-?8)*(lon-?8)*?9"
+        " LIMIT 1";
+
+    for (size_t r = 0; r < sizeof(RADII) / sizeof(RADII[0]); r++) {
+        double d = RADII[r];
+        sqlite3_stmt *st = NULL;
+        if (sqlite3_prepare_v2(db, sql, -1, &st, NULL) != SQLITE_OK) return 0;
+        sqlite3_bind_int(st, 1, kind_lo);
+        sqlite3_bind_int(st, 2, kind_hi);
+        sqlite3_bind_double(st, 3, lat - d);
+        sqlite3_bind_double(st, 4, lat + d);
+        sqlite3_bind_double(st, 5, lon - d);
+        sqlite3_bind_double(st, 6, lon + d);
+        sqlite3_bind_double(st, 7, lat);
+        sqlite3_bind_double(st, 8, lon);
+        sqlite3_bind_double(st, 9, kx);
+
+        int rc = sqlite3_step(st);
+        int got = 0;
+        if (rc == SQLITE_ROW) {
+            const unsigned char *nm = sqlite3_column_text(st, 0);
+            if (nm && out && cap) {
+                snprintf(out, cap, "%s", (const char *)nm);
+                got = 1;
+            }
+        }
+        sqlite3_finalize(st);
+        if (got) return 1;
+    }
+    return 0;
+}
+
+int label_nearest_admin(LabelCache *lc, double lat, double lon,
+                        char *city, size_t ccap,
+                        char *district, size_t dcap)
+{
+    if (city && ccap)     city[0]     = '\0';
+    if (district && dcap) district[0] = '\0';
+    if (!lc || !lc->db) return 0;
+    if (lat < -90.0 || lat > 90.0 || lon < -180.0 || lon > 180.0) return 0;
+
+    /* 市级：kind 1 = 省会/直辖市城区，2 = 地级市 */
+    int n = nearest_admin_point(lc->db, lat, lon, 1, 2, city, ccap);
+    /* 区县级：kind 3 = 县 / 镇 */
+    n += nearest_admin_point(lc->db, lat, lon, 3, 3, district, dcap);
+    return n;
+}
+
 /* zoom → 地名等级上限。kind 语义按抽取约定：数值小 = 行政级别高。
  * 2026-10-24 调整：把 POI（kind 11）的可见起点从 z15 下探到 z13，
  * 让"POI 图标"在城区尺度就能看到（此前只在 z15 才画到，基本看不见）。 */

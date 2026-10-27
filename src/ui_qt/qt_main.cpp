@@ -60,6 +60,7 @@ int main(int argc, char **argv)
     int ui_test = 0;                  /* --ui-test：跑无头 UI 自检后退出 */
     int shot_search = 0;              /* --shot-search：截图前先展开搜索框 */
     int shot_track = 0;               /* --shot-track：截图前先展开轨迹/收藏面板 */
+    int shot_nomap = 0;               /* --shot-nomap：截图前跑无图区弹窗+预选下载自检 */
     int shot_offscreen = 0;           /* --shot-offscreen：离屏像素审计，在 C 核心
                                          缓冲上跑共享审计后退出 */
     const char *datum = NULL;         /* --datum=wgs84|cgcs2000|bj54|xa80：坐标系（命令行优先） */
@@ -125,6 +126,7 @@ int main(int argc, char **argv)
         else if (strcmp(argv[i], "--ui-test") == 0) ui_test = 1;
         else if (strcmp(argv[i], "--shot-search") == 0) shot_search = 1;
         else if (strcmp(argv[i], "--shot-track") == 0) shot_track = 1;
+        else if (strcmp(argv[i], "--shot-nomap") == 0) shot_nomap = 1;
         else if (strcmp(argv[i], "--shot-offscreen") == 0) shot_offscreen = 1;
         else if (strncmp(argv[i], "--pbf-display=", 14) == 0) {
             pbf_display = argv[i] + 14;
@@ -342,6 +344,13 @@ int main(int argc, char **argv)
         if (grid) win.setShowGrid(true);
         if (shot_search) win.expandSearchForShot();   /* 展开搜索框，便于看展开态 */
         if (shot_track) win.openTrackPanelForShot();  /* 展开轨迹/收藏面板 */
+        /* 无图区：弹窗 + 预选下载。这一条必须在 win.show() 之前跑不了——
+         * 它要读 C 核心算好的 cov_place（tick() 里才更新），所以先 processEvents
+         * 跑一帧让覆盖率检查落地，再做断言。 */
+        if (shot_nomap) {
+            for (int i = 0; i < 3; i++) QApplication::processEvents();
+            shot_fail |= win.runNoMapPromptForShot();
+        }
         win.resize(w, h);
         win.show();
         QApplication::processEvents();   /* 让布局/首帧完成 */
