@@ -18,7 +18,13 @@
  *
  * 用法：
  *   gen_contours --out-dir=products/graph/beijing --hgt-dir=/tmp/srtm \
- *       --bbox=39.4,115.4,41.1,117.5 [--interval=20] [--index=100]
+ *       --bbox=39.4,115.4,41.1,117.5 [--interval=20] [--index=100] \
+ *       [--download[=MIRROR]]
+ *
+ * 加 --download 时，hgt-dir 里缺失的 1° 瓦片会从 SRTM 镜像（默认 AWS skadi）
+ * 自动下载并解压（依赖 python3 + 网络，交给 tools/download_srtm.py 处理）；
+ * 缺 python3 / 无网络时降级为"跳过缺失瓦片"，不致命。不带 --download 时行为
+ * 与从前完全一致（仅读本地 .hgt）。本工具本身仍为零链接期外部依赖。
  */
 
 #include <stdio.h>
@@ -113,6 +119,84 @@ static float sample_tile(const float *g, int N, double rowf, double colf)
     return (float)(top * (1.0 - tr) + bot * tr);
 }
 
+/* ============================ 自动下载 DEM ============================ */
+/* 仅当 --download 时启用：借用 tools/download_srtm.py（纯标准库，零第三方依赖）
+ * 预取 bbox 内缺失的 SRTM .hgt 瓦片，再走既有加载逻辑。无 python3 / 无网络时
+ * 降级为现有的"跳过缺失瓦片"行为，不会致命退出。 */
+
+static const char *g_argv0       = "";     /* 存 argv[0]，用于定位 tools/ 下的脚本 */
+static int        g_do_download  = 0;      /* --download 开关 */
+static const char *g_dl_mirror   = NULL;   /* --download=URL 的可选镜像 */
+static const char *g_dl_override = NULL;   /* --downloader=PATH 显式脚本路径 */
+
+static int file_exists(const char *p)
+{
+    FILE *f = fopen(p, "rb");
+    if (!f) return 0;
+    fclose(f);
+    return 1;
+}
+
+/* 解析 argv0 的目录（兼容 / 与 \\），写入 buf 并返回。 */
+static const char *argv0_dir(const char *argv0, char *buf, size_t n)
+{
+    const char *last = NULL, *p = argv0;
+    for (; *p; p++) if (*p == '/' || *p == '\\') last = p;
+    if (!last) { buf[0] = '.'; buf[1] = '\0'; return buf; }
+    size_t len = (size_t)(last - argv0);
+    if (len >= n) len = n - 1;
+    memcpy(buf, argv0, len);
+    buf[len] = '\0';
+    return buf;
+}
+
+/* 解析 download_srtm.py 的路径（优先级：--downloader > 环境变量 > 候选位置）。 */
+static const char *find_downloader(const char *override)
+{
+    static char buf[4096];
+    if (override && *override) return override;
+    const char *e = getenv("GEN_CONTOURS_PY");
+    if (e && *e && file_exists(e)) return e;
+
+    char d[4096];
+    argv0_dir(g_argv0, d, sizeof(d));
+    snprintf(buf, sizeof(buf), "%s/../tools/download_srtm.py", d);
+    if (file_exists(buf)) return buf;
+    if (file_exists("tools/download_srtm.py")) return "tools/download_srtm.py";
+    const char *root = getenv("NAVIMAP_ROOT");
+    if (root && *root) {
+        snprintf(buf, sizeof(buf), "%s/tools/download_srtm.py", root);
+        if (file_exists(buf)) return buf;
+    }
+    return NULL;
+}
+
+/* 调起 download_srtm.py 预取缺失瓦片。成功/降级返回 0，找不到脚本返回 -1。 */
+static int run_download(const char *bbox, const char *hgt_dir,
+                        const char *mirror, const char *dl_override)
+{
+    const char *script = find_downloader(dl_override);
+    if (!script) {
+        fprintf(stderr, "  [警告] 未找到 download_srtm.py，跳过自动下载。"
+                        "请用 --downloader=路径 指定，或确认 tools/download_srtm.py 存在。\n");
+        return -1;
+    }
+    char cmd[8192];
+    int off = snprintf(cmd, sizeof(cmd),
+                       "python3 \"%s\" --bbox=\"%s\" --out=\"%s\"",
+                       script, bbox, hgt_dir);
+    if (mirror && *mirror)
+        snprintf(cmd + off, sizeof(cmd) - (size_t)off, " --mirror=\"%s\"", mirror);
+    fprintf(stderr, "  [自动下载 DEM] %s\n", cmd);
+    int rc = system(cmd);
+    if (rc != 0) {
+        fprintf(stderr, "  [警告] 自动下载 DEM 返回非零（rc=%d）：需 python3 与网络。"
+                        "将仅使用本地已有的 .hgt 瓦片。\n", rc);
+        return -1;
+    }
+    return 0;
+}
+
 /* ============================ 主流程 ============================ */
 
 /* 解析 "lat0,lon0,lat1,lon1" */
@@ -134,6 +218,7 @@ typedef struct { int32_t qx, qy; int seg; int which; int next; } HNode;
 
 int main(int argc, char **argv)
 {
+    g_argv0 = argv[0];
     const char *out_dir = NULL, *hgt_dir = NULL, *bbox = NULL;
     double lat0 = 0, lon0 = 0, lat1 = 0, lon1 = 0;
     double interval = 20.0, index_int = 100.0;
@@ -145,10 +230,16 @@ int main(int argc, char **argv)
         else if (!strncmp(a, "--bbox=", 7))        bbox = a + 7;
         else if (!strncmp(a, "--interval=", 11))   interval = atof(a + 11);
         else if (!strncmp(a, "--index=", 8))       index_int = atof(a + 8);
+        else if (!strcmp(a, "--download"))         g_do_download = 1;
+        else if (!strncmp(a, "--download=", 11))   { g_do_download = 1; g_dl_mirror = a + 11; }
+        else if (!strncmp(a, "--downloader=", 13)) g_dl_override = a + 13;
         else if (!strcmp(a, "-h") || !strcmp(a, "--help")) {
             fprintf(stderr,
                 "用法: gen_contours --out-dir=DIR --hgt-dir=DIR "
-                "--bbox=lat0,lon0,lat1,lon1 [--interval=M] [--index=M]\n");
+                "--bbox=lat0,lon0,lat1,lon1 [--interval=M] [--index=M]\n"
+                "      --download[=MIRROR]  缺失的 SRTM 瓦片自动从 MIRROR 下载"
+                "（默认 AWS skadi），需 python3 与网络\n"
+                "      --downloader=PATH    指定 download_srtm.py 路径（默认自动探测）\n");
             return 2;
         } else {
             fprintf(stderr, "未知参数: %s\n", a); return 2;
@@ -165,6 +256,9 @@ int main(int argc, char **argv)
     if (index_int <= 0) index_int = 100.0;
 
     /* ---------- 1. 收集并加载覆盖 bbox 的 1° 瓦片 ---------- */
+    if (g_do_download)
+        run_download(bbox, hgt_dir, g_dl_mirror, g_dl_override);
+
     int tlat_lo = (int)floor(lat0), tlat_hi = (int)floor(lat1);
     int tlon_lo = (int)floor(lon0), tlon_hi = (int)floor(lon1);
     int ntiles = 0;
