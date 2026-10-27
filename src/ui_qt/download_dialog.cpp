@@ -606,6 +606,13 @@ void DownloadDialog::runContoursGeneration()
                   .arg(lat0, 0, 'f', 4).arg(lon0, 0, 'f', 4)
                   .arg(lat1, 0, 'f', 4).arg(lon1, 0, 'f', 4));
     
+    // 首先检查是否已存在等高线文件（避免重复生成）
+    QString contPath = provDir + "/contours.bin";
+    if (QFile::exists(contPath)) {
+        m_log->append(QString::fromUtf8("  [等高线] 检测到已存在等高线文件，跳过生成。"));
+        return;
+    }
+    
     // 创建 SRTM 缓存目录（在项目根下）
     QString srtmDir = m_repo + "/srtm_cache";
     if (!QDir().mkpath(srtmDir)) {
@@ -613,14 +620,47 @@ void DownloadDialog::runContoursGeneration()
         return;
     }
     
-    // 等高线可执行文件路径
+    // 检查 bbox 覆盖的 SRTM 瓦片，判断是否全部已存在
+    int tlat_lo = (int)floor(lat0), tlat_hi = (int)floor(lat1);
+    int tlon_lo = (int)floor(lon0), tlon_hi = (int)floor(lon1);
+    int totalTiles = 0, existingTiles = 0;
+    for (int tlat = tlat_lo; tlat <= tlat_hi; tlat++) {
+        for (int tlon = tlon_lo; tlon <= tlon_hi; tlon++) {
+            totalTiles++;
+            QString ns = (tlat >= 0) ? "N" : "S";
+            QString ew = (tlon >= 0) ? "E" : "W";
+            QString tileName = QString("%1%2%3%4.hgt")
+                                  .arg(ns).arg(abs(tlat), 2, 10, QChar('0'))
+                                  .arg(ew).arg(abs(tlon), 3, 10, QChar('0'));
+            QString tilePath = srtmDir + "/" + tileName;
+            if (QFile::exists(tilePath) && QFileInfo(tilePath).size() > 1000) {
+                existingTiles++;
+            }
+        }
+    }
+    
+    if (totalTiles > 0 && existingTiles == totalTiles) {
+        // 所有需要的 SRTM 瓦片都已存在，跳过下载，只生成等高线
+        m_log->append(QString::fromUtf8("  [等高线] 区域内 %1 张 SRTM 瓦片已全部存在，仅生成等高线。").arg(totalTiles));
+        args.removeOne("--download");
+    } else if (existingTiles > 0) {
+        m_log->append(QString::fromUtf8("  [等高线] 区域内 %1/%2 张 SRTM 瓦片已存在，只下载缺失的瓦片。").arg(existingTiles).arg(totalTiles));
+    }
+    
     QString contourExe = m_repo + "/build/gen_contours.exe";
     if (!QFile::exists(contourExe)) {
         m_log->append(QString::fromUtf8("  [等高线] gen_contours 工具未编译，跳过生成。"));
         return;
     }
     
-    m_log->append(QString::fromUtf8("  [等高线] 正在生成等高线（自动下载 SRTM DEM）…"));
+    if (existingTiles == totalTiles) {
+        // 所有需要的 SRTM 瓦片都已存在，跳过下载，只生成等高线
+        m_log->append(QString::fromUtf8("  [等高线] 区域内 %1 张 SRTM 瓦片已全部存在，仅生成等高线。").arg(totalTiles));
+        // 不传 --download 参数，直接使用已有的瓦片生成
+    } else if (existingTiles > 0) {
+        m_log->append(QString::fromUtf8("  [等高线] 区域内 %1/%2 张 SRTM 瓦片已存在，自动下载缺失的瓦片。").arg(existingTiles).arg(totalTiles));
+    }
+    
     // 构造命令
     QString bboxStr = QString("%1,%2,%3,%4").arg(lat0).arg(lon0).arg(lat1).arg(lon1);
     QStringList args;
@@ -628,8 +668,12 @@ void DownloadDialog::runContoursGeneration()
          << "--hgt-dir=" + srtmDir
          << "--bbox=" + bboxStr
          << "--interval=20"
-         << "--index=100"
-         << "--download";  // 自动下载
+         << "--index=100";
+    
+    // 只有当有缺失瓦片时才添加 --download 参数
+    if (existingTiles < totalTiles) {
+        args << "--download";  // 自动下载缺失瓦片
+    }
     
     QProcess genProc;
     genProc.setWorkingDirectory(m_repo);
