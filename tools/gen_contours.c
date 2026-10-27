@@ -81,7 +81,7 @@ static int read_hgt(const char *path, int *outN, float **outGrid)
     if (!g) { free(raw); return -1; }
     for (long i = 0; i < (long)N * N; i++) {
         int16_t v = be16(raw + 2 * i);
-        g[i] = (v == -32768) ? NANF : (float)v;
+        g[i] = (v == -32768) ? nanf("") : (float)v;
     }
     free(raw);
     *outN = N; *outGrid = g;
@@ -92,7 +92,8 @@ static int read_hgt(const char *path, int *outN, float **outGrid)
 static float sample_tile(const float *g, int N, double rowf, double colf)
 {
     int r0 = (int)floor(rowf), c0 = (int)floor(colf);
-    if (r0 < 0) r0 = 0; if (c0 < 0) c0 = 0;
+    if (r0 < 0) r0 = 0;
+    if (c0 < 0) c0 = 0;
     int r1 = r0 + 1, c1 = c0 + 1;
     if (r1 > N - 1) r1 = N - 1;
     if (c1 > N - 1) c1 = N - 1;
@@ -103,7 +104,7 @@ static float sample_tile(const float *g, int N, double rowf, double colf)
     v[3] = g[(size_t)r1 * N + c1];
     int cnt = 0; float sum = 0.0f;
     for (int k = 0; k < 4; k++) if (!isnan(v[k])) { cnt++; sum += v[k]; }
-    if (cnt == 0) return NANF;
+    if (cnt == 0) return nanf("");
     float mean = sum / cnt;
     for (int k = 0; k < 4; k++) if (isnan(v[k])) v[k] = mean;
     double tr = rowf - r0, tc = colf - c0;
@@ -168,6 +169,8 @@ int main(int argc, char **argv)
     int tlon_lo = (int)floor(lon0), tlon_hi = (int)floor(lon1);
     int ntiles = 0;
     Tile *tiles = NULL;
+    float *H = NULL;
+    int rc = 1;
     for (int tlat = tlat_lo; tlat <= tlat_hi; tlat++) {
         for (int tlon = tlon_lo; tlon <= tlon_hi; tlon++) {
             char name[64];
@@ -209,12 +212,13 @@ int main(int argc, char **argv)
     double span_lat = lat1 - lat0, span_lon = lon1 - lon0;
     int nx = (int)ceil(span_lon / (1.0 / 1200.0)) + 1;
     int ny = (int)ceil(span_lat / (1.0 / 1200.0)) + 1;
-    if (nx < 2) nx = 2; if (ny < 2) ny = 2;
+    if (nx < 2) nx = 2;
+    if (ny < 2) ny = 2;
     if (nx > DEM_MAX_AXIS) nx = DEM_MAX_AXIS;
     if (ny > DEM_MAX_AXIS) ny = DEM_MAX_AXIS;
     double dx = span_lon / (nx - 1), dy = span_lat / (ny - 1);
 
-    float *H = (float *)malloc((size_t)nx * ny * sizeof(float));
+    H = (float *)malloc((size_t)nx * ny * sizeof(float));
     if (!H) { fprintf(stderr, "OOM\n"); goto cleanup; }
     for (int j = 0; j < ny; j++) {
         double lat = lat0 + j * dy;
@@ -222,7 +226,7 @@ int main(int argc, char **argv)
         for (int i = 0; i < nx; i++) {
             double lon = lon0 + i * dx;
             int tlon = (int)floor(lon);
-            float val = NANF;
+            float val = nanf("");
             if (tlat >= minLat && tlat < minLat + spanLat &&
                 tlon >= minLon && tlon < minLon + spanLon) {
                 int ti = tidx[(tlat - minLat) * spanLon + (tlon - minLon)];
@@ -240,7 +244,7 @@ int main(int argc, char **argv)
     }
 
     /* 高程范围（仅有限值） */
-    float hmin = NANF, hmax = NANF;
+    float hmin = nanf(""), hmax = nanf("");
     for (int k = 0; k < nx * ny; k++) {
         float v = H[k];
         if (isnan(v)) continue;
@@ -264,7 +268,9 @@ int main(int argc, char **argv)
     NMBinWriter *wpt = nmbin_create(p_pts,  NMBIN_KIND_CONTOUR_PTS, NM_CONTOUR_PT_BYTES, "gen_contours");
     if (!wc || !wp || !wpt) {
         fprintf(stderr, "无法创建输出文件（目录存在？）\n");
-        if (wc) nmbin_abort(wc); if (wp) nmbin_abort(wp); if (wpt) nmbin_abort(wpt);
+        if (wc) nmbin_abort(wc);
+        if (wp) nmbin_abort(wp);
+        if (wpt) nmbin_abort(wpt);
         goto cleanup;
     }
     nmbin_add_field(wc, "elev",    CF_ELEV,     NMT_U64, 8);
@@ -531,7 +537,7 @@ int main(int argc, char **argv)
         #undef MAX_PLINE_PTS
     }
 
-    int rc = (nmbin_finalize(wc) == 0 && nmbin_finalize(wp) == 0 &&
+    rc = (nmbin_finalize(wc) == 0 && nmbin_finalize(wp) == 0 &&
               nmbin_finalize(wpt) == 0) ? 0 : 1;
     if (overflow)
         fprintf(stderr, "警告：顶点数达到上限，等高线被截断（调大 MAX_PTS 或加粗 --interval）\n");
