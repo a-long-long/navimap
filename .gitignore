@@ -2,6 +2,7 @@
 build/
 build-san/
 build-*/
+build_rel/
 build2/
 build_test/
 cmake-build-*/
@@ -14,9 +15,15 @@ cmake-build-*/
 # 路由图 + 显示瓦片 + 地标表 + 反向索引 + 地名库，全部由 sync_maps.sh 生成。
 products/
 
+# ===== SRTM DEM 瓦片缓存：真实高程栅格，体积大，不入库 =====
+srtm_cache/
+
 # ===== 原始 OSM 数据：446 MB，从上游下载获得，不入库 =====
 # 保留的是"从哪下载"的信息，不是数据本身。
 sources/
+
+# ===== Release 发布包：二进制产物（exe+DLL+字体），由 scripts/build_release.sh 生成，不入库 =====
+dist/
 
 # ===== 回归截图 / 渲染产物 =====
 docs/shots/
