@@ -13,7 +13,10 @@
 #include <QNetworkRequest>
 #include <QNetworkReply>
 #include <QFile>
+#include <QFileInfo>
 #include <QDir>
+#include <QDateTime>
+#include <QMessageBox>
 #include <QProcess>
 #include <QUrl>
 #include <QApplication>
@@ -348,7 +351,8 @@ void DownloadDialog::onSelChanged()
         return;
     }
     m_url->setText(currentUrl());
-    m_info->setText(QString::fromUtf8("将下载：%1\n保存到：%2/%3-latest.osm.pbf")
+    m_info->setText(QString::fromUtf8("将下载：%1\n保存到：%2/%3-latest.osm.pbf"
+                    "\n（若本地已存在，会先比对远端；有更新则询问是否更新）")
                     .arg(currentName()).arg(m_sources).arg(currentName()));
     m_dl->setEnabled(true);
     m_copy->setEnabled(true);
@@ -370,6 +374,27 @@ void DownloadDialog::startDownload()
 
     m_dlName = currentName();
     m_target = m_sources + "/" + m_dlName + "-latest.osm.pbf";
+
+    /* 先查本地：pbf 已存在且非空 → 比对远端是否有更新，再决定是否下载。
+     * 与 SRTM 的"缺失才下载"一致；存在时不再盲目覆盖，有更新才询问用户。 */
+    if (QFile::exists(m_target) && QFileInfo(m_target).size() > 0) {
+        m_dl->setEnabled(false); m_copy->setEnabled(false);
+        m_log->append(QString::fromUtf8("本地已存在 %1。正在比对远端是否有更新…").arg(m_target));
+        QNetworkRequest req(currentUrl());
+#if QT_VERSION >= QT_VERSION_CHECK(5, 15, 0)
+        req.setAttribute(QNetworkRequest::RedirectPolicyAttribute,
+                         QNetworkRequest::NoLessSafeRedirectPolicy);
+#endif
+        QNetworkReply *r = m_nam->head(req);
+        connect(r, &QNetworkReply::finished, this, [this, r]() { onHeadFinished(r); });
+        return;
+    }
+
+    beginDownload();
+}
+
+void DownloadDialog::beginDownload()
+{
     m_log->append(QString::fromUtf8("开始下载：%1\n  → %2").arg(currentUrl(), m_target));
 
     m_dl->setEnabled(false); m_copy->setEnabled(false);
@@ -379,7 +404,7 @@ void DownloadDialog::startDownload()
     m_file = new QFile(m_target, this);
     if (!m_file->open(QIODevice::WriteOnly | QIODevice::Truncate)) {
         m_log->append(QString::fromUtf8("无法创建目标文件：%1").arg(m_target));
-        m_dl->setEnabled(true);
+        m_dl->setEnabled(true); m_copy->setEnabled(true);
         return;
     }
 
@@ -390,6 +415,52 @@ void DownloadDialog::startDownload()
     connect(m_reply, &QIODevice::readyRead, this, &DownloadDialog::onReadyRead);
     connect(m_reply, &QNetworkReply::finished, this,
             [this]() { onReplyFinished(m_reply); });
+}
+
+/* 本地已有 pbf 时，先发 HEAD 比对远端新鲜度：
+ *   - 比对失败（无网络/无法访问）→ 稳妥起见跳过下载；
+ *   - 远端无更新 → 跳过下载；
+ *   - 远端有更新 → 弹窗询问用户是否更新。 */
+void DownloadDialog::onHeadFinished(QNetworkReply *r)
+{
+    r->deleteLater();
+    m_dl->setEnabled(true); m_copy->setEnabled(true);
+
+    if (r->error() != QNetworkReply::NoError) {
+        m_log->append(QString::fromUtf8("无法比对远端（%1）。为稳妥起见保留本地文件，跳过下载。"
+                        "如需强制刷新，请先删除本地文件后重试。").arg(r->errorString()));
+        return;
+    }
+
+    bool remoteNewer = false;
+    QString lm = r->header(QNetworkRequest::LastModifiedHeader).toString();
+    if (!lm.isEmpty()) {
+        QDateTime remoteMod = QDateTime::fromString(lm, Qt::RFC2822Date);
+        if (remoteMod.isValid() && QFileInfo(m_target).lastModified() < remoteMod)
+            remoteNewer = true;
+    }
+    if (!remoteNewer) {
+        qint64 remoteSize = r->header(QNetworkRequest::ContentLengthHeader).toLongLong();
+        qint64 localSize  = QFileInfo(m_target).size();
+        if (remoteSize > 0 && remoteSize != localSize)
+            remoteNewer = true;
+    }
+
+    if (!remoteNewer) {
+        m_log->append(QString::fromUtf8("远端无更新（本地已是最新），跳过下载。"));
+        return;
+    }
+
+    QMessageBox::StandardButton ret = QMessageBox::question(
+        this, QString::fromUtf8("发现更新"),
+        QString::fromUtf8("本地已有 %1，远端存在更新版本。是否下载更新？\n（选择\"否\"将保留本地文件。）").arg(m_dlName),
+        QMessageBox::Yes | QMessageBox::No, QMessageBox::Yes);
+    if (ret == QMessageBox::Yes) {
+        m_log->append(QString::fromUtf8("用户选择更新，开始下载…"));
+        beginDownload();
+    } else {
+        m_log->append(QString::fromUtf8("用户选择保留本地文件，跳过下载。"));
+    }
 }
 
 void DownloadDialog::onReadyRead()

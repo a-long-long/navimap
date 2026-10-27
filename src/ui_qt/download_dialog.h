@@ -40,6 +40,8 @@ public:
 private:
     void onSelChanged();
     void startDownload();
+    void beginDownload();                       /* 真正开始下载（跳过查存/HEAD 之后） */
+    void onHeadFinished(QNetworkReply *r);      /* 比对远端新鲜度后决定是否询问更新 */
     void onReplyFinished(QNetworkReply *r);
     void onDownloadProgress(qint64 got, qint64 total);
     void onReadyRead();
