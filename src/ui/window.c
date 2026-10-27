@@ -67,14 +67,15 @@ int app_init(App *a, const char *graph_dir, int w, int h,
     a->voice_on    = settings_get_bool(a->cfg, "voice_on", 1);
     a->mode        = settings_get_int(a->cfg, "mode", 0);
     /* ★ app_init 是**逐字段**读设置的（不经过 app_apply_settings——那个只给
-     *   SDL 设置面板的「应用/恢复默认」用）。新增设置项必须在这里也读一遍，
+     *   C 核心自绘设置面板（chrome.c）的「应用/恢复默认」用）。新增设置项必须在这里也读一遍，
      *   否则启动时不生效、下次退出还会把它写回默认值（踩过：datum 启动读不出）。 */
     {
         int dv = settings_get_int(a->cfg, "datum", 0);
         a->datum = (dv >= 0 && dv < DATUM_COUNT) ? dv : DATUM_WGS84;
     }
     /* 浮层透明度：逐浮层从设置读（键缺失 ⇒ 默认 75%）。同样必须在这里读一遍，
-     * app_apply_settings 只服务 SDL 设置面板的「应用/恢复默认」。 */
+     * app_apply_settings 只服务 C 核心自绘设置面板的「应用/恢复默认」，
+     * Qt 前端改完直接写字段 + app_persist_settings。 */
     ovl_load_all(a->cfg, a->ovl_alpha);
     a->sim_speed_idx = SIM_SPEED_DEFAULT;
     a->sim_follow = 1;

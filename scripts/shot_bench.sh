@@ -17,8 +17,11 @@ cd "$ROOT"
 
 NAVMAP_ENV_QUIET=1 . "$ROOT/env.sh" 2>/dev/null || true
 
-SHOT="$ROOT/build/map_shot"
-[ -x "$SHOT" ] || { echo "缺 $SHOT，先构建"; exit 1; }
+# #88 已删 map_shot：离屏出图统一走 navmap_qt --shot-offscreen。它是纯 C 离屏通道
+# （Qt 初始化前就返回，不建窗口、不依赖显示环境），flag 与旧 map_shot 完全一致，
+# 所以本脚本的用例表和日志正则都不用改。
+SHOT="$ROOT/build/navmap_qt"
+[ -x "$SHOT" ] || { echo "缺 $SHOT，先构建（./scripts/regress.sh --build）"; exit 1; }
 
 ALL="$ROOT/products/graph"
 
@@ -39,7 +42,7 @@ echo "$CASES" | while IFS='|' read -r name graph lat lon zoom; do
     [ -n "$name" ] || continue
     log="$OUT/$name.log"
     bmp="$OUT/$name.bmp"
-    "$SHOT" --graph="$graph" --lat="$lat" --lon="$lon" --zoom="$zoom" \
+    "$SHOT" --shot-offscreen --graph="$graph" --lat="$lat" --lon="$lon" --zoom="$zoom" \
             --w=1280 --h=800 --out="$bmp" >"$log" 2>&1
     rc=$?
     if [ $rc -ne 0 ] || grep -q "ASSERT-FAIL" "$log"; then

@@ -103,4 +103,5 @@ env PATH="$CLEAN_PATH" \
 
 echo
 echo "=== 构建完成 ==="
-ls -la "$BUILD"/navmap.exe "$BUILD"/navmap_qt.exe "$BUILD"/map_shot.exe 2>/dev/null || true
+# 前端只有 navmap_qt（#88 已删 navmap / navmap_sdl / map_shot 三个可执行）。
+ls -la "$BUILD"/navmap_qt.exe 2>/dev/null || true

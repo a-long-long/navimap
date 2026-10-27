@@ -218,7 +218,8 @@ run datum_selftest "DATUM-OK" "$BUILD/datum_selftest"
 # ---- 去 SDL 化的三条门禁（方案2）----
 #
 # 背景：navimap_core 已做到"零 SDL"，Qt 前端（navmap_qt）一行 SDL 都不链，
-# SDL 只存在于两个适配层（navimap_sdl / map_shot）。这条边界一旦被悄悄放宽，
+# SDL 只存在于两个**去 SDL 化对照体**（blend_equiv / clip_equiv，它们必须链
+# SDL 才能跟 SDL 软渲染器逐像素对拍）。这条边界一旦被悄悄放宽，
 # 编译照样过、运行照样正常，只是 Qt 前端又背上了 SDL2.dll 依赖 —— 直到某天
 # 在没装 SDL 的机器上构建才炸。所以必须把边界**钉成可断言的判据**。
 #
@@ -233,9 +234,9 @@ run blend_equiv "BLEND-EQUIV-OK" "$BUILD/blend_equiv"
 #    症状是"画布边缘的路多/少一像素"。已按 SDL 的 SDL_rect_impl.h 逐字重写。
 run clip_equiv "CLIP-EQUIV-OK" "$BUILD/clip_equiv"
 
-# ③ 架构边界：核心与 Qt 前端零 SDL 符号；SDL 适配层**必须**有（负向对照，
+# ③ 架构边界：核心与 Qt 前端零 SDL 符号；对照体**必须**链 SDL（负向对照，
 #    证明检查器不是"永远绿"的空壳）。
-#   产物名要补后缀：Windows 上是 navimap.exe，Linux 上是 navimap。
+#   产物名要补后缀：Windows 上是 navmap_qt.exe，Linux 上是 navmap_qt。
 if [ -x "$BUILD/core_no_sdl" ]; then
     exefile() { if [ -x "$1.exe" ]; then echo "$1.exe"; else echo "$1"; fi; }
     run core_no_sdl "CORE-NO-SDL-OK" "$BUILD/core_no_sdl" \
@@ -609,7 +610,7 @@ if [ -x "$BUILD/navmap_qt.exe" ] || [ -x "$BUILD/navmap_qt" ]; then
     # ---- 浮层透明度（Qt 搜索按钮）：**文字**必须保持清晰 ----
     # 这条直接验 J 先生 2026-10-25 提的核心诉求："只淡底板、文字保持清晰"。
     # 搜索按钮是 IconButton（自绘底板 + 自绘图标 + 「搜索」二字），Qt 侧有
-    # 字体 ⇒ 文字真的画出来了（map_shot 不加载字体，C 侧截图里没有文字）。
+    # 字体 ⇒ 文字真的画出来了（已删的旧 map_shot 不加载字体，C 侧截图里没有文字）。
     # 判据：底板混合比 = 75%，且「搜索」二字的像素在 100% 与 75% 两张图上
     # **没有被一起淡掉**。
     # ★ --fgrect 单独框出文字区：图标在左、文字在右，不框的话图标会替文字

@@ -149,8 +149,9 @@ typedef struct {
     int           win_drag;       /* 自绘标题栏拖拽中 */
     int           win_drag_x, win_drag_y;  /* 拖拽时鼠标相对窗口的偏移 */
     int           rotating;       /* Ctrl+拖动 旋转地图中 */
-    /* Qt 前端开关：置 1 时 paint_frame 跳过 SDL 自绘 chrome/搜索框/面板/
-     * 指令条（这些由 Qt 真控件承担），但地图渲染、结果图钉、夜间蒙版保留。 */
+    /* Qt 前端开关：置 1 时 paint_frame 跳过 C 核心自绘 chrome/搜索框/面板/
+     * 指令条（这些由 Qt 真控件承担），但地图渲染、结果图钉、夜间蒙版保留。
+     * 置 0 = 走 C 核心全自绘（离屏审计通道 ovl_shot 就靠这条路径取像素）。 */
     int           qt_ui;
 
     /* ---- 设置持久化（完整设置系统）----
@@ -160,7 +161,7 @@ typedef struct {
     int           show_poi;        /* POI 图标开关 */
     int           show_labels;     /* 地名标注开关 */
     int           show_contours;   /* 等高线开关（SRTM 生成，受『视图』菜单 / O 键控制） */
-    int           settings_open;   /* 设置面板是否展开（仅 SDL 自绘 chrome） */
+    int           settings_open;   /* 设置面板是否展开（C 核心自绘；Qt 前端的开关在『设置』菜单里） */
     int           settings_row;    /* 面板命中行：>=0 schema 下标，-1 关闭，-2 重置全部 */
     int           settings_btn;    /* 命中按钮：0=左/− 1=右/+ 2=行体（切换） */
     int           settings_ovl;    /* 浮层透明度子面板是否展开（主面板里点「浮层透明度…」进入） */
