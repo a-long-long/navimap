@@ -6,48 +6,6 @@
 #include <math.h>
 
 /* ------------------------------------------------------------------ */
-/* 路名池（每省一份）                                                    */
-/* ------------------------------------------------------------------ */
-
-int name_pool_open(NamePool *np, const char *names_path)
-{
-    memset(np, 0, sizeof(*np));
-
-    NMBinFile nf;
-    if (nmbin_open(names_path, &nf) != 0) return -1;
-
-    const uint8_t *d = nf.data;
-    uint32_t cnt = nm_get_u32(d);
-    size_t offs_bytes = (size_t)(cnt + 1) * 4;
-    if (nf.data_len < 4 + offs_bytes) { nmbin_close(&nf); return -1; }
-
-    np->n = cnt;
-    np->off = calloc(cnt + 1, sizeof(uint32_t));
-    np->blob = malloc(nf.data_len - 4 - offs_bytes + 1);
-    if (!np->off || !np->blob) {
-        name_pool_close(np);
-        nmbin_close(&nf);
-        return -1;
-    }
-    for (uint32_t i = 0; i <= cnt; i++)
-        np->off[i] = nm_get_u32(d + 4 + (size_t)i * 4);
-    memcpy(np->blob, d + 4 + offs_bytes, nf.data_len - 4 - offs_bytes);
-    np->blob[nf.data_len - 4 - offs_bytes] = '\0';
-
-    nmbin_close(&nf);
-    np->ready = 1;
-    return 0;
-}
-
-void name_pool_close(NamePool *np)
-{
-    if (!np) return;
-    free(np->off);
-    free(np->blob);
-    memset(np, 0, sizeof(*np));   /* 失败路径的指针都已置空，重复调用安全 */
-}
-
-/* ------------------------------------------------------------------ */
 /* 地名标注                                                             */
 /* ------------------------------------------------------------------ */
 

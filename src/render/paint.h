@@ -4,6 +4,7 @@
 #include <stdint.h>
 #include "map/map_view.h"
 #include "map/binfmt.h"
+#include "map/namepool.h"   /* NamePool：路名池，已从本头下沉到 map 层（PLAN.md §53） */
 #include "render/raster.h"
 
 /* 软件渲染的路网绘制。
@@ -86,19 +87,11 @@ void dedup_begin(DedupSet *d);            /* 每帧开头调用一次 */
 /* 返回 1 = 这个键本帧已经登记过（调用方应跳过绘制）；0 = 首次，已登记 */
 int  dedup_seen(DedupSet *d, uint64_t hi, uint64_t lo);
 
-/* 路名池（names.bin 的解析结果）。每省目录一份，name_id 只在本省内
- * 有意义，所以随 MapSrc 走；定义放这个头里是因为 paint 层（RoadLabel）
- * 和标注层（labels.h）都要用到。names.bin 是 NAVMBIN 包裹的（128B 头
- * + 字段表），payload 布局见 labels.c 的解析。 */
-typedef struct {
-    uint32_t    n;
-    uint32_t   *off;      /* n+1，off[id] → blob 内偏移 */
-    char       *blob;
-    int         ready;
-} NamePool;
-
-int  name_pool_open(NamePool *np, const char *names_path);
-void name_pool_close(NamePool *np);
+/* 路名池（NamePool）的定义与实现已搬到 map/namepool.h —— 它是纯地图数据概念
+ * （每省 names.bin 的解析结果，随 MapSrc 走），放在 render 会让 map/mapset.h
+ * 反向依赖 render ⇒ 模块级倒置。施工记录见 PLAN.md §53。
+ * 本头仍用它（RoadLabel 持有 const NamePool *），故引 map 的头（render→map 是
+ * 既有正确方向）。 */
 
 /* 路名收集：paint_roads 遍历边时顺带记录"屏幕内、有名、主干以上"的边中点，
  * 供 labels.c 的 paint_road_labels 去重绘制。np 是该省的路名池——

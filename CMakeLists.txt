@@ -152,6 +152,7 @@ set(MAP_SRCS
     src/map/graph_build.c
     src/map/pbfmap.c
     src/map/mapset.c
+    src/map/namepool.c
     src/map/autobuild.c
     src/map/coverage.c
     src/map/map_view.c

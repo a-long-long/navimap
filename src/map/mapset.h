@@ -3,7 +3,7 @@
 
 #include "map/binfmt.h"
 #include "map/pbfmap.h"
-#include "render/labels.h"
+#include "map/namepool.h"   /* NamePool / name_pool_open·close：省名池与车道名池（PLAN.md §53 R1 下沉至此） */
 #include "utils/plat.h"     /* NmMutex：后台解码线程的锁 */
 
 /* 多省图集：一次加载 products/graph 下的所有省，渲染时按 bbox 裁剪。

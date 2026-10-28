@@ -5,6 +5,7 @@
 #include "map/map_view.h"
 #include "render/font.h"
 #include "map/binfmt.h"
+#include "map/namepool.h"   /* NamePool / name_pool_open·close：已从本头下沉到 map 层 */
 #include "render/paint.h"
 
 /* 地名标注：从 places.db（place 表）按视口查询，网格避让后画。
@@ -51,9 +52,9 @@ int  label_nearest_admin(LabelCache *lc, double lat, double lon,
                          char *district, size_t dcap);
 
 /* 路名池：每省目录一份 names.bin，id 只在本省内有意义，所以做成可实例化的，
- * 由 MapSrc 持有；不再用全局单例。NamePool 定义见 paint.h。 */
-int  name_pool_open(NamePool *np, const char *names_path);
-void name_pool_close(NamePool *np);
+ * 由 MapSrc 持有；不再用全局单例。
+ * ★ NamePool 与 name_pool_open/close 已搬到 map/namepool.h（PLAN.md §53 R1）——
+ * 它们是纯地图数据概念，放在 render 会让 map 反向依赖 render。 */
 void paint_road_labels(Raster *rs, const MapView *v, Font *font,
                        PaintStats *st);
 
