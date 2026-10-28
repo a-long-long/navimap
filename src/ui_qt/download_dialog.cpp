@@ -1,4 +1,5 @@
 #include "download_dialog.h"
+#include <cmath>
 
 #include <QTreeWidget>
 #include <QTreeWidgetItem>
@@ -627,8 +628,8 @@ void DownloadDialog::runContoursGeneration()
     }
     
     // 检查 bbox 覆盖的 SRTM 瓦片，判断是否全部已存在
-    int tlat_lo = (int)floor(lat0), tlat_hi = (int)floor(lat1);
-    int tlon_lo = (int)floor(lon0), tlon_hi = (int)floor(lon1);
+    int tlat_lo = (int)std::floor(lat0), tlat_hi = (int)std::floor(lat1);
+    int tlon_lo = (int)std::floor(lon0), tlon_hi = (int)std::floor(lon1);
     int totalTiles = 0, existingTiles = 0;
     for (int tlat = tlat_lo; tlat <= tlat_hi; tlat++) {
         for (int tlon = tlon_lo; tlon <= tlon_hi; tlon++) {

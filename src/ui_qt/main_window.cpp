@@ -1585,9 +1585,9 @@ QString MainWindow::nomapPromptTextForTest() const
                      .arg(pl.nearest_km, 0, 'f', 0);
     }
 
-    QString text = QString::fromUtf8("您已浏览到已下载地图之外（%.4f, %.4f）。\n"
+    QString text = QString::fromUtf8("您已浏览到已下载地图之外（%1, %2）。\n"
                                      "该区域没有路网数据，地图为空。\n\n"
-                                     "这是哪儿：%2\n")
+                                     "这是哪儿：%3\n")
                        .arg(m_a->cov_lat, 0, 'f', 4)
                        .arg(m_a->cov_lon, 0, 'f', 4)
                        .arg(where);
