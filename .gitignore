@@ -2,6 +2,7 @@
 build/
 build-san/
 build-*/
+build_*/
 build_rel/
 build2/
 build_test/

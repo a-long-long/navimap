@@ -245,6 +245,17 @@ if [ -x "$BUILD/core_no_sdl" ]; then
         "$(exefile "$BUILD/blend_equiv")"
 fi
 
+# ④ 分层方向门禁（PLAN.md §53 R3）：模块依赖方向必须保持 DAG。
+#   为什么单列一条：R1/R2 消掉了 map→render 与 render→ui 两处倒置，但
+#   **倒置是会被写回来的**。原先没有任何机器检查，全靠人自觉。
+#   更糟的是符号级环曾迫使 CMake 用 -Wl,--start-group 包住全部模块库，
+#   链接器多轮扫描会悄悄补上反向依赖 ⇒ 边界形同虚设（R2 已移除该包裹）。
+#   本脚本自带负向对照能力：人为插入 map→render 的 include 时它必须 FAIL
+#   并指出文件行号（已实测），否则就是假门禁。
+if [ -x "$ROOT/scripts/check_layers.sh" ]; then
+    run layer_dirs "分层方向门禁 PASS" "$ROOT/scripts/check_layers.sh" --quiet
+fi
+
 # ---- 字体链的中文覆盖（中文变方框的根因门禁）----
 #
 # 地图上的文字（C 侧 stb_truetype）和 Qt 控件上的文字（Qt 自己的字体系统）

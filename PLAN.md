@@ -2661,6 +2661,64 @@ utils  ◄ pbf  ◄ map  ◄ route ◄ render ◄ ui ◄ ui_qt
 所以 R3 的验收里**强制包含一条负向对照**：人为造一条 `map→render` 的 include，脚本必须 FAIL
 并指出具体文件行号；撤掉后必须 PASS。判据没有分辨力就不算门禁。
 
-### 53.6 状态
+### 53.6 R2 的额外收益：链接器防线回来了
 
-- 2026-10-28：R0 完成（本章 + `ARCH_ASSESSMENT.md` §1.3/§4 同步）。R1/R2/R3 待执行。
+R2 消除符号级环后，`-Wl,--start-group` **不再需要**，已从 CMake 移除
+（`navmap_core` 与 `nm_link_tool` 的 MSVC/GNU 双分支因此合并为一份）。
+
+为什么坚持去掉而不是"留着无害"：
+
+- `start-group` 让链接器**多轮扫描**全部库 ⇒ 新引入的反向依赖会被**悄悄补上**，
+  不报 undefined reference ⇒ 模块边界形同虚设，正是"倒置能待几个月"的根因之一。
+- 去掉后，任何新引入的 `render→ui` 反向依赖会**立刻 undefined-reference**，
+  链接器成为第二道防线（第一道是 `scripts/check_layers.sh`）。
+
+实测：全新目录 configure + build（无 start-group）**零错误零警告**，
+出图与基线**逐字节一致**（`diff_pixels 0/1024000`，md5 相同），UI 自测 33 项全过。
+
+### 53.7 R3 的门禁：分层方向脚本
+
+新增 `scripts/check_layers.sh`，并接入 `scripts/regress.sh`（用例名 `layer_dirs`）。
+
+判据：解析每个源文件的**真实** `#include`（剥掉块注释与行注释），
+算出模块级依赖图，与允许方向表比对；违规则退出码非 0 并打印**具体文件行号**。
+
+允许方向（同层依赖允许，那是模块内部拆分；反向不允许）：
+
+| 模块 | 允许依赖 |
+|---|---|
+| `utils` / `pbf` | 叶子，零内部依赖 |
+| `map` | pbf, utils |
+| `route` | map, utils |
+| `search` / `settings` | utils |
+| `render` | map, route, search, settings, utils（**零 ui**） |
+| `ui` | map, render, route, search, settings, utils |
+| `ui_qt` | map, render, settings, ui, utils |
+
+**负向对照（已实测，三项）**：
+
+1. 往 `src/map/coverage.h` 注入 `#include "render/paint.h"` ⇒ **FAIL，exit 1**，
+   精确指出 `src/map/coverage.h:67`；撤掉恢复 PASS。
+2. 往 `src/render/font.h` 注入 `#include "ui/window.h"` ⇒ **FAIL，exit 1**，
+   指出 `src/render/font.h:64`；撤掉恢复 PASS。
+3. 注释里写 `#include "render/labels.h"`（历史说明文本）⇒ **PASS**（不算违规）。
+
+第 3 项是必要的：注释里出现 include 路径是本项目的常态（历史说明），
+脚本若不做剥注释会产生大量假 FAIL。
+
+### 53.8 状态
+
+- 2026-10-28：**R0/R1/R2/R3 全部完成**。
+  - R0：本章 + `ARCH_ASSESSMENT.md` 同步（提交 `9d7aeb7`）
+  - R1：下沉 `NamePool`，消除 `map→render`（提交 `9775def`）
+  - R2：chrome/audit 移出 render，消除 `render→ui` 与符号级环（提交 `4b3deb4`）
+  - R3：新增 `scripts/check_layers.sh` 并接入回归
+  - 终态依赖图（纯 DAG，零环）：
+    ```
+    utils ← pbf ← map ← route ← render ← ui ← ui_qt
+                    ↑        ↑      ↑
+                  search settings
+    ```
+  - 回归：**78 通过 / 3 失败**（3 项仍是环境缺失：beijing 无 `lanes.bin` / `disp.idx`）
+  - 编译零警告（`-Werror`）；出图逐字节一致；UI 自测 33 项全过
+

@@ -41,32 +41,37 @@ tools/      24 个 CLI 工具（各自链接 navimap_core）
 ```
 每个 `.c` 配套一个 `.h`，头文件只声明本模块公开符号——**头/源一一对应、含入关系清晰**。
 
-### 1.3 模块级依赖图（剥注释后按真实 `#include` 构建；★ 已修正：原版缺 `map→render` 边且误判为无环）
+### 1.3 模块级依赖图（剥注释后按真实 `#include` 构建；★ 2026-10-28 R1/R2 后已修正为纯 DAG）
 
 ```
-Layer 6  src/main.c ───────────────────────────────▶ src/ui
-Layer 5  src/ui        ──▶ map, render, utils    (ui→render，且 render→ui ⇒ 见下环)
-Layer 4  src/render    ──▶ map, route, ui, utils (render↔ui 符号级环)
-Layer 3  src/route     ──▶ map, utils        src/search ──▶ utils
-Layer 2  src/map       ──▶ pbf, render, utils  (mapset.c 调 render/labels.c 的 name_pool_open/close)
+Layer 6  src/ui_qt     ───────────────────────────────▶ ui, map, render, settings, utils
+Layer 5  src/ui        ──▶ map, render, route, search, settings, utils
+Layer 4  src/render    ──▶ map, route, search, settings, utils   （★ 零 ui 依赖）
+Layer 3  src/route     ──▶ map, utils        src/search ──▶ utils   src/settings ──▶ utils
+Layer 2  src/map       ──▶ pbf, utils
 Layer 1  src/pbf       ──▶ (self only)
-Layer 0  src/utils     ──▶ (leaf, 被其余 5 个模块全部依赖)
+Layer 0  src/utils     ──▶ (leaf, 被其余模块依赖)
 ```
-- **模块出度**：render→4、ui→3、map→3、route→2、search→1、pbf→0、utils→0
-- **模块入度**：utils←5、map←3、ui←2、render←2、route←1、pbf←1、search←0
-- **环检测（★ 修正）**：存在一个 `render ↔ ui` 符号级环——`ui/window.c` 调用 `render` 的 `paint/navdraw/chrome`，`render/chrome.c` 反过来调用 `ui/window.c` 的 `app_nav_*`；此外 `map/mapset.c` 调用 `render/labels.c` 的 `name_pool_open/close`（即 `map→render` 边，原 DAG 漏画）。除该环外为 DAG。**修正前提**：拆库仍可行，但 5 个模块库**不能按纯拓扑序链接**（会 undefined reference），必须用 `-Wl,--start-group … -Wl,--end-group` 包裹全部模块库消解环（GNU/MinGW ld；MSVC `link.exe` 自带多轮，无需 start-group）。该环在语义上合理（UI 调度渲染、渲染回调 UI 的导航动作），无需破坏。
+- **模块出度**：ui_qt→5、ui→6、render→5、map→2、route→2、search→1、settings→1、pbf→0、utils→0
+- **环检测（★ 2026-10-28 R2 后）**：**零环，纯 DAG**。原先的 `render ↔ ui` 符号级环与 `map→render` 边
+  均已消除（见下方"已被推翻"说明），因此 **5 个模块库可以按纯拓扑序链接**，
+  `-Wl,--start-group … -Wl,--end-group` 已从 CMake 移除。
+- **链接器防线恢复**：去掉 start-group 后，任何新引入的反向依赖会**立刻 undefined-reference**，
+  不再被链接器多轮扫描悄悄补上 ⇒ "12 个 STATIC 库强制边界"这个 L2 成果重新生效。
 
-> ★★ **2026-10-28 更新：上面那句"无需破坏"已被推翻，两处倒置已立项为技术债处理。**
+> ★★ **2026-10-28 更新：下面这段"无需破坏"的旧判断已被推翻，两处倒置已处理完毕。**
 > 理由：`render↔ui` 环 + `map→render` 边让**链接器边界形同虚设**——环存在时链接器无法暴露任何新的
 > 反向依赖错误，"12 个 STATIC 库强制边界"这个已完成的成果（L2）就被抵消了。而且这两处倒置的根因
 > 都可定位到**归属放错**，不是语义上必需的耦合：
 > - `map→render`：`NamePool`（每省 names.bin 的解析结果）是纯地图数据概念，实现只用 `map/binfmt.h`，
->   却定义在 `render/paint.h` ⇒ 下沉到 map 即可（R1）。
+>   却定义在 `render/paint.h` ⇒ 已下沉到 `src/map/namepool.{h,c}`（R1）。
 > - `render→ui`：`chrome.c`（自绘标题栏/面板/菜单，调 `app_nav_*` 等应用动作）与 `audit.c`
->   （离屏像素审计通道）本质是 **UI/验收层**，却住在 render ⇒ 移到 ui 即可（R2）。
+>   （离屏像素审计通道）本质是 **UI/验收层**，却住在 render ⇒ 已 `git mv` 到 `src/ui/`（R2）。
 >
-> 施工方案、证据链与逐阶段验收判据见 [`PLAN.md` §53](PLAN.md#53-分层重构消掉-map→render-与-render→ui-两处倒置2026-10-28-立项)；
-> R3 会补上 `scripts/check_layers.sh` 分层方向门禁（当初就是**没人查分层方向**才让倒置留存至今）。
+> 施工方案、证据链与逐阶段验收判据见 [`PLAN.md` §53](PLAN.md#53-分层重构消掉-map→render-与-render→ui-两处倒置2026-10-28-立项)。
+> ★ 防回流门禁已就位：`scripts/check_layers.sh`（剥注释解析真实 include，比对允许方向表，
+>   违规即 FAIL 并打印文件行号），并已接入 `scripts/regress.sh`（用例 `layer_dirs`）。
+>   负向对照已实测：注入 `map→render` 或 `render→ui` 均 FAIL，注释里的 include 文本不算违规。
 
 ### 1.4 公开 API 暴露面
 - 头文件共声明 **253** 个函数（即对外暴露面）。
@@ -98,13 +103,21 @@ Layer 0  src/utils     ──▶ (leaf, 被其余 5 个模块全部依赖)
 ### L1（拆文件/目录）—— 已完成，价值已耗尽
 目录划分与依赖方向天然吻合职责。"文件→模块"映射清晰，无"一个文件跨俩职责"的异味。**再投入 L1 没有收益**，这点和多数"先分包"的项目相反——本项目起点就很好。
 
-### L2（拆独立库）—— 可行（除 render↔ui 环外为 DAG，start-group 消解）
+### L2（拆独立库）—— 已完成；★ 2026-10-28 R2 后连 start-group 都不再需要
+
+> ⚠️ 下面这段是**当时的方案原文**（当时 `render↔ui` 环还在，靠 start-group 消解）。
+> 现状：**R1/R2 已把 `map→render` 边与 `render↔ui` 环消除** ⇒ 依赖图是纯 DAG，
+> 5 个模块库可按**纯拓扑序**链接，`-Wl,--start-group` 已从 CMake 移除（见 §1.3）。
+> 收益 2「链接器强制边界」因此**真正生效**了：原先 start-group 会让反向依赖被悄悄补上。
+
 因依赖除 `render↔ui` 环外是 DAG，把每个目录提升为独立 `STATIC` 库时**不需要打破任何环**（环在语义上合理：UI 调度渲染、渲染回调 UI 动作），只需把 5 个模块库整体包进 `-Wl,--start-group … -Wl,--end-group` 链接：
 ```
 navmap_geo / navmap_strpool / navmap_plat / navmap_mem  (叶子，mem→plat)
    → navmap_pbf → navmap_map → {navmap_route, navmap_search} → navmap_render ⇄ navmap_ui
 # 注：navmap_map 还依赖 navmap_render（mapset.c 调 name_pool）；navmap_render ⇄ navmap_ui 互为依赖。
 #     故 5 个模块库链接时须整体包进 start-group，顺序不敏感。
+# ★ 2026-10-28：上两行注记已失效 —— map 不再依赖 render（NamePool 下沉），
+#   render 不再依赖 ui（chrome/audit 移出），现在是纯拓扑序，无需 start-group。
 ```
 收益：
 1. **局部复用**：`pbf`（解析器）、`geo`（投影/距离数学）、`strpool`、`plat`（平台抽象）这 4 个是**纯叶子、零内部依赖**，拆出后即可被其它项目独立取用——目前要复用它们得整车拖走 `navimap_core`。
