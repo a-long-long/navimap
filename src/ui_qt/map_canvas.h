@@ -21,6 +21,7 @@
 
 extern "C" {
 #include "ui/window.h"      /* App / app_* / mv_* 全在这里 */
+#include "utils/datum.h"    /* DatumId：drawGraticuleGK 参数 */
 }
 
 class MainWindow;
@@ -59,7 +60,8 @@ private:
     void ensureBuffer(int w, int h);
     void drawScaleBar(QPainter &p);
     void drawCompass(QPainter &p);
-    void drawGraticule(QPainter &p);   /* 坐标网格（lat/lon 经纬网）叠加层 */
+    void drawGraticule(QPainter &p);             /* 坐标网格叠加层：WGS84=经纬网，其余=方里格 */
+    void drawGraticuleGK(QPainter &p, DatumId id); /* 方里格（高斯公里网，非 WGS84 坐标系） */
     void drawCursorCoords(QPainter &p); /* 右下角：光标处经纬度（无光标则显示中心点） */
     void drawRouteInfo(QPainter &p);   /* 左下角：路线里程 / 算路状态（替代被取消的状态栏） */
 

@@ -1170,7 +1170,7 @@ static void paint_frame(Raster *rs, App *a, PaintStats *st)
             if (!s->loaded) continue;
             if (s->has_contours)
                 paint_contours(rs, &a->view, &s->contours, &s->contour_polyrefs,
-                               &s->contour_pts, &s->contour_bbox, st);
+                               &s->contour_pts, &s->contour_bbox, st, a->font);
         }
     }
     TICK(ms_lines);

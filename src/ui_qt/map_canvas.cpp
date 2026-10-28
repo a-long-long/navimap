@@ -143,9 +143,10 @@ void MapCanvas::setShowGrid(bool v)
  * 基准坐标。旋转角 rot 是投影的一部分，所以网格随地图一起转，天然正确。 */
 void MapCanvas::drawGraticule(QPainter &p)
 {
+    DatumId id = (DatumId)m_a->datum;
+    if (id != DATUM_WGS84) { drawGraticuleGK(p, id); return; }  /* 非 WGS84 显示方里格 */
     double bbox[4];
     mv_visible_bbox(&m_a->view, bbox);   /* [la0(底), lo0(左), la1(顶), lo1(右)]，WGS84 */
-    DatumId id = (DatumId)m_a->datum;
 
     /* 可见区四角 WGS84 → 基准，取基准下的经纬度范围（偏移近常数，4 角 min/max 保不漏画）。 */
     static const int corner[4][2] = { {0,1}, {0,3}, {2,1}, {2,3} };
@@ -235,6 +236,108 @@ void MapCanvas::drawGraticule(QPainter &p)
     /* 左上角图例：标出当前经纬网所用坐标系（与右下角读数的基准短名一致）。 */
     {
         QString leg = QString::fromUtf8(datum_short(id)) + QStringLiteral(" 经纬网");
+        QFont lf = p.font();
+        lf.setPointSize(9);
+        p.setFont(lf);
+        QRect br = p.fontMetrics().boundingRect(leg);
+        int lx = 10, ly = 54;
+        p.fillRect(lx - 3, ly - 2, br.width() + 8, br.height() + 4, QColor(255, 255, 255, 205));
+        p.setPen(QColor(40, 60, 95, 225));
+        p.drawText(lx, ly + br.height(), leg);
+    }
+}
+
+/* 方里格（高斯公里网）：非 WGS84 坐标系用。datum_gk_forward/inverse 内部把 WGS84
+ * 经纬度透明换到所选基准、再用该基准椭球做高斯投影（3° 带），底图几何
+ * （WGS84 Web Mercator）不动 —— 与经纬网同一条"端点反算回 WGS84 再投影"的路子。
+ * 画等 X 北向 / 等 Y 东向公里线，标公里整数；grid_subdiv 时每格 5 等分画浅色细线。 */
+void MapCanvas::drawGraticuleGK(QPainter &p, DatumId id)
+{
+    double bbox[4];
+    mv_visible_bbox(&m_a->view, bbox);   /* WGS84 [la0(底), lo0(左), la1(顶), lo1(右)] */
+    const double lon0 = round(((bbox[1] + bbox[3]) * 0.5 / 3.0)) * 3.0;  /* 3° 带中央经线 */
+
+    /* 可见区四角 WGS84 → 高斯平面坐标（米），取范围 */
+    static const int corner[4][2] = { {0,1}, {0,3}, {2,1}, {2,3} };
+    double Xmin = 1e30, Xmax = -1e30, Ymin = 1e30, Ymax = -1e30;
+    for (int i = 0; i < 4; i++) {
+        double X, Y;
+        datum_gk_forward(id, bbox[corner[i][0]], bbox[corner[i][1]], lon0, &X, &Y);
+        if (X < Xmin) Xmin = X; if (X > Xmax) Xmax = X;
+        if (Y < Ymin) Ymin = Y; if (Y > Ymax) Ymax = Y;
+    }
+    double span = qMax(Xmax - Xmin, Ymax - Ymin);
+    if (span <= 0) return;
+
+    /* nice 公里步长：让屏幕约出现 6 条线 */
+    double p10 = pow(10.0, floor(log10(span / 6.0)));
+    double nn = (span / 6.0) / p10;
+    double step = ((nn < 1.5) ? 1.0 : (nn < 3.0) ? 2.0 : (nn < 7.0) ? 5.0 : 10.0) * p10;
+
+    QFont f = p.font();
+    f.setPointSize(8);
+    p.setFont(f);
+    p.setPen(QColor(40, 60, 95, 160));
+
+    char buf[32];
+    int x1, y1, x2, y2;
+    double lat1, lon1, lat2, lon2;
+
+    /* 竖线（等 Y 东向）：每整 step 米一条，从 Xmin 到 Xmax */
+    double Yk = ceil(Ymin / step - 1e-9) * step;
+    for (; Yk <= Ymax + 1e-9; Yk += step) {
+        datum_gk_inverse(id, Xmin, Yk, lon0, &lat1, &lon1);
+        datum_gk_inverse(id, Xmax, Yk, lon0, &lat2, &lon2);
+        mv_project(&m_a->view, lat1, lon1, &x1, &y1);
+        mv_project(&m_a->view, lat2, lon2, &x2, &y2);
+        p.drawLine(x1, y1, x2, y2);
+        /* 标签放北端（顶边，y+10 内缩）避免落到画布外（与 WGS84 经纬网同套路）。 */
+        snprintf(buf, sizeof(buf), "%d", (int)round((Yk - 500000.0) / 1000.0));
+        p.drawText(x2 + 2, y2 + 10, QString::fromUtf8(buf));
+    }
+    /* 横线（等 X 北向）：每整 step 米一条，从 Ymin 到 Ymax */
+    double Xk = ceil(Xmin / step - 1e-9) * step;
+    for (; Xk <= Xmax + 1e-9; Xk += step) {
+        datum_gk_inverse(id, Xk, Ymin, lon0, &lat1, &lon1);
+        datum_gk_inverse(id, Xk, Ymax, lon0, &lat2, &lon2);
+        mv_project(&m_a->view, lat1, lon1, &x1, &y1);
+        mv_project(&m_a->view, lat2, lon2, &x2, &y2);
+        p.drawLine(x1, y1, x2, y2);
+        /* 标签放西端（左边，x+2 内缩）避免落到画布外（与 WGS84 经纬网同套路）。 */
+        snprintf(buf, sizeof(buf), "%d", (int)round(Xk / 1000.0));
+        p.drawText(x1 + 2, y1 - 3, QString::fromUtf8(buf));
+    }
+
+    /* 细分刻度线：每格 5 等分（step/5），浅色细线、不标标签，依附 grid_subdiv */
+    if (m_a->grid_subdiv) {
+        QPen sp(QColor(70, 90, 125, 110));
+        p.setPen(sp);
+        const double f5 = step / 5.0;
+        for (double base = floor(Xmin / step) * step; base <= Xmax + 1e-9; base += step)
+            for (int k = 1; k <= 4; k++) {
+                double Xs = base + k * f5;
+                if (Xs <= Xmin - 1e-9 || Xs >= Xmax + 1e-9) continue;
+                datum_gk_inverse(id, Xs, Ymin, lon0, &lat1, &lon1);
+                datum_gk_inverse(id, Xs, Ymax, lon0, &lat2, &lon2);
+                mv_project(&m_a->view, lat1, lon1, &x1, &y1);
+                mv_project(&m_a->view, lat2, lon2, &x2, &y2);
+                p.drawLine(x1, y1, x2, y2);
+            }
+        for (double base = floor(Ymin / step) * step; base <= Ymax + 1e-9; base += step)
+            for (int k = 1; k <= 4; k++) {
+                double Ys = base + k * f5;
+                if (Ys <= Ymin - 1e-9 || Ys >= Ymax + 1e-9) continue;
+                datum_gk_inverse(id, Xmin, Ys, lon0, &lat1, &lon1);
+                datum_gk_inverse(id, Xmax, Ys, lon0, &lat2, &lon2);
+                mv_project(&m_a->view, lat1, lon1, &x1, &y1);
+                mv_project(&m_a->view, lat2, lon2, &x2, &y2);
+                p.drawLine(x1, y1, x2, y2);
+            }
+    }
+
+    /* 左上角图例：标出当前方里格所用坐标系 */
+    {
+        QString leg = QString::fromUtf8(datum_short(id)) + QStringLiteral(" 方里格");
         QFont lf = p.font();
         lf.setPointSize(9);
         p.setFont(lf);

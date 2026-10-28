@@ -2,6 +2,7 @@
 
 #include <stdlib.h>
 #include <string.h>
+#include <stdio.h>    /* snprintf：等高线高程刻度标注 */
 
 #include "map/binfmt.h"
 #include "map/coordkey.h"
@@ -937,7 +938,7 @@ int paint_lines(Raster *rs, const MapView *v,
 int paint_contours(Raster *rs, const MapView *v,
                    const NMBinFile *contours, const NMBinFile *polyrefs,
                    const NMBinFile *pts,
-                   int32_t **bbox_cache, PaintStats *st)
+                   int32_t **bbox_cache, PaintStats *st, Font *font)
 {
     uint64_t nc = contours->hdr.rec_count;
     uint64_t np = polyrefs->hdr.rec_count;
@@ -1033,6 +1034,27 @@ int paint_contours(Raster *rs, const MapView *v,
             for (int k = 1; k < n; k++)
                 raster_thick_line(rs, px[k - 1], py[k - 1], px[k], py[k],
                                   width, col);
+        }
+        /* 计曲线（class==1）标注高程刻度：在折线中点用字体画高程（米）。
+         * 首曲线（class==0）密集不标，避免糊；只标计曲线符合地形图惯例。 */
+        if (font && cls == 1 && n >= 2) {
+            char eb[24];
+            uint64_t elev = nm_get_u64(cr + CF_ELEV);
+            snprintf(eb, sizeof(eb), "%llu", (unsigned long long)elev);
+            int mid = n / 2;
+            int lx = px[mid] + 2, ly = py[mid] - 9;
+            /* 白色光晕 + 黑正文：标准地形图可读标注。
+             * ★ 正文用纯黑 (0,0,0) 而非棕色 —— 黑字叠在白光晕上只会产生
+             *   灰度像素（R=G=B），与无图横幅混合色 (110,100,80)（非灰）在
+             *   容差 8 内绝不可能匹配，避免离屏审计把等高线标注误判成横幅
+             *   （见 audit.c 的 count_overlay_px 判据）。
+             *   早期用 (45,30,15) 时，棕字在白光晕上按字形覆盖率混合恰好落在
+             *   ~(110,100,89)，触发 ASSERT-FAIL。 */
+            font_draw(font, rs, lx - 1, ly,     eb, 255, 255, 255, 0);
+            font_draw(font, rs, lx + 1, ly,     eb, 255, 255, 255, 0);
+            font_draw(font, rs, lx,     ly - 1, eb, 255, 255, 255, 0);
+            font_draw(font, rs, lx,     ly + 1, eb, 255, 255, 255, 0);
+            font_draw(font, rs, lx,     ly,     eb, 0, 0, 0, 0);
         }
         st->lines_drawn++;
     }

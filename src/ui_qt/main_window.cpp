@@ -470,25 +470,22 @@ int MainWindow::runUiSelfTest()
 
     /* ⑬ 坐标网按钮：点击**循环切换**坐标系（关→WGS84→CGCS2000→北京54→西安80→关）。
      *    菜单栏已取消，切换入口只剩右栏坐标网按钮这一处 ⇒ 必须真的能循环。
-     *    逐状态验：isGridOn() / m_a->datum / m_gridBtn->text() 三者一致。 */
+     *    逐状态验：isGridOn() / m_a->datum 一致；按钮纯图标不显文字，改用
+     *    悬停提示的"网格类型"语义校验（WGS84=经纬网 / 其余=方里格）。 */
     {
         const int  keep_d = m_a->datum;
         const bool keep_g = m_canvas->isGridOn();
 
-        /* 起始：确保关着，按钮文字为"关" */
+        /* 起始：确保关着（按钮只显示图标不显文字，故只校验状态） */
         m_canvas->setShowGrid(false);
         updateGridBtn();
         check(!m_canvas->isGridOn(), "坐标网初始：关");
-        check(m_gridBtn->text() == QStringLiteral("关"),
-              "坐标网初始：按钮显示「关」");
 
         /* 第 1 下：关 → WGS84（开） */
         emit m_gridBtn->clicked();
         QApplication::processEvents();
         check(m_canvas->isGridOn() && m_a->datum == DATUM_WGS84,
               "点击①：关 → WGS84（开）");
-        check(m_gridBtn->text() == QString::fromUtf8(datum_short(DATUM_WGS84)),
-              "点击①：按钮显示 WGS84 短名");
 
         /* 第 2 下：WGS84 → CGCS2000 */
         emit m_gridBtn->clicked();
@@ -509,14 +506,23 @@ int MainWindow::runUiSelfTest()
         emit m_gridBtn->clicked();
         QApplication::processEvents();
         check(!m_canvas->isGridOn(), "点击⑤：西安80 → 关");
-        check(m_gridBtn->text() == QStringLiteral("关"),
-              "点击⑤：按钮显示「关」");
 
         /* 再来一下，回到 WGS84（验证循环可持续） */
         emit m_gridBtn->clicked();
         QApplication::processEvents();
         check(m_canvas->isGridOn() && m_a->datum == DATUM_WGS84,
               "再点击：关 → 重新 WGS84（循环可持续）");
+
+        /* 悬停提示的网格类型语义（间接验证需求：除 WGS84 外显示方里格） */
+        {
+            m_canvas->setShowGrid(true);
+            setDatum((int)DATUM_WGS84); updateGridBtn();
+            check(m_gridBtn->toolTip().contains(QStringLiteral("经纬网")),
+                  "悬停提示：WGS84 为经纬网");
+            setDatum((int)DATUM_XA80); updateGridBtn();
+            check(m_gridBtn->toolTip().contains(QStringLiteral("方里格")),
+                  "悬停提示：非 WGS84 为方里格");
+        }
 
         /* 还原 */
         m_canvas->setShowGrid(keep_g);
@@ -996,9 +1002,8 @@ void MainWindow::buildRightCol()
      * （MapCanvas::drawGraticule，左上角图例标出当前基准）。 */
     m_gridBtn = bigbtn(Qt::IconKind::Grid, QStringLiteral("坐标网"));
     m_gridBtn->setCheckable(false);   /* 点击=循环切换，不是勾选开关 */
-    m_gridBtn->setToolButtonStyle(Qt::ToolButtonTextBesideIcon);
-    m_gridBtn->setFixedWidth(104);
-    m_gridBtn->setFixedHeight(IconButton::kSize);
+    m_gridBtn->setToolButtonStyle(Qt::ToolButtonIconOnly);  /* 只显示图标；坐标系/开关态由悬停提示承载 */
+    m_gridBtn->setFixedSize(IconButton::kSize, IconButton::kSize);
     connect(m_gridBtn, &QToolButton::clicked, this, &MainWindow::cycleGrid);
     updateGridBtn();
 
@@ -1151,22 +1156,27 @@ void MainWindow::updateDatumTip()
 {
     if (!m_gridBtn) return;
     const DatumId id = (DatumId)(m_a ? m_a->datum : DATUM_WGS84);
-    QString tip = QStringLiteral("坐标网（经纬网）叠加层\n");
-    tip += QStringLiteral("当前坐标系：%1\n%2")
-               .arg(QString::fromUtf8(datum_label(id)),
-                    QString::fromUtf8(datum_note(id)));
-    tip += QStringLiteral("\n点击本按钮循环切换：关→WGS84→CGCS2000→北京54→西安80→关");
+    const bool on = m_canvas && m_canvas->isGridOn();
+    QString tip;
+    tip += QStringLiteral("坐标网：%1\n")
+               .arg(on ? QStringLiteral("开") : QStringLiteral("关"));
+    tip += QStringLiteral("当前坐标系：%1\n").arg(QString::fromUtf8(datum_label(id)));
+    if (on) {
+        tip += QStringLiteral("网格类型：%1\n")
+                   .arg(id == DATUM_WGS84 ? QStringLiteral("经纬网（度）")
+                                          : QStringLiteral("方里格（公里）"));
+    }
+    tip += QString::fromUtf8(datum_note(id));
+    tip += QStringLiteral("\n点击循环切换：关→WGS84→CGCS2000→北京54→西安80→关");
     m_gridBtn->setToolTip(tip);
 }
 
-/* 同步坐标网按钮上的当前坐标系短名 + 悬停提示。
- * 关 ⇒ "关"；开 ⇒ 显示所选基准短名（WGS84/CGCS2000/北京54/西安80）。 */
+/* 同步坐标网按钮：按钮只显示图标（不再写"关"或坐标系名，避免遮挡右栏）。
+ * 当前坐标系 / 开关态 / 网格类型（经纬网或方里格）全部由悬停提示承载
+ * （J 先生要求：按钮不显示"关"，鼠标悬停看提示即可）。 */
 void MainWindow::updateGridBtn()
 {
     if (!m_gridBtn) return;
-    const bool on = m_canvas && m_canvas->isGridOn();
-    const DatumId id = (DatumId)(m_a ? m_a->datum : DATUM_WGS84);
-    m_gridBtn->setText(on ? QString::fromUtf8(datum_short(id)) : QStringLiteral("关"));
     updateDatumTip();
 }
 

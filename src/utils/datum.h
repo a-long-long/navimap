@@ -51,6 +51,23 @@ void datum_translation(DatumId id, double *dx, double *dy, double *dz);  /* 米 
 void datum_ellipsoid(DatumId id, double *a, double *f);                  /* 米 / 扁率 */
 
 /* ==========================================================================
+ * 高斯-克吕格投影（方里格叠加层用）
+ *
+ * 仅用于坐标网格叠加层的"方里格"（公里格网），底图几何（WGS84 Web Mercator）
+ * 不受影响。对外接口统一用 WGS84 经纬度，内部透明地把经纬度先换到所选基准、
+ * 再用该基准椭球做高斯投影 —— 与 datum_wgs84_to / datum_to_wgs84 同理。
+ *
+ *   - lon0_deg：3° 带中央经线（度）。调用方按可见区中心经度 round(lon/3)*3 给出，
+ *     正算/反算必须用同一 lon0 才闭合。
+ *   - X：北向坐标（米，赤道起算）；Y：东向坐标（米，含 500km 假东偏移）。
+ *   - 公式到 1.5° 项（含 η²/μ 高次项），单点误差米级，叠加层足够。
+ * ========================================================================== */
+void datum_gk_forward(DatumId id, double lat, double lon, double lon0_deg,
+                      double *X, double *Y);
+void datum_gk_inverse(DatumId id, double X, double Y, double lon0_deg,
+                      double *lat, double *lon);
+
+/* ==========================================================================
  * 三个扩展入口：现在没有数据，但**接口做实并可验证**，将来拿到数据直接喂进来
  * 即可生效，不需要再改 datum.c 的算法部分。
  *

@@ -652,3 +652,86 @@ int datum_grid_load(DatumId id, const char *path)
     free(de);
     return rc;
 }
+
+/* ==========================================================================
+ * 高斯-克吕格投影（方里格叠加层用）
+ *
+ * 仅用于坐标网格叠加层的"方里格"绘制，不改变底图几何。对外接口统一用 WGS84
+ * 经纬度，内部透明地把经纬度先换到所选基准、再用该基准椭球做高斯投影。
+ *   - 公式到 1.5° 项（含 η²/μ 高次项），单点误差米级，叠加层足够。
+ *   - Y 含 500km 假东偏移（国标高斯投影约定），调用方标公里数时自行减 500000。
+ * ========================================================================== */
+
+/* 纯高斯正算：基准经纬度(lat,lon) + 椭球(a,f) + 中央经线 lon0(度) → 平面 (X北, Y东)。 */
+static void gauss_fwd(double a, double f, double lon0, double lat, double lon,
+                      double *X, double *Y)
+{
+    double e2  = f * (2.0 - f);
+    double L   = (lon - lon0) * M_PI / 180.0;        /* 中央经线差（弧度） */
+    double B   = lat * M_PI / 180.0;
+    double sinB = sin(B), cosB = cos(B), tanB = tan(B);
+    double N   = a / sqrt(1.0 - e2 * sinB * sinB);
+    double T   = tanB * tanB;
+    double C   = (e2 / (1.0 - e2)) * cosB * cosB;
+    double Ap  = cosB * L;
+    double A2 = Ap * Ap, A4 = A2 * A2, A6 = A4 * A2;
+    double M = a * ((1.0 - e2/4.0 - 3.0*e2*e2/64.0 - 5.0*e2*e2*e2/256.0) * B
+                    - (3.0*e2/8.0 + 3.0*e2*e2/32.0 + 45.0*e2*e2*e2/1024.0) * sin(2.0*B)
+                    + (15.0*e2*e2/256.0 + 45.0*e2*e2*e2/1024.0) * sin(4.0*B)
+                    - (35.0*e2*e2*e2/3072.0) * sin(6.0*B));
+    double x = M + N * tanB * (A2/2.0
+                    + (5.0 - T + 9.0*C + 4.0*C*C) * A4 / 24.0
+                    + (61.0 - 58.0*T + T*T + 600.0*C - 330.0*e2) * A6 / 720.0);
+    double y = N * (Ap + (1.0 - T + C) * Ap * A2 / 6.0
+                    + (5.0 - 18.0*T + T*T + 72.0*C - 58.0*e2) * Ap * A4 / 120.0);
+    *X = x;
+    *Y = y + 500000.0;          /* 500km 假东偏移，与国标高斯投影一致 */
+}
+
+/* 纯高斯反算：平面 (X北, Y东) + 椭球(a,f) + 中央经线 lon0(度) → 基准经纬度(lat,lon)。 */
+static void gauss_inv(double a, double f, double lon0, double X, double Y,
+                      double *lat, double *lon)
+{
+    double e2  = f * (2.0 - f);
+    double e1  = (1.0 - sqrt(1.0 - e2)) / (1.0 + sqrt(1.0 - e2));
+    double yc  = Y - 500000.0;
+    double M   = X;
+    double mu  = M / (a * (1.0 - e2/4.0 - 3.0*e2*e2/64.0 - 5.0*e2*e2*e2/256.0));
+    double B0  = mu + (3.0*e1/2.0 - 27.0*e1*e1*e1/32.0) * sin(2.0*mu)
+                   + (21.0*e1*e1/16.0 - 55.0*e1*e1*e1*e1/32.0) * sin(4.0*mu)
+                   + (151.0*e1*e1*e1/96.0) * sin(6.0*mu)
+                   + (1097.0*e1*e1*e1*e1/512.0) * sin(8.0*mu);
+    double sinB0 = sin(B0), cosB0 = cos(B0), tanB0 = tan(B0);
+    double N0 = a / sqrt(1.0 - e2 * sinB0 * sinB0);
+    double T0 = tanB0 * tanB0;
+    double C0 = (e2 / (1.0 - e2)) * cosB0 * cosB0;
+    double R0 = a * (1.0 - e2) / pow(1.0 - e2 * sinB0 * sinB0, 1.5);
+    double D  = yc / N0;
+    double D2 = D*D, D4 = D2*D2, D6 = D4*D2;
+    double B = B0 - (N0 * tanB0 / R0) * (D2/2.0
+                    - (5.0 + 3.0*T0 + 10.0*C0 - 4.0*C0*C0 - 9.0*e2) * D4 / 24.0
+                    + (61.0 + 90.0*T0 + 298.0*C0 + 45.0*T0*T0 - 252.0*e2) * D6 / 720.0);
+    double L = (D - (1.0 + 2.0*T0 + C0) * D2 * D / 6.0
+                + (5.0 - 2.0*C0 + 28.0*T0 - 3.0*C0*C0 + 8.0*e2 + 24.0*T0*T0) * D4 * D / 120.0)
+               / cosB0;
+    *lat = B * 180.0 / M_PI;
+    *lon = lon0 + L * 180.0 / M_PI;
+}
+
+void datum_gk_forward(DatumId id, double lat, double lon, double lon0_deg,
+                      double *X, double *Y)
+{
+    double a, f; datum_ellipsoid(id, &a, &f);
+    double lad, lod;
+    datum_wgs84_to(id, lat, lon, 0, &lad, &lod, NULL);  /* WGS84 → 基准经纬度 */
+    gauss_fwd(a, f, lon0_deg, lad, lod, X, Y);
+}
+
+void datum_gk_inverse(DatumId id, double X, double Y, double lon0_deg,
+                      double *lat, double *lon)
+{
+    double a, f; datum_ellipsoid(id, &a, &f);
+    double lad, lod;
+    gauss_inv(a, f, lon0_deg, X, Y, &lad, &lod);        /* 平面 → 基准经纬度 */
+    datum_to_wgs84(id, lad, lod, 0, lat, lon, NULL);    /* 基准经纬度 → WGS84 */
+}

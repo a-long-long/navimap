@@ -6,6 +6,7 @@
 #include "map/binfmt.h"
 #include "map/namepool.h"   /* NamePool：路名池，已从本头下沉到 map 层（PLAN.md §53） */
 #include "render/raster.h"
+#include "render/font.h"   /* Font / font_draw：等高线刻度标注用到 */
 
 /* 软件渲染的路网绘制。
  *
@@ -152,7 +153,7 @@ int  paint_lines(Raster *rs, const MapView *v,
 int  paint_contours(Raster *rs, const MapView *v,
                    const NMBinFile *contours, const NMBinFile *polyrefs,
                    const NMBinFile *pts,
-                   int32_t **bbox_cache, PaintStats *st);
+                   int32_t **bbox_cache, PaintStats *st, Font *font);
 
 /* 在屏幕上标一个点（当前位置/选点） */
 void paint_marker(Raster *rs, int x, int y, int radius,
