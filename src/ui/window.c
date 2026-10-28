@@ -73,6 +73,8 @@ int app_init(App *a, const char *graph_dir, int w, int h,
     {
         int dv = settings_get_int(a->cfg, "datum", 0);
         a->datum = (dv >= 0 && dv < DATUM_COUNT) ? dv : DATUM_WGS84;
+        int gt = settings_get_int(a->cfg, "grid_type", 1);
+        a->grid_type = (gt == GRID_LATLON || gt == GRID_GK) ? gt : GRID_GK;
     }
     /* 浮层透明度：逐浮层从设置读（键缺失 ⇒ 默认 75%）。同样必须在这里读一遍，
      * app_apply_settings 只服务 C 核心自绘设置面板的「应用/恢复默认」，
@@ -302,6 +304,8 @@ void app_apply_settings(App *a)
     a->max_class    = settings_get_int(a->cfg, "max_class", 4);
     int dv = settings_get_int(a->cfg, "datum", 0);
     a->datum = (dv >= 0 && dv < DATUM_COUNT) ? dv : DATUM_WGS84;
+    int gt = settings_get_int(a->cfg, "grid_type", 1);
+    a->grid_type = (gt == GRID_LATLON || gt == GRID_GK) ? gt : GRID_GK;
     int fs = settings_get_int(a->cfg, "font_size", 14);
     if (fs != a->font_size) app_set_font_size(a, fs);
     ovl_load_all(a->cfg, a->ovl_alpha);
@@ -321,6 +325,7 @@ void app_persist_settings(App *a)
     settings_set_int(a->cfg,  "font_size",   a->font_size);
     settings_set_int(a->cfg,  "max_class",   a->max_class);
     settings_set_int(a->cfg,  "datum",       a->datum);
+    settings_set_int(a->cfg,  "grid_type",   a->grid_type);
     ovl_store_all(a->cfg, a->ovl_alpha);
     /* 视图位置：记住上次退出时所在（下次启动直接回到这里） */
     settings_set_dbl(a->cfg, "view_lat",  a->view.lat);

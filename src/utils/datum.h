@@ -35,6 +35,20 @@ const char *datum_note(DatumId id);
 int         datum_count(void);
 DatumId    datum_by_index(int i);
 
+/* 网格类型（与坐标系解耦）：经纬网（度）/ 方里格（高斯-克吕格公里网）。
+ * ★ 坐标系（datum）只管坐标**读数**，网格类型独立决定画哪种网格，默认方里格。 */
+typedef enum {
+    GRID_LATLON = 0,   /* 经纬网（度） */
+    GRID_GK     = 1    /* 方里格（高斯-克吕格公里网，默认） */
+} GridTypeId;
+
+/* 方里格投影所用的基准：读数基准是 WGS84 时用 CGCS2000（国标公里网），
+ * 读数基准是某中文基准时直接用该基准，保证方里格与读数口径一致。 */
+static inline DatumId grid_gk_datum(DatumId readout)
+{
+    return (readout == DATUM_WGS84) ? DATUM_CGCS2000 : readout;
+}
+
 /* WGS84 经纬度 → 指定基准（读数/标注用）。lat/lon 单位度；h 高程米（通常传 0，
  * 可传 NULL 表示不关心）。out_lat/out_lon 为基准下的经纬度（度）。 */
 void datum_wgs84_to(DatumId id, double lat, double lon, double h,

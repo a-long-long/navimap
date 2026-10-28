@@ -136,15 +136,16 @@ void MapCanvas::setShowGrid(bool v)
     m_a->need_redraw = 1;
 }
 
-/* ---- 坐标网格（lat/lon 经纬网）：Qt 端叠加层，C 渲染核心一行不改 ----
- * 用 mv_visible_bbox 取当前可见范围（WGS84），把四角换到所选基准取范围，
- * 再按 nice 1/2/5 步进取该基准下的经线/纬线；每条线的两端先换回 WGS84 再
- * mv_project（基准偏移在视口内近似常数，端点投影后连直线精度足够），标签标
- * 基准坐标。旋转角 rot 是投影的一部分，所以网格随地图一起转，天然正确。 */
+/* ---- 坐标网格（经纬网 / 方里格，与坐标系解耦）：Qt 端叠加层，C 渲染核心一行不改 ----
+ * 网格类型由 m_a->grid_type 决定（默认方里格）；坐标系（m_a->datum）只管读数。
+ * 经纬网：用 mv_visible_bbox 取可见范围（WGS84），把四角换到所选基准取范围，
+ *   再按 nice 1/2/5 步进取该基准下的经线/纬线；每条线两端先换回 WGS84 再 mv_project，
+ *   标签标基准坐标。旋转角 rot 是投影的一部分，所以网格随地图一起转，天然正确。
+ * 方里格：高斯-克吕格公里网，投影基准用 grid_gk_datum（读数 WGS84 时取 CGCS2000）。 */
 void MapCanvas::drawGraticule(QPainter &p)
 {
     DatumId id = (DatumId)m_a->datum;
-    if (id != DATUM_WGS84) { drawGraticuleGK(p, id); return; }  /* 非 WGS84 显示方里格 */
+    if (m_a->grid_type == GRID_GK) { drawGraticuleGK(p, grid_gk_datum(id)); return; }  /* 方里格（公里网） */
     double bbox[4];
     mv_visible_bbox(&m_a->view, bbox);   /* [la0(底), lo0(左), la1(顶), lo1(右)]，WGS84 */
 
@@ -335,9 +336,9 @@ void MapCanvas::drawGraticuleGK(QPainter &p, DatumId id)
             }
     }
 
-    /* 左上角图例：标出当前方里格所用坐标系 */
+    /* 左上角图例：标出当前为方里格（与读数坐标系解耦，仅标注网格类型） */
     {
-        QString leg = QString::fromUtf8(datum_short(id)) + QStringLiteral(" 方里格");
+        QString leg = QStringLiteral("方里格");
         QFont lf = p.font();
         lf.setPointSize(9);
         p.setFont(lf);

@@ -468,64 +468,56 @@ int MainWindow::runUiSelfTest()
         m_a->need_redraw = 1;
     }
 
-    /* ⑬ 坐标网按钮：点击**循环切换**坐标系（关→WGS84→CGCS2000→北京54→西安80→关）。
-     *    菜单栏已取消，切换入口只剩右栏坐标网按钮这一处 ⇒ 必须真的能循环。
-     *    逐状态验：isGridOn() / m_a->datum 一致；按钮纯图标不显文字，改用
-     *    悬停提示的"网格类型"语义校验（WGS84=经纬网 / 其余=方里格）。 */
+    /* ⑬ 坐标网按钮：点击**开关**网格（网格类型 / 坐标系已解耦，各自独立设置）。
+     *    网格按钮只切开关；网格类型由「设置」菜单选（默认方里格）；坐标系由「坐标系」菜单选（只管读数）。
+     *    逐状态验：isGridOn 跟随按钮点击翻转；悬停提示的"网格类型"语义（方里格/经纬网）
+     *    由 m_a->grid_type 决定，与 datum 无关。 */
     {
-        const int  keep_d = m_a->datum;
-        const bool keep_g = m_canvas->isGridOn();
+        const int  keep_gt = m_a->grid_type;
+        const int  keep_d  = m_a->datum;
+        const bool keep_g  = m_canvas->isGridOn();
 
         /* 起始：确保关着（按钮只显示图标不显文字，故只校验状态） */
         m_canvas->setShowGrid(false);
         updateGridBtn();
         check(!m_canvas->isGridOn(), "坐标网初始：关");
 
-        /* 第 1 下：关 → WGS84（开） */
+        /* 第 1 下：关 → 开（默认网格类型仍是方里格） */
         emit m_gridBtn->clicked();
         QApplication::processEvents();
-        check(m_canvas->isGridOn() && m_a->datum == DATUM_WGS84,
-              "点击①：关 → WGS84（开）");
+        check(m_canvas->isGridOn(), "点击①：关 → 开");
 
-        /* 第 2 下：WGS84 → CGCS2000 */
+        /* 第 2 下：开 → 关 */
         emit m_gridBtn->clicked();
         QApplication::processEvents();
-        check(m_a->datum == DATUM_CGCS2000, "点击②：WGS84 → CGCS2000");
+        check(!m_canvas->isGridOn(), "点击②：开 → 关");
 
-        /* 第 3 下：CGCS2000 → 北京54 */
-        emit m_gridBtn->clicked();
-        QApplication::processEvents();
-        check(m_a->datum == DATUM_BJ54, "点击③：CGCS2000 → 北京54");
-
-        /* 第 4 下：北京54 → 西安80 */
-        emit m_gridBtn->clicked();
-        QApplication::processEvents();
-        check(m_a->datum == DATUM_XA80, "点击④：北京54 → 西安80");
-
-        /* 第 5 下：西安80 → 关 */
-        emit m_gridBtn->clicked();
-        QApplication::processEvents();
-        check(!m_canvas->isGridOn(), "点击⑤：西安80 → 关");
-
-        /* 再来一下，回到 WGS84（验证循环可持续） */
-        emit m_gridBtn->clicked();
-        QApplication::processEvents();
-        check(m_canvas->isGridOn() && m_a->datum == DATUM_WGS84,
-              "再点击：关 → 重新 WGS84（循环可持续）");
-
-        /* 悬停提示的网格类型语义（间接验证需求：除 WGS84 外显示方里格） */
+        /* 悬停提示的网格类型语义（与坐标系解耦）：
+         * 设网格类型为方里格 → 提示含"方里格"；设经纬网 → 提示含"经纬网"；
+         * 切换坐标系不应改变网格类型。 */
         {
             m_canvas->setShowGrid(true);
-            setDatum((int)DATUM_WGS84); updateGridBtn();
-            check(m_gridBtn->toolTip().contains(QStringLiteral("经纬网")),
-                  "悬停提示：WGS84 为经纬网");
-            setDatum((int)DATUM_XA80); updateGridBtn();
+            setGridType((int)GRID_GK); updateGridBtn();
             check(m_gridBtn->toolTip().contains(QStringLiteral("方里格")),
-                  "悬停提示：非 WGS84 为方里格");
+                  "悬停提示：网格类型=方里格");
+            setGridType((int)GRID_LATLON); updateGridBtn();
+            check(m_gridBtn->toolTip().contains(QStringLiteral("经纬网")),
+                  "悬停提示：网格类型=经纬网");
+            /* 切换坐标系不影响网格类型（解耦验证） */
+            setDatum((int)DATUM_XA80); updateGridBtn();
+            check(m_gridBtn->toolTip().contains(QStringLiteral("经纬网")) &&
+                  m_gridBtn->toolTip().contains(QStringLiteral("西安")),
+                  "切换坐标系：网格类型保持经纬网、读数基准变西安80");
+            setGridType((int)GRID_GK); updateGridBtn();
+            setDatum((int)DATUM_WGS84); updateGridBtn();
+            check(m_gridBtn->toolTip().contains(QStringLiteral("方里格")) &&
+                  m_gridBtn->toolTip().contains(QStringLiteral("WGS84")),
+                  "切回 WGS84：网格类型仍方里格（解耦验证）");
         }
 
         /* 还原 */
         m_canvas->setShowGrid(keep_g);
+        setGridType(keep_gt);
         setDatum(keep_d);
         updateGridBtn();
     }
@@ -710,6 +702,24 @@ void MainWindow::buildMenus()
             m_a->need_redraw = 1;
         });
         m_subdivAct = act;
+    }
+    /* 网格类型（与坐标系解耦）：经纬网 / 方里格，默认方里格。
+     * 两个 radio 动作，勾选态随 m_a->grid_type 同步；点击走 setGridType（持久化+重绘）。 */
+    {
+        QMenu *mg = mset->addMenu(QStringLiteral("网格类型"));
+        const char *names[2] = { "经纬网（度）", "方里格（公里）" };
+        for (int i = 0; i < 2; i++) {
+            QAction *act = mg->addAction(QString::fromUtf8(names[i]));
+            act->setCheckable(true);
+            act->setChecked(m_a->grid_type == i);
+            connect(act, &QAction::triggered, this, [this, i]() {
+                setGridType(i);
+                /* 同步同组另一个动作的勾选态 */
+                for (QAction *a : m_gridTypeActs) a->setChecked(a->data().toInt() == m_a->grid_type);
+            });
+            act->setData(i);
+            m_gridTypeActs.append(act);
+        }
     }
     {
         QAction *act = mset->addAction(QStringLiteral("POI 图标"));
@@ -995,16 +1005,14 @@ void MainWindow::buildRightCol()
     });
 
     /* 坐标网（经纬网）叠加层 + 点击循环切换坐标系。
-     * 取消菜单栏后，切换坐标系的入口只剩这一处 ⇒ 点击按钮循环切换：
-     *   关 → WGS84 → CGCS2000 → 北京54 → 西安80 → 关
-     * 按钮旁边直接显示当前坐标系短名（TextBesideIcon），悬停提示里再给
-     * 来源说明与循环顺序（见 updateDatumTip）。网格按所选基准画刻度
-     * （MapCanvas::drawGraticule，左上角图例标出当前基准）。 */
+     * 坐标网按钮只负责**开关**网格（图标 + 悬停提示，J 先生要求不显示文字）。
+     * 网格类型（经纬网/方里格，默认方里格）与坐标系（datum，只管读数）已解耦：
+     * 两者分别在「设置」菜单与「坐标系」菜单里独立选择。 */
     m_gridBtn = bigbtn(Qt::IconKind::Grid, QStringLiteral("坐标网"));
-    m_gridBtn->setCheckable(false);   /* 点击=循环切换，不是勾选开关 */
-    m_gridBtn->setToolButtonStyle(Qt::ToolButtonIconOnly);  /* 只显示图标；坐标系/开关态由悬停提示承载 */
+    m_gridBtn->setCheckable(false);   /* 点击=开关网格，不是勾选开关 */
+    m_gridBtn->setToolButtonStyle(Qt::ToolButtonIconOnly);  /* 只显示图标；类型/坐标系/开关态由悬停提示承载 */
     m_gridBtn->setFixedSize(IconButton::kSize, IconButton::kSize);
-    connect(m_gridBtn, &QToolButton::clicked, this, &MainWindow::cycleGrid);
+    connect(m_gridBtn, &QToolButton::clicked, this, &MainWindow::toggleGrid);
     updateGridBtn();
 
     /* 轨迹 / 收藏面板开关（可勾选：亮起 = 面板开着）。
@@ -1128,9 +1136,9 @@ void MainWindow::locate()
 void MainWindow::setShowGrid(bool v)
 {
     if (m_canvas) m_canvas->setShowGrid(v);
-    /* ★ 按钮文字（"关" / 当前基准短名）必须始终反映真实状态：除了点击循环
-     *   （cycleGrid 也会调一次）外，命令行 --grid 等其它入口也走这里，
-     *   若不在此同步，会出现"网格明明开着、按钮却显示『关』"的不一致。 */
+    /* ★ 悬停提示必须始终反映真实状态：除了点击开关（toggleGrid）外，
+     *   命令行 --grid 等其它入口也走这里，若不在此同步，会出现"网格明明开着、
+     *   提示却显示『关』"的不一致。按钮本身只显示图标，不显文字。 */
     updateGridBtn();
 }
 
@@ -1146,28 +1154,26 @@ void MainWindow::setDatum(int id)
     m_a->need_redraw = 1;   /* 经纬网/读数立即按新基准重绘 */
 }
 
-/* 坐标网按钮的悬停提示：按钮本身管"开/关经纬网"，提示里额外告诉用户
- * **当前**用哪个坐标系（大地基准）读这张图，以及去哪儿切换。
- * 提示内容随 setDatum 更新 —— 右栏没有下拉框了，这条提示是唯一的
- * "当前基准"常驻显示（切换入口见提示最后一行：菜单栏「坐标系(C)」）。
+/* 坐标网按钮的悬停提示：按钮只管开/关，提示里把**网格类型**与**坐标系**分开讲。
+ * 两者已解耦：网格类型（经纬网/方里格，默认方里格）由「设置」菜单选；
+ * 坐标系（大地基准）只管读数，由「坐标系」菜单选。提示随 setGridType/setDatum 更新。
  * 精度/来源文案取 datum_note()：它和 datum.c 的参数表同文件维护，
  * 西安80 只换椭球、经纬度与 WGS84 几乎一样，不说明会被当成没生效。 */
 void MainWindow::updateDatumTip()
 {
     if (!m_gridBtn) return;
     const DatumId id = (DatumId)(m_a ? m_a->datum : DATUM_WGS84);
+    const int gt = m_a ? m_a->grid_type : GRID_GK;
     const bool on = m_canvas && m_canvas->isGridOn();
     QString tip;
     tip += QStringLiteral("坐标网：%1\n")
                .arg(on ? QStringLiteral("开") : QStringLiteral("关"));
+    tip += QStringLiteral("网格类型：%1\n")
+               .arg(gt == GRID_GK ? QStringLiteral("方里格（公里）")
+                                   : QStringLiteral("经纬网（度）"));
     tip += QStringLiteral("当前坐标系：%1\n").arg(QString::fromUtf8(datum_label(id)));
-    if (on) {
-        tip += QStringLiteral("网格类型：%1\n")
-                   .arg(id == DATUM_WGS84 ? QStringLiteral("经纬网（度）")
-                                          : QStringLiteral("方里格（公里）"));
-    }
     tip += QString::fromUtf8(datum_note(id));
-    tip += QStringLiteral("\n点击循环切换：关→WGS84→CGCS2000→北京54→西安80→关");
+    tip += QStringLiteral("\n点击按钮开关网格；网格类型见「设置」菜单，坐标系见「坐标系」菜单");
     m_gridBtn->setToolTip(tip);
 }
 
@@ -1180,23 +1186,20 @@ void MainWindow::updateGridBtn()
     updateDatumTip();
 }
 
-/* 坐标网按钮点击：循环切换坐标系。
- *   关 → WGS84 → CGCS2000 → 北京54 → 西安80 → 关 →（再点回到 WGS84）
- * 关态下点击先开到 WGS84；开态下按序列推进，到西安80 后再点就关掉网格。 */
-void MainWindow::cycleGrid()
+/* 坐标网按钮点击：仅**开关**网格。网格类型与坐标系已解耦，分别由
+ * 「设置」菜单（网格类型）与「坐标系」菜单（读数基准）独立选择。 */
+void MainWindow::toggleGrid()
 {
-    static const DatumId seq[4] = { DATUM_WGS84, DATUM_CGCS2000, DATUM_BJ54, DATUM_XA80 };
-    const bool on = m_canvas && m_canvas->isGridOn();
-    if (!on) {
-        setDatum((int)seq[0]);
-        m_canvas->setShowGrid(true);
-    } else {
-        int idx = 0;
-        for (int i = 0; i < 4; i++)
-            if (m_a->datum == (int)seq[i]) { idx = i; break; }
-        if (idx >= 3) m_canvas->setShowGrid(false);   /* 西安80 之后关闭 */
-        else setDatum((int)seq[idx + 1]);
-    }
+    if (m_canvas) m_canvas->setShowGrid(!m_canvas->isGridOn());
+}
+
+/* 设置网格类型（0 经纬网 / 1 方里格），持久化并立即重绘。 */
+void MainWindow::setGridType(int t)
+{
+    if (t != GRID_LATLON && t != GRID_GK) t = GRID_GK;
+    m_a->grid_type = t;
+    settings_set_int(m_a->cfg, "grid_type", t);
+    m_a->need_redraw = 1;
     updateGridBtn();
 }
 

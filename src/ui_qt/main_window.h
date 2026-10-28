@@ -58,9 +58,10 @@ public:
     /* 坐标系（大地基准）切换：☰ 菜单 / 菜单栏「坐标系(C)」；右栏只在下拉框
      * 撤掉后留下的坐标网按钮悬停提示里显示"当前坐标系"（updateDatumTip） */
     void setDatum(int id);
-    void updateDatumTip();             /* 刷新坐标网按钮悬停提示里的"当前坐标系" */
-    void cycleGrid();                  /* 坐标网按钮：点击循环切换坐标系（关→WGS84→CGCS2000→北京54→西安80→关） */
-    void updateGridBtn();              /* 同步按钮上的当前坐标系短名 + 悬停提示 */
+    void updateDatumTip();             /* 刷新坐标网按钮悬停提示里的"当前坐标系 + 网格类型" */
+    void toggleGrid();                 /* 坐标网按钮：点击开关网格（网格类型由「设置」菜单独立选） */
+    void setGridType(int t);           /* 设置网格类型（0 经纬网 / 1 方里格），持久化 */
+    void updateGridBtn();              /* 同步按钮悬停提示（图标本身不显文字） */
     void applyOverlayAlpha();          /* 把 App::ovl_alpha 作用到本前端的浮层上 */
     QString trackPanelStyle(int pct) const; /* 轨迹面板样式表：底板按 pct 淡、文字不透明 */
     void showOverlayAlphaDialog();     /*「浮层透明度…」对话框：每个浮层一根滑杆 */
@@ -162,6 +163,7 @@ private:
     QAction      *m_poiAct    = nullptr;   /* 「POI 图标」 */
     QAction      *m_labelsAct = nullptr;   /* 「地名标注」 */
     QAction      *m_subdivAct = nullptr;   /* 「网格细分刻度」（无快捷键，仅『设置』菜单切换） */
+    QList<QAction*> m_gridTypeActs;        /* 「设置 ▸ 网格类型」里的 经纬网/方里格 动作（与悬停提示同步） */
     /* GPX 轨迹/收藏面板（右栏「轨迹」按钮弹出；挂在画布上的浮层） */
     QWidget      *m_trackPanel = nullptr;
     QWidget      *m_trackRows  = nullptr;   /* 滚动区里的行容器（每条轨迹/收藏一行） */
