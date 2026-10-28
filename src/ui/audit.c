@@ -13,7 +13,7 @@
 #include <string.h>
 #include <math.h>
 
-#include "render/audit.h"    /* 自带 ui/window.h：App + PaintStats + 本函数原型 */
+#include "ui/audit.h"     /* 自带 ui/window.h：App + PaintStats + 本函数原型 */
 #include "render/navdraw.h"  /* NAV_ROUTE_* */
 #include "map/coverage.h"    /* mapset_coverage / COV_HAS_ROAD */
 #include "map/map_view.h"    /* mv_project */

@@ -9,7 +9,7 @@
 #include "ui/voice_wire.h"
 #include "render/paint.h"
 #include "render/navdraw.h"
-#include "render/chrome.h"
+#include "ui/chrome.h"
 #include "render/trackdraw.h"
 #include "map/binfmt.h"
 #include "map/map_view.h"

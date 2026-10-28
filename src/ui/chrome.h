@@ -4,6 +4,12 @@
 #include "ui/window.h"
 #include "render/raster.h"
 
+/* ★ 模块归属（2026-10-28 R2，PLAN.md §53）：本文件原在 render/，因要读 App
+ * 全量定义而反向引用 ui/window.h，形成 render→ui 的模块级倒置 + 符号级环。
+ * 现已移到 ui/：chrome 画的是"应用界面外壳"（标题栏/顶栏/右栏/面板/菜单），
+ * 天然属于 UI 层；render 退化为纯光栅层（只把要素画进 Raster）。
+ * 它调 render 的 font/raster/navdraw 是 ui→render 的既有正确方向。 */
+
 /* 自绘标题栏高度（window.c 与 chrome.c 共用，改了要同步） */
 #define CHROME_TITLE_H 30
 

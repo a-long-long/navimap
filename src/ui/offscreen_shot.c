@@ -39,7 +39,7 @@
 #include "utils/plat.h"
 #include "render/paint.h"
 #include "render/navdraw.h"  /* NAV_ROUTE_* */
-#include "render/audit.h"    /* 共享离屏像素审计（app_offscreen_audit） */
+#include "ui/audit.h"      /* 共享离屏像素审计（app_offscreen_audit） */
 #include "route/navsim.h"    /* 模拟导航 */
 #include "route/maneuver.h"  /* maneuver_kind_text */
 

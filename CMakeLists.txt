@@ -141,11 +141,17 @@ set(PBF_SRCS
 
 # 阶段 2：把核心剩余模块提升为独立 STATIC 库（ARCH_ASSESSMENT.md §4 DAG）。
 #   map → pbf, utils        route → map, utils
-#   search → utils          render → map, route, search, utils（并反向引用 ui，见下）
-#   ui → map, render, route, search, utils
-# 注意：实测 render/chrome.c 调用 ui/window.c 的 app_nav_*（导航动作），ui/window.c
-# 又调用 render 的 paint/navdraw/chrome —— render↔ui 是真实的符号级环（文档 DAG 未体现）。
-# 用 LINKER:-start-group 包住全部模块库消解该环（仅 GNU/MinGW ld 需要；MSVC link 自带多轮）。
+#   search → utils          render → map, route, search, settings, utils
+#   ui → map, render, route, search, settings, utils
+# ★ 2026-10-28 R2：原先 render/chrome.c + render/audit.c 住在 render 库里，因要读
+#   App 全量定义而反向引用 ui/window.h ⇒ render↔ui 是真实的符号级环。现在这两个
+#   文件已移到 ui/（git mv，历史保留）：render 退化为纯光栅层（零 ui 依赖），
+#   ui → render 仍是既有正确方向 ⇒ 符号级环消除（见 PLAN.md §53）。
+#   ⇒ 下面所有链接都**不再需要** -Wl,--start-group：模块依赖已是纯 DAG，
+#     链接器单趟就能按拓扑序解析全部符号（实测：去掉 start-group 后全量
+#     链接零 undefined reference，且出图逐字节一致）。
+#     保留 start-group 反而会**掩盖**将来新引入的环——链接器多轮扫描会
+#     悄悄补上，边界形同虚设。故已移除；R3 的分层门禁负责防回流。
 set(MAP_SRCS
     src/map/road_tags.c
     src/map/binfmt.c
@@ -177,16 +183,16 @@ set(RENDER_SRCS
     src/render/paint.c
     src/render/raster.c
     src/render/navdraw.c
-    src/render/chrome.c
     src/render/font.c
     src/render/labels.c
-    src/render/trackdraw.c
-    src/render/audit.c)
+    src/render/trackdraw.c)
 set(UI_SRCS
     src/ui/window.c
     src/ui/overlay.c
     src/ui/voice_wire.c
-    src/ui/offscreen_shot.c)
+    src/ui/offscreen_shot.c
+    src/ui/chrome.c
+    src/ui/audit.c)
 
 # 阶段 1 叶子库：把 src/utils 按模块拆成 4 个独立 STATIC 库（字面补全阶段1）。
 # 依赖关系：mem → plat；geo / strpool / plat 为纯叶子（零内部依赖）。
@@ -291,9 +297,9 @@ target_include_directories(navmap_route PUBLIC
 target_link_libraries(navmap_route PUBLIC
     navmap_map navmap_geo navmap_strpool navmap_plat navmap_mem)
 
-# navmap_render：map + route + search + 叶子库
-#   （render 反向引用 ui 的 app_nav_*，由下方 start-group 消解；此处不显式声明 ui 依赖，
-#    以避免 CMake 报循环依赖警告，同时保留 DAG 可读性）
+# navmap_render：map + route + search + settings + 叶子库
+#   ★ 2026-10-28 R2 起 render 零 ui 依赖（chrome/audit 已移到 ui），
+#     符号级环消除 ⇒ 无需再靠 start-group 消解，也不再隐式依赖 ui。
 add_library(navmap_render STATIC ${RENDER_SRCS})
 target_include_directories(navmap_render PUBLIC
     ${CMAKE_SOURCE_DIR}/src ${GEN_DIR}
@@ -348,21 +354,14 @@ else()
     set(NAVIMAP_CORE_SYS_LIBS "")
 endif()
 
-# ★ render↔ui 是真实的符号级环（见 MODULE_SRCS 注释），必须用 --start-group 包住
-#   全部项目库，让链接器多轮扫描消解环。MSVC 的 link.exe 自带多轮，无需该选项。
-if(MSVC)
-    target_link_libraries(navimap_core PUBLIC
-        navmap_map navmap_route navmap_search navmap_render navmap_ui navmap_settings
-        navmap_pbf navmap_geo navmap_strpool navmap_plat navmap_mem
-        ${ZLIB_LIBRARIES} ${SQLITE3_LIBRARIES} ${PROTOC_LIB} ${NAVIMAP_CORE_SYS_LIBS})
-else()
-    target_link_libraries(navimap_core PUBLIC
-        -Wl,--start-group
-        navmap_map navmap_route navmap_search navmap_render navmap_ui navmap_settings
-        navmap_pbf navmap_geo navmap_strpool navmap_plat navmap_mem
-        ${ZLIB_LIBRARIES} ${SQLITE3_LIBRARIES} ${PROTOC_LIB} ${NAVIMAP_CORE_SYS_LIBS}
-        -Wl,--end-group)
-endif()
+# ★ 2026-10-28 R2：模块依赖已是纯 DAG（render 零 ui 依赖，符号级环消除），
+#   链接器单趟即可按拓扑序解析全部符号 ⇒ 不再需要 -Wl,--start-group。
+#   ★ 刻意保留"单趟链接"这项约束：start-group 会让链接器多轮扫描，把将来
+#     新引入的符号级环**悄悄补上** ⇒ 边界形同虚设。R3 的分层门禁负责防回流。
+target_link_libraries(navimap_core PUBLIC
+    navmap_map navmap_route navmap_search navmap_render navmap_ui navmap_settings
+    navmap_pbf navmap_geo navmap_strpool navmap_plat navmap_mem
+    ${ZLIB_LIBRARIES} ${SQLITE3_LIBRARIES} ${PROTOC_LIB} ${NAVIMAP_CORE_SYS_LIBS})
 
 
 
@@ -428,26 +427,18 @@ endif()
 # 阶段 2（续）：24 个 exe 改为只链所需模块库。
 #   每个工具只链它真正用到的模块库（map/route/search/render/ui 的子集），
 #   叶子库（pbf/geo/strpool/plat/mem）与第三方库（z/sqlite3/protoc/m）统一在
-#   nm_link_tool 内补齐。因为 render↔ui 是真实符号级环，所有项目库必须包在
-#   -Wl,--start-group … -Wl,--end-group 里让链接器多轮扫描消解（MSVC link 自带
-#   多轮，走 else 分支纯列清单）。
+#   nm_link_tool 内补齐。
+#   ★ 2026-10-28 R2：原先因 render↔ui 符号级环，所有项目库必须包在
+#     -Wl,--start-group … -Wl,--end-group 里让链接器多轮扫描消解。环消除后
+#     这个包裹已无必要（且会掩盖新引入的环），故 MSVC / GNU 两分支合并为一份。
 #   这样每个 exe 的链接面被裁剪到最小，且依赖方向被链接器强制（偷偷反向依赖会
 #   立刻 undefined-reference），符合 ARCH_ASSESSMENT.md §4 阶段2 的验收目标。
 # ---------------------------------------------------------------------------
 function(nm_link_tool tgt)
-    if(MSVC)
-        target_link_libraries(${tgt} PRIVATE
-            ${ARGN}
-            navmap_pbf navmap_geo navmap_strpool navmap_plat navmap_mem
-            ${ZLIB_LIBRARIES} ${SQLITE3_LIBRARIES} ${PROTOC_LIB} ${NM_LEAF_SYS_LIBS})
-    else()
-        target_link_libraries(${tgt} PRIVATE
-            -Wl,--start-group
-            ${ARGN}
-            navmap_pbf navmap_geo navmap_strpool navmap_plat navmap_mem
-            ${ZLIB_LIBRARIES} ${SQLITE3_LIBRARIES} ${PROTOC_LIB} ${NM_LEAF_SYS_LIBS}
-            -Wl,--end-group)
-    endif()
+    target_link_libraries(${tgt} PRIVATE
+        ${ARGN}
+        navmap_pbf navmap_geo navmap_strpool navmap_plat navmap_mem
+        ${ZLIB_LIBRARIES} ${SQLITE3_LIBRARIES} ${PROTOC_LIB} ${NM_LEAF_SYS_LIBS})
 endfunction()
 
 # ---------------------------------------------------------------------------
