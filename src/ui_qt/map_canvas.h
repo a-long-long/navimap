@@ -66,6 +66,7 @@ private:
 public:
     /* 坐标网开关：Qt 端叠加层，C 渲染核心不参与 */
     void setShowGrid(bool v);
+    bool isGridOn() const { return m_showGrid; }   /* 坐标网是否开启（右栏按钮循环切换用） */
 
     App        *m_a;
     MainWindow *m_mw;

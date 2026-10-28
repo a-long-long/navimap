@@ -2,10 +2,10 @@
 #define NAVIMAP_QT_MAIN_WINDOW_H
 
 /* Qt 前端主窗口：nav-desktop 同款界面元素，全部用真控件——
- *   菜单栏（QMenuBar）：搜索/清除路线/缩放到路线/跟随车头/昼夜/模拟导航/退出
+ *   取消顶栏菜单栏：全部功能收进右栏「≡主菜单」一个弹出按钮（Qt 弹出菜单）。
  *   **浮在地图上的独立按钮**（不进任何工具栏）：
  *       左上角：搜索按钮（点击才展开搜索框）
- *       右上角：放大 / 缩小 / 定位 / 昼夜 / 坐标网 / 菜单
+ *       右上角：放大 / 缩小 / 定位 / 昼夜 / 坐标网(点击循环切换坐标系) / 轨迹 / ≡主菜单
  *   左侧步骤面板（QDockWidget + QListWidget）：转向指令列表
  * 地图画布（MapCanvas）作为 centralWidget，负责渲染与地图交互。
  *
@@ -17,7 +17,7 @@
  * ★ 为什么**没有顶栏**（原先有一个 QToolBar 放搜索按钮和页签）：
  *   地图 app 的惯例是"控件浮在地图上"，不占一条独立的横栏。
  *   一条常驻工具栏会挤掉地图的垂直空间，也让界面显得像桌面软件而不是导航 app。
- *   现在只有：菜单栏（操作系统惯例）+ 地图（浮着按钮）。底部状态栏已取消。
+ *   现在只有：地图（浮着按钮 + 一个「≡主菜单」弹出按钮）。底部状态栏已取消。
  *
  * ★ 两个浮层都挂在 MapCanvas 上（parent=m_canvas），随画布尺寸变化重新定位
  *   （靠 MainWindow::eventFilter 监听画布的 Resize）：
@@ -59,6 +59,8 @@ public:
      * 撤掉后留下的坐标网按钮悬停提示里显示"当前坐标系"（updateDatumTip） */
     void setDatum(int id);
     void updateDatumTip();             /* 刷新坐标网按钮悬停提示里的"当前坐标系" */
+    void cycleGrid();                  /* 坐标网按钮：点击循环切换坐标系（关→WGS84→CGCS2000→北京54→西安80→关） */
+    void updateGridBtn();              /* 同步按钮上的当前坐标系短名 + 悬停提示 */
     void applyOverlayAlpha();          /* 把 App::ovl_alpha 作用到本前端的浮层上 */
     QString trackPanelStyle(int pct) const; /* 轨迹面板样式表：底板按 pct 淡、文字不透明 */
     void showOverlayAlphaDialog();     /*「浮层透明度…」对话框：每个浮层一根滑杆 */

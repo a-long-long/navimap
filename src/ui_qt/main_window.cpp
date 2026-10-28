@@ -82,6 +82,7 @@ void MainWindow::start()
 {
     m_timer->start(33);
     m_canvas->renderNow();
+    updateGridBtn();   /* 让坐标网按钮显示当前坐标系统一短名 */
 }
 
 bool MainWindow::takeShot(const QString &path)
@@ -467,6 +468,62 @@ int MainWindow::runUiSelfTest()
         m_a->need_redraw = 1;
     }
 
+    /* ⑬ 坐标网按钮：点击**循环切换**坐标系（关→WGS84→CGCS2000→北京54→西安80→关）。
+     *    菜单栏已取消，切换入口只剩右栏坐标网按钮这一处 ⇒ 必须真的能循环。
+     *    逐状态验：isGridOn() / m_a->datum / m_gridBtn->text() 三者一致。 */
+    {
+        const int  keep_d = m_a->datum;
+        const bool keep_g = m_canvas->isGridOn();
+
+        /* 起始：确保关着，按钮文字为"关" */
+        m_canvas->setShowGrid(false);
+        updateGridBtn();
+        check(!m_canvas->isGridOn(), "坐标网初始：关");
+        check(m_gridBtn->text() == QStringLiteral("关"),
+              "坐标网初始：按钮显示「关」");
+
+        /* 第 1 下：关 → WGS84（开） */
+        emit m_gridBtn->clicked();
+        QApplication::processEvents();
+        check(m_canvas->isGridOn() && m_a->datum == DATUM_WGS84,
+              "点击①：关 → WGS84（开）");
+        check(m_gridBtn->text() == QString::fromUtf8(datum_short(DATUM_WGS84)),
+              "点击①：按钮显示 WGS84 短名");
+
+        /* 第 2 下：WGS84 → CGCS2000 */
+        emit m_gridBtn->clicked();
+        QApplication::processEvents();
+        check(m_a->datum == DATUM_CGCS2000, "点击②：WGS84 → CGCS2000");
+
+        /* 第 3 下：CGCS2000 → 北京54 */
+        emit m_gridBtn->clicked();
+        QApplication::processEvents();
+        check(m_a->datum == DATUM_BJ54, "点击③：CGCS2000 → 北京54");
+
+        /* 第 4 下：北京54 → 西安80 */
+        emit m_gridBtn->clicked();
+        QApplication::processEvents();
+        check(m_a->datum == DATUM_XA80, "点击④：北京54 → 西安80");
+
+        /* 第 5 下：西安80 → 关 */
+        emit m_gridBtn->clicked();
+        QApplication::processEvents();
+        check(!m_canvas->isGridOn(), "点击⑤：西安80 → 关");
+        check(m_gridBtn->text() == QStringLiteral("关"),
+              "点击⑤：按钮显示「关」");
+
+        /* 再来一下，回到 WGS84（验证循环可持续） */
+        emit m_gridBtn->clicked();
+        QApplication::processEvents();
+        check(m_canvas->isGridOn() && m_a->datum == DATUM_WGS84,
+              "再点击：关 → 重新 WGS84（循环可持续）");
+
+        /* 还原 */
+        m_canvas->setShowGrid(keep_g);
+        setDatum(keep_d);
+        updateGridBtn();
+    }
+
     if (fail == 0) {
         printf("QT-UI-OK\n");
         return 0;
@@ -538,8 +595,13 @@ void MainWindow::buildMenus()
     addAct(m_menuMain, QStringLiteral("退出"), QKeySequence(Qt::CTRL | Qt::Key_Q), this,
            [this]() { m_a->quit = 1; close(); });
     menuBar()->addMenu(m_menuMain);
+    /* ★ 取消可见菜单栏：保留 menuBar 对象以便键盘快捷键（Ctrl+F/G/N/0-4 等）
+     *   仍生效，但把可见菜单栏本身隐藏（设 0 高、不可见）。全部功能收进右栏
+     *   「≡主菜单」一个弹出按钮（下方把其余 5 个子菜单挂进 m_menuMain）。 */
+    menuBar()->setVisible(false);
+    menuBar()->setFixedHeight(0);
 
-    QMenu *msim = menuBar()->addMenu(QStringLiteral("模拟导航(&S)"));
+    QMenu *msim = new QMenu(QStringLiteral("模拟导航(&S)"), this);
     addAct(msim, QStringLiteral("开始 / 停止"), QKeySequence(Qt::Key_G), this,
            [this]() { app_nav_sim_toggle(m_a); });
     addAct(msim, QStringLiteral("注入偏航（触发重算）"), QKeySequence(Qt::Key_N), this,
@@ -549,7 +611,7 @@ void MainWindow::buildMenus()
     addAct(msim, QStringLiteral("减速"), QKeySequence(Qt::Key_Comma), this,
            [this]() { app_nav_sim_speed(m_a, -1); });
 
-    QMenu *mview = menuBar()->addMenu(QStringLiteral("视图(&V)"));
+    QMenu *mview = new QMenu(QStringLiteral("视图(&V)"), this);
     for (int k = 0; k <= 4; k++) {
         addAct(mview, QString::asprintf("道路细节 LOD %d", k), QKeySequence(), this,
                [this, k]() { m_a->max_class = k; m_a->need_redraw = 1; });
@@ -577,7 +639,7 @@ void MainWindow::buildMenus()
 
     /* 坐标系（大地基准）：切基准后经纬网与读数按该基准呈现。勾选态与右栏
      * 坐标网按钮悬停提示里的"当前坐标系"同步（右栏没有下拉框了）。 */
-    QMenu *mdatum = menuBar()->addMenu(QStringLiteral("坐标系(&C)"));
+    QMenu *mdatum = new QMenu(QStringLiteral("坐标系(&C)"), this);
     for (int i = 0; i < DATUM_COUNT; i++) {
         QAction *act = mdatum->addAction(QString::fromUtf8(datum_label((DatumId)i)));
         act->setCheckable(true);
@@ -588,7 +650,7 @@ void MainWindow::buildMenus()
     }
 
     /* 轨迹 / 收藏：导入 GPX、导出全部、收藏中心点。 */
-    QMenu *mgpx = menuBar()->addMenu(QStringLiteral("轨迹(&K)"));
+    QMenu *mgpx = new QMenu(QStringLiteral("轨迹(&K)"), this);
     addAct(mgpx, QStringLiteral("导入 GPX…"), QKeySequence(Qt::CTRL | Qt::Key_I), this,
            [this]() { importGpx(); });
     addAct(mgpx, QStringLiteral("导出全部为 GPX…"), QKeySequence(Qt::CTRL | Qt::Key_E), this,
@@ -601,7 +663,7 @@ void MainWindow::buildMenus()
     /* 显示 / 播报开关：原 SDL 设置面板承载的开关，#88 拆 SDL 壳后由 Qt 菜单接管。
      * 三个均可勾选，勾选态与对应快捷键（语音=V 键）同步，与 O 键等高线同理。
      * 字段由 app_persist_settings 在退出时落盘，这里只切运行时值 + 请求重绘。 */
-    QMenu *mset = menuBar()->addMenu(QStringLiteral("设置(&P)"));
+    QMenu *mset = new QMenu(QStringLiteral("设置(&P)"), this);
     {
         QAction *act = mset->addAction(QStringLiteral("语音播报"));
         act->setCheckable(true);
@@ -632,6 +694,13 @@ void MainWindow::buildMenus()
         });
         m_labelsAct = act;
     }
+
+    /* 把 5 个功能子菜单挂进「≡主菜单」弹出按钮，取消顶栏后作为唯一入口 */
+    m_menuMain->addMenu(msim);
+    m_menuMain->addMenu(mview);
+    m_menuMain->addMenu(mdatum);
+    m_menuMain->addMenu(mgpx);
+    m_menuMain->addMenu(mset);
 }
 
 /* ---------------- 顶栏：搜索按钮 + 模式页签 + 路线摘要 ----------------
@@ -833,16 +902,19 @@ void MainWindow::buildRightCol()
         m_a->day_night = !m_a->day_night; m_a->need_redraw = 1;
     });
 
-    /* 坐标网（经纬网）叠加层开关。悬停提示里**顺带显示当前坐标系**：
-     * 基准只影响经纬网与右下角读数（不重投底图），所以它和坐标网是同一件事，
-     * 提示放这儿最顺。切换入口在菜单栏「坐标系(C)」/ ☰ 菜单，右栏不再放下拉框
-     * （曾经放过一个 124px 的 QComboBox，占地方且和菜单重复）。 */
-    m_gridBtn = bigbtn(Qt::IconKind::Grid, QStringLiteral("坐标网（经纬网）"));
-    m_gridBtn->setCheckable(true);
-    connect(m_gridBtn, &QToolButton::toggled, this, [this](bool on) {
-        m_canvas->setShowGrid(on);
-    });
-    updateDatumTip();
+    /* 坐标网（经纬网）叠加层 + 点击循环切换坐标系。
+     * 取消菜单栏后，切换坐标系的入口只剩这一处 ⇒ 点击按钮循环切换：
+     *   关 → WGS84 → CGCS2000 → 北京54 → 西安80 → 关
+     * 按钮旁边直接显示当前坐标系短名（TextBesideIcon），悬停提示里再给
+     * 来源说明与循环顺序（见 updateDatumTip）。网格按所选基准画刻度
+     * （MapCanvas::drawGraticule，左上角图例标出当前基准）。 */
+    m_gridBtn = bigbtn(Qt::IconKind::Grid, QStringLiteral("坐标网"));
+    m_gridBtn->setCheckable(false);   /* 点击=循环切换，不是勾选开关 */
+    m_gridBtn->setToolButtonStyle(Qt::ToolButtonTextBesideIcon);
+    m_gridBtn->setFixedWidth(104);
+    m_gridBtn->setFixedHeight(IconButton::kSize);
+    connect(m_gridBtn, &QToolButton::clicked, this, &MainWindow::cycleGrid);
+    updateGridBtn();
 
     /* 轨迹 / 收藏面板开关（可勾选：亮起 = 面板开着）。
      * 和缩放/定位/昼夜那组"操作地图"的分开，与坐标网之间空一档。 */
@@ -876,6 +948,10 @@ void MainWindow::buildRightCol()
 
     /* 外观：底板/边框/悬停高亮全部由 IconButton::paintEvent 自绘
        （所以这里**不设样式表** —— 样式表会盖掉自绘的底板）。 */
+    /* 右对齐：网格按钮带文字较宽，其余图标按钮靠右、与画布右沿对齐更整齐 */
+    for (QWidget *w : m_rightOverlay->findChildren<QWidget *>())
+        vl->setAlignment(w, Qt::AlignRight | Qt::AlignTop);
+
     m_rightOverlay->adjustSize();
     m_rightOverlay->raise();
 
@@ -961,6 +1037,10 @@ void MainWindow::locate()
 void MainWindow::setShowGrid(bool v)
 {
     if (m_canvas) m_canvas->setShowGrid(v);
+    /* ★ 按钮文字（"关" / 当前基准短名）必须始终反映真实状态：除了点击循环
+     *   （cycleGrid 也会调一次）外，命令行 --grid 等其它入口也走这里，
+     *   若不在此同步，会出现"网格明明开着、按钮却显示『关』"的不一致。 */
+    updateGridBtn();
 }
 
 void MainWindow::setDatum(int id)
@@ -989,8 +1069,39 @@ void MainWindow::updateDatumTip()
     tip += QStringLiteral("当前坐标系：%1\n%2")
                .arg(QString::fromUtf8(datum_label(id)),
                     QString::fromUtf8(datum_note(id)));
-    tip += QStringLiteral("\n切换：菜单栏「坐标系(C)」或 ☰ 主菜单");
+    tip += QStringLiteral("\n点击本按钮循环切换：关→WGS84→CGCS2000→北京54→西安80→关");
     m_gridBtn->setToolTip(tip);
+}
+
+/* 同步坐标网按钮上的当前坐标系短名 + 悬停提示。
+ * 关 ⇒ "关"；开 ⇒ 显示所选基准短名（WGS84/CGCS2000/北京54/西安80）。 */
+void MainWindow::updateGridBtn()
+{
+    if (!m_gridBtn) return;
+    const bool on = m_canvas && m_canvas->isGridOn();
+    const DatumId id = (DatumId)(m_a ? m_a->datum : DATUM_WGS84);
+    m_gridBtn->setText(on ? QString::fromUtf8(datum_short(id)) : QStringLiteral("关"));
+    updateDatumTip();
+}
+
+/* 坐标网按钮点击：循环切换坐标系。
+ *   关 → WGS84 → CGCS2000 → 北京54 → 西安80 → 关 →（再点回到 WGS84）
+ * 关态下点击先开到 WGS84；开态下按序列推进，到西安80 后再点就关掉网格。 */
+void MainWindow::cycleGrid()
+{
+    static const DatumId seq[4] = { DATUM_WGS84, DATUM_CGCS2000, DATUM_BJ54, DATUM_XA80 };
+    const bool on = m_canvas && m_canvas->isGridOn();
+    if (!on) {
+        setDatum((int)seq[0]);
+        m_canvas->setShowGrid(true);
+    } else {
+        int idx = 0;
+        for (int i = 0; i < 4; i++)
+            if (m_a->datum == (int)seq[i]) { idx = i; break; }
+        if (idx >= 3) m_canvas->setShowGrid(false);   /* 西安80 之后关闭 */
+        else setDatum((int)seq[idx + 1]);
+    }
+    updateGridBtn();
 }
 
 /* ---------------- 浮层透明度 ---------------- */

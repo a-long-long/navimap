@@ -197,6 +197,19 @@ void MapCanvas::drawGraticule(QPainter &p)
         snprintf(buf, sizeof(buf), "%.4f°%c", fabs(lat), lat >= 0 ? 'N' : 'S');
         p.drawText(xb + 2, yb - 3, QString::fromUtf8(buf));
     }
+
+    /* 左上角图例：标出当前经纬网所用坐标系（与右下角读数的基准短名一致）。 */
+    {
+        QString leg = QString::fromUtf8(datum_short(id)) + QStringLiteral(" 经纬网");
+        QFont lf = p.font();
+        lf.setPointSize(9);
+        p.setFont(lf);
+        QRect br = p.fontMetrics().boundingRect(leg);
+        int lx = 10, ly = 54;
+        p.fillRect(lx - 3, ly - 2, br.width() + 8, br.height() + 4, QColor(255, 255, 255, 205));
+        p.setPen(QColor(40, 60, 95, 225));
+        p.drawText(lx, ly + br.height(), leg);
+    }
 }
 
 /* ---- 比例尺：与 chrome.c 的 draw_scale 同一套换算，Qt 侧重画 ---- */
