@@ -541,6 +541,31 @@ int MainWindow::runUiSelfTest()
         }
     }
 
+    /* ⑮ 地图信息显示开关统一收进「设置」菜单。
+     *    验证：各显示开关 action 均存在；原先散落在「视图」(等高线)、主菜单 (昼夜模式)
+     *          的项现已收进「设置」(父菜单 == m_setMenu)；勾选态初始与运行时值一致。 */
+    {
+        check(m_subdivAct   != nullptr, "显示开关：网格细分刻度存在");
+        check(m_poiAct      != nullptr, "显示开关：POI 图标存在");
+        check(m_labelsAct   != nullptr, "显示开关：地名标注存在");
+        check(m_contourAct  != nullptr, "显示开关：等高线存在");
+        check(m_dayNightAct != nullptr, "显示开关：昼夜模式存在");
+        check(m_voiceAct    != nullptr, "显示开关：语音播报存在");
+        if (m_contourAct)   check(m_setMenu && m_setMenu->actions().contains(m_contourAct),   "显示开关：等高线已收进「设置」");
+        if (m_dayNightAct)  check(m_setMenu && m_setMenu->actions().contains(m_dayNightAct),  "显示开关：昼夜模式已收进「设置」");
+        if (m_dayNightAct)  check(m_dayNightAct->isChecked()   == !!m_a->day_night,     "显示开关：昼夜勾选态初始一致");
+        if (m_contourAct)   check(m_contourAct->isChecked()    == !!m_a->show_contours, "显示开关：等高线勾选态初始一致");
+        /* 真正验证 D 键会同步菜单勾选态（修复：原先昼夜菜单项不跟随 D 键 / 右栏昼夜按钮） */
+        if (m_dayNightAct) {
+            const int dn0 = m_a->day_night;
+            this->handleKey(Qt::Key_D);
+            check(m_a->day_night == !dn0, "显示开关：D 键翻转昼夜运行时值");
+            check(m_dayNightAct->isChecked() == !!m_a->day_night, "显示开关：D 键后昼夜菜单勾选态同步");
+            this->handleKey(Qt::Key_D);   /* 还原 */
+            check(m_dayNightAct->isChecked() == !!m_a->day_night, "显示开关：D 键还原后勾选态同步");
+        }
+    }
+
     if (fail == 0) {
         printf("QT-UI-OK\n");
         return 0;
@@ -604,8 +629,6 @@ void MainWindow::buildMenus()
            [this]() { app_nav_fit(m_a); m_a->need_redraw = 1; });
     addAct(m_menuMain, QStringLiteral("跟随车头"), QKeySequence(Qt::Key_T), this,
            [this]() { app_nav_sim_follow(m_a); });
-    addAct(m_menuMain, QStringLiteral("昼 / 夜 切换"), QKeySequence(Qt::Key_D), this,
-           [this]() { m_a->day_night = !m_a->day_night; m_a->need_redraw = 1; });
     addAct(m_menuMain, QStringLiteral("下载地图…"), QKeySequence(), this,
            [this]() { showDownloadDialog(); });
     m_menuMain->addSeparator();
@@ -641,18 +664,6 @@ void MainWindow::buildMenus()
     mview->addSeparator();
     addAct(mview, QStringLiteral("浮层透明度…"), QKeySequence(), this,
            [this]() { showOverlayAlphaDialog(); });
-    mview->addSeparator();
-    /* 等高线：可勾选，勾选态与 O 键、设置面板三处同步 */
-    {
-        QAction *act = mview->addAction(QStringLiteral("等高线"));
-        act->setCheckable(true);
-        act->setChecked(m_a->show_contours);
-        connect(act, &QAction::triggered, this, [this, act]() {
-            m_a->show_contours = act->isChecked() ? 1 : 0;
-            m_a->need_redraw = 1;
-        });
-        m_contourAct = act;
-    }
 
     /* 坐标系（大地基准）：切基准后经纬网与读数按该基准呈现。勾选态与右栏
      * 坐标网按钮悬停提示里的"当前坐标系"同步（右栏没有下拉框了）。 */
@@ -677,19 +688,22 @@ void MainWindow::buildMenus()
     addAct(mgpx, QStringLiteral("轨迹 / 收藏面板"), QKeySequence(), this,
            [this]() { toggleTrackPanel(); });
 
-    /* 显示 / 播报开关：原 SDL 设置面板承载的开关，#88 拆 SDL 壳后由 Qt 菜单接管。
-     * 三个均可勾选，勾选态与对应快捷键（语音=V 键）同步，与 O 键等高线同理。
+    /* 地图信息显示 / 播报开关：原 SDL 设置面板承载的开关，#88 拆 SDL 壳后由 Qt 菜单接管。
+     * 全部收进「设置」子菜单——等高线从「视图」移入、昼夜模式从主菜单移入，统一集散。
+     * 均可勾选，勾选态与对应快捷键（语音=V 键、等高线=O 键、昼夜=D 键）同步。
      * 字段由 app_persist_settings 在退出时落盘，这里只切运行时值 + 请求重绘。 */
     QMenu *mset = new QMenu(QStringLiteral("设置(&P)"), this);
+    /* —— 地图信息显示开关（统一收进「设置」） —— */
+    /* 坐标网细分刻度线：每格 5 等分，依附网格开关（网格关时不画）。 */
     {
-        QAction *act = mset->addAction(QStringLiteral("语音播报"));
+        QAction *act = mset->addAction(QStringLiteral("网格细分刻度"));
         act->setCheckable(true);
-        act->setChecked(m_a->voice_on);
+        act->setChecked(m_a->grid_subdiv);
         connect(act, &QAction::triggered, this, [this, act]() {
-            m_a->voice_on = act->isChecked() ? 1 : 0;
+            m_a->grid_subdiv = act->isChecked() ? 1 : 0;
             m_a->need_redraw = 1;
         });
-        m_voiceAct = act;
+        m_subdivAct = act;
     }
     {
         QAction *act = mset->addAction(QStringLiteral("POI 图标"));
@@ -711,17 +725,42 @@ void MainWindow::buildMenus()
         });
         m_labelsAct = act;
     }
-    /* 坐标网细分刻度线：每格 5 等分，依附网格开关（网格关时不画）。 */
+    /* 等高线：从「视图」菜单移入「设置」，勾选态与 O 键同步 */
     {
-        QAction *act = mset->addAction(QStringLiteral("网格细分刻度"));
+        QAction *act = mset->addAction(QStringLiteral("等高线"));
         act->setCheckable(true);
-        act->setChecked(m_a->grid_subdiv);
+        act->setChecked(m_a->show_contours);
         connect(act, &QAction::triggered, this, [this, act]() {
-            m_a->grid_subdiv = act->isChecked() ? 1 : 0;
+            m_a->show_contours = act->isChecked() ? 1 : 0;
             m_a->need_redraw = 1;
         });
-        m_subdivAct = act;
+        m_contourAct = act;
     }
+    mset->addSeparator();
+    /* 昼夜模式：从主菜单移入「设置」；勾选态与 D 键、右栏昼/夜按钮同步 */
+    {
+        QAction *act = mset->addAction(QStringLiteral("昼夜模式"));
+        act->setCheckable(true);
+        act->setChecked(m_a->day_night);
+        connect(act, &QAction::triggered, this, [this, act]() {
+            m_a->day_night = act->isChecked() ? 1 : 0;
+            m_a->need_redraw = 1;
+        });
+        m_dayNightAct = act;
+    }
+    mset->addSeparator();
+    /* 语音播报：与 V 键同步 */
+    {
+        QAction *act = mset->addAction(QStringLiteral("语音播报"));
+        act->setCheckable(true);
+        act->setChecked(m_a->voice_on);
+        connect(act, &QAction::triggered, this, [this, act]() {
+            m_a->voice_on = act->isChecked() ? 1 : 0;
+            m_a->need_redraw = 1;
+        });
+        m_voiceAct = act;
+    }
+    m_setMenu = mset;
 
     /* 把 5 个功能子菜单挂进「≡主菜单」弹出按钮，取消顶栏后作为唯一入口 */
     m_menuMain->addMenu(msim);
@@ -946,6 +985,7 @@ void MainWindow::buildRightCol()
     connect(loc, &QToolButton::clicked, this, [this]() { locate(); });
     connect(day, &QToolButton::clicked, this, [this]() {
         m_a->day_night = !m_a->day_night; m_a->need_redraw = 1;
+        if (m_dayNightAct) m_dayNightAct->setChecked(m_a->day_night);
     });
 
     /* 坐标网（经纬网）叠加层 + 点击循环切换坐标系。
@@ -1819,6 +1859,7 @@ void MainWindow::handleKey(int key)
         break;
     case Qt::Key_D:
         m_a->day_night = !m_a->day_night; m_a->need_redraw = 1;
+        if (m_dayNightAct) m_dayNightAct->setChecked(m_a->day_night);
         break;
     case Qt::Key_Equal: case Qt::Key_Plus:
         mv_zoom_at(&m_a->view, 0.5, m_a->view.w / 2, m_a->view.h / 2);
