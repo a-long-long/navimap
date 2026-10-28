@@ -2576,3 +2576,91 @@ d(u,t) ≥ d(L,t) − d(L,u)
   再加 N 米，默认 0）、`RouteOpts.lm_no_restr` + `lmbuild_cli --no-restr`
   （建表时的全图 Dijkstra 不做转向限制）。两者都只查一次 getenv / 只影响建表。
 - `products/graph/lm.bin` 仍是 30 地标那份（实验中临时换过的都已恢复并 cmp 校验）。
+
+---
+
+## 53. 分层重构：消掉 map→render 与 render→ui 两处倒置（2026-10-28 立项）
+
+> 起因：2026-10-28 检查"是否一功能一模块、同类功能一个文件"时，发现两处**模块级分层倒置**。
+> 与 `ARCH_ASSESSMENT.md` §1.3 记录的一致（那份评估早就画出这两条边，但只标注"语义上合理、无需破坏"）。
+> 本章把它们当作**待消除的技术债**立项处理，并补上当初缺的门禁（分层方向没人查 ⇒ 靠自觉 ⇒ 会回流）。
+
+### 53.1 为什么要做
+
+`ARCH_ASSESSMENT.md` §4 的 L2 已经把模块拆成独立 STATIC 库，**链接器强制边界**成了模块契约。
+但契约只能防"新的反向依赖"，**不能纠正已经存在的倒置**——倒置还在，边界就是假的：
+map 层实际上依赖 render 层、render 层实际上依赖 ui 层。
+
+具体代价：
+1. **map→render**：`navmap_map` 库名义上只依赖 `navmap_pbf` + 叶子库，实际却要 render 的符号才能链接。
+   任何"只要地图数据、不要渲染"的工具（如 `gen_contours`）都被迫把 render 拖进来。
+2. **render→ui**：`navmap_render` 名义上不依赖 `navmap_ui`，实际 `chrome.c`/`audit.c` 调 `ui/window.c` 的
+   `app_*` ⇒ 迫使 CMake 用 `-Wl,--start-group` 包裹全部模块库来消解符号级环（CMakeLists.txt:430-450）。
+   环一旦存在，就**无法用链接器暴露新的错误**，边界形同虚设。
+
+### 53.2 依赖基线（2026-10-28 实测，非推测）
+
+模块级依赖矩阵（剥注释后按真实 `#include` 构建）：
+
+```
+utils  ◄ pbf  ◄ map  ◄ route ◄ render ◄ ui ◄ ui_qt
+                   ▲          ▲       │
+                   └── search ┘       └── settings（横切）
+```
+
+**两处倒置（就是本次要消掉的）：**
+
+| # | 倒置边 | 唯一入口 | 原因 |
+|---|---|---|---|
+| ① | `map → render` | `src/map/mapset.h:6` `#include "render/labels.h"` | 只为拿 `NamePool` 类型 + `name_pool_open/close` |
+| ② | `render → ui` | `src/render/chrome.h:4`、`src/render/audit.h:24` 两处 `#include "ui/window.h"` | 只为拿 `App` 全量定义 |
+
+**①的证据链**（关键：为什么 `NamePool` 该属于 map）：
+- `mapset.h` 用到 `labels.h` 的**全部**符号只有 `NamePool`（`MapSrc.np` / `MapSrc.lnp`）+
+  `name_pool_open/close`；`LabelCache`/`LabelItem`/`label_*`/`paint_place_labels` 在 map 下**零实际引用**
+  （只在 `coverage.h` 的注释里被提及）。
+- `NamePool` 的定义现在落在 `src/render/paint.h:88-98`；`name_pool_open/close` 的**实现在
+  `src/render/labels.c:12-50`**，而它们的内部只用 `map/binfmt.h` 的 `nmbin_open` / `nm_get_u32` /
+  `nmbin_close`（`labels.c:17-33`）——**零 render 依赖**。
+- ⇒ `NamePool` 是**纯地图数据概念**（每省 names.bin 的解析结果，随 `MapSrc` 走），放在 render 是历史遗留。
+- 附带问题：`name_pool_open/close` 在 `paint.h:100-101` 与 `labels.h:55-56` **重复声明**了一遍。
+
+**②的证据链**（关键：为什么 chrome/audit 属于 ui 而不是 render）：
+- render 层 8 个 .c 里，**真正读 `App` 的只有 2 个**：`chrome.c`（35 处提及 + 约 15 个 `app_*` 回调）
+  与 `audit.c`（读 `a->gpx/man/ms/rr/sim/view`，调 `app_focus_point`/`app_ovl_a`）。
+  `navdraw.c` 只是**注释里**提了一句 App，**零实际依赖**。
+- `chrome.c` 的职责（自绘标题栏 / 顶栏 / 右栏 / 面板 / 菜单）本质是 **UI 层**，
+  它调 `app_nav_*`/`app_search_*`/`app_gpx_*`/`app_persist_settings` 等**应用动作**——
+  渲染层反过来指挥应用层，是标准的倒置信号。
+- `audit.c`（离屏像素审计）被 `ui/offscreen_shot.c` 与 ui_qt 共用，是**验收通道**的一部分，不是渲染算法。
+- ⇒ chrome/audit 的正确归属是 **ui**，render 应退化为"纯光栅层：只把要素画进 Raster"。
+
+### 53.3 阶段划分（每阶段独立可验证、独立可回滚）
+
+沿用 `ARCH_ASSESSMENT.md` §4 已验证的施工模板：**耦合从低到高、每步独立 commit + 独立等价证据**。
+
+| 阶段 | 做什么 | 消除的边 | 风险 |
+|---|---|---|---|
+| **R0** | 写本章设计 + 依赖基线（不改代码） | — | 无 |
+| **R1** | `NamePool` 从 render 下沉到 map（新建 `src/map/namepool.{h,c}`） | `map→render` | 低（纯搬家） |
+| **R2** | `chrome.{c,h}` + `audit.{c,h}` 从 render 移到 ui | `render→ui` | 中（改 CMake 库归属） |
+| **R3** | 加 `scripts/check_layers.sh` 分层方向门禁 | 防回流 | 低 |
+
+### 53.4 每阶段的验收判据（统一口径）
+
+- **编译零警告**（`-Werror`，regress.sh 自带警告检查）。
+- **依赖方向**：`grep -rn '#include "render/' src/map/` 为空（R1 后）；`grep -rn '#include "ui/' src/render/` 为空（R2 后）。
+- **行为等价**：R1/R2 前后各出一张 `--shot-offscreen` 图，`python3 scripts/bmpdiff.py 旧 新` 判 **IDENTICAL**
+  （不是"看起来一样"——渲染改动最常见的失效模式就是"长得还是那样但要素少了"）。
+- **UI 逻辑**：`navmap_qt --ui-test` 33 项全过。
+- **全量回归**：`./scripts/regress.sh` 不劣于重构前（本机 Linux 数据齐全，可跑全量 77/3）。
+
+### 53.5 R3 的门禁为什么必须"能判负"
+
+分层脚本如果只会报"零违规"，那它和没有一样——正是本项目反复踩的坑（负向对照假通过）。
+所以 R3 的验收里**强制包含一条负向对照**：人为造一条 `map→render` 的 include，脚本必须 FAIL
+并指出具体文件行号；撤掉后必须 PASS。判据没有分辨力就不算门禁。
+
+### 53.6 状态
+
+- 2026-10-28：R0 完成（本章 + `ARCH_ASSESSMENT.md` §1.3/§4 同步）。R1/R2/R3 待执行。

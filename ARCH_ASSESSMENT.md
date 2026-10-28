@@ -56,6 +56,18 @@ Layer 0  src/utils     ──▶ (leaf, 被其余 5 个模块全部依赖)
 - **模块入度**：utils←5、map←3、ui←2、render←2、route←1、pbf←1、search←0
 - **环检测（★ 修正）**：存在一个 `render ↔ ui` 符号级环——`ui/window.c` 调用 `render` 的 `paint/navdraw/chrome`，`render/chrome.c` 反过来调用 `ui/window.c` 的 `app_nav_*`；此外 `map/mapset.c` 调用 `render/labels.c` 的 `name_pool_open/close`（即 `map→render` 边，原 DAG 漏画）。除该环外为 DAG。**修正前提**：拆库仍可行，但 5 个模块库**不能按纯拓扑序链接**（会 undefined reference），必须用 `-Wl,--start-group … -Wl,--end-group` 包裹全部模块库消解环（GNU/MinGW ld；MSVC `link.exe` 自带多轮，无需 start-group）。该环在语义上合理（UI 调度渲染、渲染回调 UI 的导航动作），无需破坏。
 
+> ★★ **2026-10-28 更新：上面那句"无需破坏"已被推翻，两处倒置已立项为技术债处理。**
+> 理由：`render↔ui` 环 + `map→render` 边让**链接器边界形同虚设**——环存在时链接器无法暴露任何新的
+> 反向依赖错误，"12 个 STATIC 库强制边界"这个已完成的成果（L2）就被抵消了。而且这两处倒置的根因
+> 都可定位到**归属放错**，不是语义上必需的耦合：
+> - `map→render`：`NamePool`（每省 names.bin 的解析结果）是纯地图数据概念，实现只用 `map/binfmt.h`，
+>   却定义在 `render/paint.h` ⇒ 下沉到 map 即可（R1）。
+> - `render→ui`：`chrome.c`（自绘标题栏/面板/菜单，调 `app_nav_*` 等应用动作）与 `audit.c`
+>   （离屏像素审计通道）本质是 **UI/验收层**，却住在 render ⇒ 移到 ui 即可（R2）。
+>
+> 施工方案、证据链与逐阶段验收判据见 [`PLAN.md` §53](PLAN.md#53-分层重构消掉-map→render-与-render→ui-两处倒置2026-10-28-立项)；
+> R3 会补上 `scripts/check_layers.sh` 分层方向门禁（当初就是**没人查分层方向**才让倒置留存至今）。
+
 ### 1.4 公开 API 暴露面
 - 头文件共声明 **253** 个函数（即对外暴露面）。
 - 最大暴露面：`plat.h`(36)、`window.h`(25)、`route.h`(17)、`paint.h`(16)、`binfmt.h`(16)、`map_view.h`(12)。
@@ -167,6 +179,18 @@ navmap_geo / navmap_strpool / navmap_plat / navmap_mem  (叶子，mem→plat)
   map_shot 10 张 BMP 用 `git stash` A/B **逐字节 IDENTICAL**。
   ⚠️ `parse_ll` **故意不统一**：`lmbuild_cli` 多一道空纬度防护，统一会改变另外
   5 个工具的行为（已在 tool_common.h 顶部注明，留作独立的有意改动）。
+
+- **阶段 4（2026-10-28 立项，进行中）：消掉两处模块级分层倒置** ——
+  本报告 §1.3 当初画出的两条边（`map→render`、`render↔ui`）当时判定"语义上合理、无需破坏"，
+  现推翻：环存在时**链接器边界形同虚设**，L2 的成果被抵消。两处倒置的根因都是**归属放错**：
+  - **R1**：`NamePool`（每省 names.bin 解析结果，实现只用 `map/binfmt.h`）从 render 下沉到 map
+    ⇒ 消 `map→render`。
+  - **R2**：`chrome.{c,h}`（自绘标题栏/面板/菜单，调 `app_nav_*` 应用动作）+ `audit.{c,h}`
+    （离屏像素审计通道）从 render 移到 ui ⇒ 消 `render→ui`，render 退化为纯光栅层。
+  - **R3**：加 `scripts/check_layers.sh` 分层方向门禁并进 regress ⇒ 防回流
+    （**当初就是没人查分层方向，倒置才留存至今**）。
+  每阶段独立 commit + 独立等价证据（离屏出图 `bmpdiff.py` 逐字节 IDENTICAL + `--ui-test` 33 项
+  + regress 不劣）。方案与逐阶段判据见 [`PLAN.md` §53](PLAN.md#53-分层重构消掉-map→render-与-render→ui-两处倒置2026-10-28-立项)。
 
 ---
 
