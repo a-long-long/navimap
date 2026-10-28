@@ -159,6 +159,7 @@ private:
     QAction      *m_voiceAct  = nullptr;   /* 「语音播报」（与 V 键同步） */
     QAction      *m_poiAct    = nullptr;   /* 「POI 图标」 */
     QAction      *m_labelsAct = nullptr;   /* 「地名标注」 */
+    QAction      *m_subdivAct = nullptr;   /* 「网格细分刻度」（无快捷键，仅『设置』菜单切换） */
     /* GPX 轨迹/收藏面板（右栏「轨迹」按钮弹出；挂在画布上的浮层） */
     QWidget      *m_trackPanel = nullptr;
     QWidget      *m_trackRows  = nullptr;   /* 滚动区里的行容器（每条轨迹/收藏一行） */

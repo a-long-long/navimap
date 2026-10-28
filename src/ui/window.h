@@ -164,6 +164,7 @@ typedef struct {
     int           show_poi;        /* POI 图标开关 */
     int           show_labels;     /* 地名标注开关 */
     int           show_contours;   /* 等高线开关（SRTM 生成，受『视图』菜单 / O 键控制） */
+    int           grid_subdiv;     /* 坐标网细分刻度线开关（每格 5 等分；受『设置』菜单控制，随网格开关生效） */
     int           settings_open;   /* 设置面板是否展开（C 核心自绘；Qt 前端的开关在『设置』菜单里） */
     int           settings_row;    /* 面板命中行：>=0 schema 下标，-1 关闭，-2 重置全部 */
     int           settings_btn;    /* 命中按钮：0=左/− 1=右/+ 2=行体（切换） */

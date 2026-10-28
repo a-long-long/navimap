@@ -198,6 +198,40 @@ void MapCanvas::drawGraticule(QPainter &p)
         p.drawText(xb + 2, yb - 3, QString::fromUtf8(buf));
     }
 
+    /* 细分刻度线：每格 5 等分（step/5），浅色细线、不标标签；
+     * 依附网格开关（外层 m_showGrid 已 gate），由设置项 grid_subdiv 控制。 */
+    if (m_a->grid_subdiv) {
+        QPen sp(QColor(70, 90, 125, 110)); /* 比主网格（alpha 160）浅一档，层次清晰且可见 */
+        p.setPen(sp);
+        auto subMer = [&](double slon) {
+            double a0, b0, a1, b1;
+            datum_to_wgs84(id, la0, slon, 0, &a0, &b0, NULL);
+            datum_to_wgs84(id, la1, slon, 0, &a1, &b1, NULL);
+            int x1, y1, x2, y2;
+            mv_project(&m_a->view, a0, b0, &x1, &y1);
+            mv_project(&m_a->view, a1, b1, &x2, &y2);
+            p.drawLine(x1, y1, x2, y2);
+        };
+        auto subPar = [&](double slat) {
+            double a0, b0, a1, b1;
+            datum_to_wgs84(id, slat, lo0, 0, &a0, &b0, NULL);
+            datum_to_wgs84(id, slat, lo1, 0, &a1, &b1, NULL);
+            int x1, y1, x2, y2;
+            mv_project(&m_a->view, a0, b0, &x1, &y1);
+            mv_project(&m_a->view, a1, b1, &x2, &y2);
+            p.drawLine(x1, y1, x2, y2);
+        };
+        const double f = step / 5.0;
+        double base = ceil(lo0 / step - 1e-9) * step;
+        for (int k = 1; k <= 4; k++) { double s = base - (5 - k) * f; if (s >= lo0 - 1e-9) subMer(s); }
+        for (double m = base; m <= lo1 + 1e-9; m += step)
+            for (int k = 1; k <= 4; k++) { double s = m + k * f; if (s <= lo1 + 1e-9) subMer(s); }
+        double baseLat = ceil(la0 / step - 1e-9) * step;
+        for (int k = 1; k <= 4; k++) { double s = baseLat - (5 - k) * f; if (s >= la0 - 1e-9) subPar(s); }
+        for (double m = baseLat; m <= la1 + 1e-9; m += step)
+            for (int k = 1; k <= 4; k++) { double s = m + k * f; if (s <= la1 + 1e-9) subPar(s); }
+    }
+
     /* 左上角图例：标出当前经纬网所用坐标系（与右下角读数的基准短名一致）。 */
     {
         QString leg = QString::fromUtf8(datum_short(id)) + QStringLiteral(" 经纬网");

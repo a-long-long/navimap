@@ -524,6 +524,23 @@ int MainWindow::runUiSelfTest()
         updateGridBtn();
     }
 
+    /* ⑭ 坐标网细分刻度线开关（设置项，依附网格；「设置」菜单可勾选，持久化）。
+     *    验证：菜单项存在、模拟点击一次后勾选态与 m_a->grid_subdiv 同步。
+     *    ★ 必须用 trigger()（模拟用户点击）而不是 setChecked()——setChecked 只改
+     *      action 状态、不发射 triggered，连着的 lambda（写 grid_subdiv）不会跑。 */
+    {
+        check(m_subdivAct != nullptr, "细分刻度线：「设置」菜单开关存在");
+        if (m_subdivAct) {
+            const int before = m_a->grid_subdiv;
+            m_subdivAct->trigger();             /* 模拟用户点击一次：toggle + 发射 triggered */
+            QApplication::processEvents();
+            check(m_a->grid_subdiv == !before, "细分刻度线：点击后设置项翻转");
+            check(m_subdivAct->isChecked() == !!m_a->grid_subdiv, "细分刻度线：菜单项勾选态与设置项一致");
+            m_a->grid_subdiv = before;          /* 还原，避免影响后续/落盘 */
+            m_subdivAct->setChecked(before);
+        }
+    }
+
     if (fail == 0) {
         printf("QT-UI-OK\n");
         return 0;
@@ -694,6 +711,17 @@ void MainWindow::buildMenus()
         });
         m_labelsAct = act;
     }
+    /* 坐标网细分刻度线：每格 5 等分，依附网格开关（网格关时不画）。 */
+    {
+        QAction *act = mset->addAction(QStringLiteral("网格细分刻度"));
+        act->setCheckable(true);
+        act->setChecked(m_a->grid_subdiv);
+        connect(act, &QAction::triggered, this, [this, act]() {
+            m_a->grid_subdiv = act->isChecked() ? 1 : 0;
+            m_a->need_redraw = 1;
+        });
+        m_subdivAct = act;
+    }
 
     /* 把 5 个功能子菜单挂进「≡主菜单」弹出按钮，取消顶栏后作为唯一入口 */
     m_menuMain->addMenu(msim);
@@ -701,6 +729,24 @@ void MainWindow::buildMenus()
     m_menuMain->addMenu(mdatum);
     m_menuMain->addMenu(mgpx);
     m_menuMain->addMenu(mset);
+
+    /* 主菜单（含各子菜单）视觉样式：半透明白底 + 圆角 + 细边框 + 悬浮高亮 +
+     * 细分隔线，与浮层/比例尺同一套视觉语言（仅淡底板、文字保持清晰）。
+     * 6 个 QMenu 各设一份（子菜单是独立顶层窗口，不继承父菜单的 object stylesheet）。 */
+    static const char *kMenuQss =
+        "QMenu{background-color:rgba(252,252,250,0.96);border:1px solid rgba(40,60,95,0.35);"
+        "border-radius:10px;padding:5px;color:#1e2430;font-size:13px;}"
+        "QMenu::item{padding:7px 26px 7px 12px;border-radius:6px;spacing:8px;}"
+        "QMenu::item:selected{background-color:rgba(40,90,160,0.16);color:#14233b;}"
+        "QMenu::item:disabled{color:rgba(120,130,145,0.6);}"
+        "QMenu::separator{height:1px;background:rgba(40,60,95,0.18);margin:5px 10px;}"
+        "QMenu::indicator{width:16px;height:16px;}";
+    m_menuMain->setStyleSheet(kMenuQss);
+    msim->setStyleSheet(kMenuQss);
+    mview->setStyleSheet(kMenuQss);
+    mdatum->setStyleSheet(kMenuQss);
+    mgpx->setStyleSheet(kMenuQss);
+    mset->setStyleSheet(kMenuQss);
 }
 
 /* ---------------- 顶栏：搜索按钮 + 模式页签 + 路线摘要 ----------------

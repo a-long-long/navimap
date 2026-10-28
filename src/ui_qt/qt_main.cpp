@@ -76,6 +76,7 @@ int main(int argc, char **argv)
     int pbf_lru = 3;
     const char *shot = NULL;          /* --shot=path：出一张图就退出 */
     int grid = 0;                     /* --grid：开局打开坐标网叠加层 */
+    int grid_subdiv = 0;               /* --grid-subdiv：开局开启网格细分刻度线 */
     int ui_test = 0;                  /* --ui-test：跑无头 UI 自检后退出 */
     int shot_search = 0;              /* --shot-search：截图前先展开搜索框 */
     int shot_track = 0;               /* --shot-track：截图前先展开轨迹/收藏面板 */
@@ -116,6 +117,7 @@ int main(int argc, char **argv)
         else if (strncmp(argv[i], "--sources=", 10) == 0) ab.src_dir = argv[i] + 10;
         else if (strncmp(argv[i], "--shot=", 7) == 0) shot = argv[i] + 7;
         else if (strcmp(argv[i], "--grid") == 0) grid = 1;
+        else if (strcmp(argv[i], "--grid-subdiv") == 0) grid_subdiv = 1;
         else if (strncmp(argv[i], "--datum=", 8) == 0) datum = argv[i] + 8;
         else if (strncmp(argv[i], "--datum-grid=", 13) == 0) datum_grid = argv[i] + 13;
         else if (strncmp(argv[i], "--gpx=", 6) == 0) {
@@ -371,6 +373,7 @@ int main(int argc, char **argv)
     if (settings_ovl) { a.settings_open = 1; a.settings_ovl = 1; }
     if (open_tf)      a.tf_open = 1;
     if (open_menu)    a.menu_open = 1;
+    if (grid_subdiv) a.grid_subdiv = 1;     /* 命令行开细分刻度（覆盖设置默认） */
     if (dmap_demo) {
         int prov = -1;
         for (int i = 0; i < a.ms.n; i++)

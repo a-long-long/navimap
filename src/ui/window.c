@@ -65,6 +65,7 @@ int app_init(App *a, const char *graph_dir, int w, int h,
     a->show_labels = settings_get_bool(a->cfg, "show_labels", 1);
     a->show_contours = settings_get_bool(a->cfg, "show_contours", 1);
     a->voice_on    = settings_get_bool(a->cfg, "voice_on", 1);
+    a->grid_subdiv   = settings_get_bool(a->cfg, "grid_subdiv", 0);
     a->mode        = settings_get_int(a->cfg, "mode", 0);
     /* ★ app_init 是**逐字段**读设置的（不经过 app_apply_settings——那个只给
      *   C 核心自绘设置面板（chrome.c）的「应用/恢复默认」用）。新增设置项必须在这里也读一遍，
@@ -296,6 +297,7 @@ void app_apply_settings(App *a)
     a->show_labels  = settings_get_bool(a->cfg, "show_labels", 1);
     a->show_contours = settings_get_bool(a->cfg, "show_contours", 1);
     a->voice_on     = settings_get_bool(a->cfg, "voice_on", 1);
+    a->grid_subdiv   = settings_get_bool(a->cfg, "grid_subdiv", 0);
     a->mode         = settings_get_int(a->cfg, "mode", 0);
     a->max_class    = settings_get_int(a->cfg, "max_class", 4);
     int dv = settings_get_int(a->cfg, "datum", 0);
@@ -314,6 +316,7 @@ void app_persist_settings(App *a)
     settings_set_bool(a->cfg, "show_labels", a->show_labels);
     settings_set_bool(a->cfg, "show_contours", a->show_contours);
     settings_set_bool(a->cfg, "voice_on",    a->voice_on);
+    settings_set_bool(a->cfg, "grid_subdiv", a->grid_subdiv);
     settings_set_int(a->cfg,  "mode",        a->mode);
     settings_set_int(a->cfg,  "font_size",   a->font_size);
     settings_set_int(a->cfg,  "max_class",   a->max_class);
