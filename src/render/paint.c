@@ -983,6 +983,13 @@ int paint_contours(Raster *rs, const MapView *v,
     int32_t vlo0 = (int32_t)(lo0 * 1e7), vlo1 = (int32_t)(lo1 * 1e7);
     double zoom = v->zoom;
 
+    /* 标注防重叠：记录本帧已放下的高程标签屏幕坐标，新标签若落在已有标签
+     * MIN_LABEL_GAP 像素内则跳过，避免一屏十几条计曲线各标一个、数字糊成一团。
+     * 注意只统计"真实放下"的标签（含白光晕），不统计被跳过的。 */
+    enum { MAX_PLACED = 1024, MIN_LABEL_GAP = 34 };
+    int placed_x[MAX_PLACED], placed_y[MAX_PLACED];
+    int nplaced = 0;
+
     for (uint64_t i = 0; i < nc; i++) {
         /* bbox 预筛（等高线同样没有 tile 索引） */
         if (bb) {
@@ -1036,13 +1043,24 @@ int paint_contours(Raster *rs, const MapView *v,
                                   width, col);
         }
         /* 计曲线（class==1）标注高程刻度：在折线中点用字体画高程（米）。
-         * 首曲线（class==0）密集不标，避免糊；只标计曲线符合地形图惯例。 */
+         * 首曲线（class==0）密集不标，避免糊；只标计曲线符合地形图惯例。
+         * ★ 防重叠：本帧已放下的标签 MIN_LABEL_GAP 像素内不再放，控制密度。 */
         if (font && cls == 1 && n >= 2) {
             char eb[24];
             uint64_t elev = nm_get_u64(cr + CF_ELEV);
             snprintf(eb, sizeof(eb), "%llu", (unsigned long long)elev);
             int mid = n / 2;
             int lx = px[mid] + 2, ly = py[mid] - 9;
+            /* 邻近已有标签则跳过（控制密度，避免一屏数字糊成团） */
+            int too_close = 0;
+            for (int k = 0; k < nplaced; k++) {
+                int dx = lx - placed_x[k], dy = ly - placed_y[k];
+                if (dx * dx + dy * dy < MIN_LABEL_GAP * MIN_LABEL_GAP) {
+                    too_close = 1;
+                    break;
+                }
+            }
+            if (too_close) continue;
             /* 白色光晕 + 黑正文：标准地形图可读标注。
              * ★ 正文用纯黑 (0,0,0) 而非棕色 —— 黑字叠在白光晕上只会产生
              *   灰度像素（R=G=B），与无图横幅混合色 (110,100,80)（非灰）在
@@ -1055,6 +1073,7 @@ int paint_contours(Raster *rs, const MapView *v,
             font_draw(font, rs, lx,     ly - 1, eb, 255, 255, 255, 0);
             font_draw(font, rs, lx,     ly + 1, eb, 255, 255, 255, 0);
             font_draw(font, rs, lx,     ly,     eb, 0, 0, 0, 0);
+            if (nplaced < MAX_PLACED) { placed_x[nplaced] = lx; placed_y[nplaced] = ly; nplaced++; }
         }
         st->lines_drawn++;
     }
