@@ -1631,6 +1631,11 @@ int nm_thread_spawn(void (*f)(void *), void *arg)
     return 0;
 }
 
+#endif
+
+/* GPU 图形栈检测：跨平台函数（函数体内按 _WIN32 分流），必须放在
+ * #ifdef _WIN32 / #else POSIX 块之外，否则 Windows 构建下整段被跳过、
+ * window.c 的 app_init 调用处会 undefined reference。 */
 int nm_has_gpu(void)
 {
 #ifdef _WIN32
@@ -1656,5 +1661,3 @@ int nm_has_gpu(void)
     return 0;
 #endif
 }
-
-#endif
