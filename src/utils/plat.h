@@ -195,6 +195,12 @@ int nm_chmod_x(const char *path);
  * 返回的数组与字符串都是静态存储，勿 free。 */
 const char *const *nm_font_candidates(size_t *n);
 
+/* 运行环境是否检测到 GPU / 图形栈。
+ *   - Windows：能加载 opengl32.dll（即装了 GL 驱动）即认为有；
+ *   - Linux/macOS：存在 DRI 渲染节点（/dev/dri/renderD* 或 card*）即认为有。
+ * 仅供参考（本项目是软件光栅，无 GPU 渲染路径）；返回 1=有 / 0=无。 */
+int nm_has_gpu(void);
+
 #ifdef __cplusplus
 }
 #endif

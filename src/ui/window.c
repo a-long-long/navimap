@@ -47,6 +47,7 @@ static int app_big_size(int base)
  * app_nav_sim_toggle 之前）。先声明，供 app_nav_poll / app_nav_plan_sync 调用。 */
 static void nav_announce_reset(App *a);
 static void nav_announce_at(App *a, uint64_t now_ms);
+static void app_update_daynight(App *a);   /* 昼夜模式：mode → 有效 day_night，自动模式按日出日落推算 */
 
 int app_init(App *a, const char *graph_dir, int w, int h,
              const char *font_path, int font_size, const AutoBuildOpt *ab)
@@ -60,7 +61,13 @@ int app_init(App *a, const char *graph_dir, int w, int h,
     a->max_class = settings_get_int(a->cfg, "max_class", 4);
     a->need_redraw = 1;
     a->show_panel = settings_get_bool(a->cfg, "show_panel", 1);
-    a->day_night  = settings_get_bool(a->cfg, "day_night", 0);
+    {
+        int dm = settings_get_int(a->cfg, "day_night", 2);
+        a->day_night_mode = (dm >= 0 && dm <= 2) ? dm : 2;
+    }
+    a->gpu_available = nm_has_gpu();
+    fprintf(stderr, "GPU 检测: %s（本项目为软件光栅，无 GPU 渲染路径，此值仅作信息展示）\n",
+            a->gpu_available ? "可用" : "无");
     a->show_poi    = settings_get_bool(a->cfg, "show_poi", 1);
     a->show_labels = settings_get_bool(a->cfg, "show_labels", 1);
     a->show_contours = settings_get_bool(a->cfg, "show_contours", 1);
@@ -73,8 +80,9 @@ int app_init(App *a, const char *graph_dir, int w, int h,
     {
         int dv = settings_get_int(a->cfg, "datum", 0);
         a->datum = (dv >= 0 && dv < DATUM_COUNT) ? dv : DATUM_WGS84;
-        int gt = settings_get_int(a->cfg, "grid_type", 1);
-        a->grid_type = (gt == GRID_LATLON || gt == GRID_GK) ? gt : GRID_GK;
+        int gt = settings_get_int(a->cfg, "grid_type", 0);
+        a->grid_type = (gt == GRID_LATLON || gt == GRID_GK) ? gt : GRID_LATLON;
+        app_update_daynight(a);   /* 用刚读到的 mode 推算有效 day_night（视口可能尚未设定，下一帧会刷新） */
     }
     /* 浮层透明度：逐浮层从设置读（键缺失 ⇒ 默认 75%）。同样必须在这里读一遍，
      * app_apply_settings 只服务 C 核心自绘设置面板的「应用/恢复默认」，
@@ -293,7 +301,11 @@ int app_set_font_size(App *a, int size)
 void app_apply_settings(App *a)
 {
     if (!a || !a->cfg) return;
-    a->day_night    = settings_get_bool(a->cfg, "day_night", 0);
+    {
+        int dm = settings_get_int(a->cfg, "day_night", 2);
+        a->day_night_mode = (dm >= 0 && dm <= 2) ? dm : 2;
+    }
+    app_update_daynight(a);
     a->show_panel   = settings_get_bool(a->cfg, "show_panel", 1);
     a->show_poi     = settings_get_bool(a->cfg, "show_poi", 1);
     a->show_labels  = settings_get_bool(a->cfg, "show_labels", 1);
@@ -311,10 +323,25 @@ void app_apply_settings(App *a)
     ovl_load_all(a->cfg, a->ovl_alpha);
 }
 
+/* 昼夜模式：把 day_night_mode（0 白天 / 1 夜间 / 2 自动）换算成有效 day_night(0/1)。
+ * 自动模式按视口中心经纬度 + 系统本地时间（UTC 推算太阳高度角）判断昼/夜，
+ * 跨过日出/日落时自动切换并触发重绘。手动模式直接取设置值，不随时间变。 */
+static void app_update_daynight(App *a)
+{
+    if (!a) return;
+    int eff;
+    if (a->day_night_mode == 1)        eff = 1;                     /* 夜间（手动） */
+    else if (a->day_night_mode == 2) {                            /* 自动 */
+        time_t now = time(NULL);
+        eff = nm_sun_is_night(a->view.lat, a->view.lon, now) ? 1 : 0;
+    } else                             eff = 0;                     /* 白天（手动） */
+    if (eff != a->day_night) { a->day_night = eff; a->need_redraw = 1; }
+}
+
 void app_persist_settings(App *a)
 {
     if (!a || !a->cfg) return;
-    settings_set_bool(a->cfg, "day_night",   a->day_night);
+    settings_set_int(a->cfg,  "day_night",   a->day_night_mode);
     settings_set_bool(a->cfg, "show_panel",  a->show_panel);
     settings_set_bool(a->cfg, "show_poi",    a->show_poi);
     settings_set_bool(a->cfg, "show_labels", a->show_labels);
@@ -439,6 +466,38 @@ static void nav_worker(void *ud)
 
         if (!a->router) {
             res->err = -3;
+        } else if (a->n_via > 0) {
+            /* 途经点模式：端点 = 起点 + 各途经点 + 终点。router_route_via 依次串联各段，
+             * 返回一条完整路线（单方案）。装入 alts.rr[0]，其余方案标记不可用，
+             * 这样上层（app_nav_poll）的"多方案容器"逻辑无需改动。 */
+            int m = a->n_via + 2;
+            double *la = malloc((size_t)m * sizeof(double));
+            double *lo = malloc((size_t)m * sizeof(double));
+            la[0] = pa.lat; lo[0] = pa.lon;
+            for (int i = 0; i < a->n_via; i++) { la[i + 1] = a->via[i].lat; lo[i + 1] = a->via[i].lon; }
+            la[m - 1] = pb.lat; lo[m - 1] = pb.lon;
+            RNode f, t; double da = 0, db = 0;
+            RouteResult vr; memset(&vr, 0, sizeof(vr));
+            int rc = router_route_via(a->router, la, lo, m, &vr, &f, &t, &da, &db);
+            free(la); free(lo);
+            res->err = nav_err_of(rc);
+            if (rc == 0) {
+                res->alts.n = ROUTE_ALT_K;
+                res->alts.err[0] = 0;
+                res->alts.rr[0] = vr;                 /* 指针整体搬家，源清零避免双重释放 */
+                memset(&vr, 0, sizeof(vr));
+                for (int k = 1; k < ROUTE_ALT_K; k++) {
+                    res->alts.err[k] = -2;            /* 途经点模式暂只给单方案 */
+                    memset(&res->alts.rr[k], 0, sizeof(RouteResult));
+                }
+                /* 各段里程细节由各腿 seg_m 累加可得，但合并后的整条路线已无法直接
+                 * 映射到具体腿；面板只展示全程总里程（vr.total_m），故此处不填
+                 * via_seg_km 的逐段值（保持全 0，避免展示错误数字）。 */
+                memset(a->via_seg_km, 0, sizeof(a->via_seg_km));
+                res->a_snap_m = da; res->b_snap_m = db;
+                nav_snap_info(&a->ms, f, &res->a_lat, &res->a_lon, &res->a_prov);
+                nav_snap_info(&a->ms, t, &res->b_lat, &res->b_lon, &res->b_prov);
+            }
         } else {
             RNode f, t;
             double da = 0, db = 0;
@@ -465,7 +524,7 @@ static void nav_worker(void *ud)
     }
 }
 
-static void nav_request(App *a)
+void nav_request(App *a)
 {
     if (!a->pick_a.have || !a->pick_b.have) return;
     if (nav_ensure_router(a) != 0) {
@@ -593,6 +652,7 @@ void app_nav_click(App *a, double lat, double lon)
         nav_drop_route(a);
         a->pick_a = empty;
         a->pick_b = empty;
+        app_nav_clear_via(a);         /* 重开一头：途经点一并作废 */
         a->pick_a.have = 1;
         a->pick_a.lat = lat;
         a->pick_a.lon = lon;
@@ -614,8 +674,48 @@ void app_nav_clear(App *a)
     nav_drop_route(a);
     a->pick_a = empty;
     a->pick_b = empty;
+    app_nav_clear_via(a);             /* 路线清空时一并清空途经点 */
     a->need_redraw = 1;
 }
+
+/* ---- 途经点管理（阶段 6 功能）----
+ * 添加/删除/清空都只改 via[]，真正重算由 nav_request 在"起终点都已设"时触发。
+ * 删除或清空后若仍有起终点，调用方应再 nav_request 一次以刷新路线。 */
+
+void app_nav_add_via(App *a, double lat, double lon)
+{
+    if (a->n_via >= MAX_VIA) {
+        snprintf(a->nav_msg, sizeof(a->nav_msg), "途经点已达上限（%d）", MAX_VIA);
+        a->need_redraw = 1;
+        return;
+    }
+    NavPick p; memset(&p, 0, sizeof(p));
+    p.have = 1; p.lat = lat; p.lon = lon;
+    snprintf(p.prov, sizeof(p.prov), "途经点%d", a->n_via + 1);
+    a->via[a->n_via++] = p;
+    a->need_redraw = 1;
+    /* 起点终点都已设好时，加途经点立即重算路线（途经点模式走 router_route_via）。
+     * 否则先记下，等起终点齐了再算（nav_request 只在两端都具备时生效）。 */
+    if (a->pick_a.have && a->pick_b.have) nav_request(a);
+}
+
+void app_nav_del_via(App *a, int idx)
+{
+    if (idx < 0 || idx >= a->n_via) return;
+    for (int i = idx; i + 1 < a->n_via; i++) a->via[i] = a->via[i + 1];
+    a->n_via--;
+    a->need_redraw = 1;
+}
+
+void app_nav_clear_via(App *a)
+{
+    a->n_via = 0;
+    memset(a->via, 0, sizeof(a->via));
+    memset(a->via_seg_km, 0, sizeof(a->via_seg_km));
+    a->need_redraw = 1;
+}
+
+int app_nav_n_via(const App *a) { return a ? a->n_via : 0; }
 
 void app_nav_fit(App *a)
 {
@@ -1227,6 +1327,8 @@ static void paint_frame(Raster *rs, App *a, PaintStats *st)
     /* 解码中的省份：画"省名 解码中… NN%"占位（后台线程解码期间 has_features=0） */
     paint_dmap_overlay(rs, a);
 
+    /* 自动昼夜：每帧用当前视口中心 + 本地时间推算昼/夜，跨过日出/日落时自动切换并重绘 */
+    app_update_daynight(a);
     /* 夜间蒙版：只压暗地图，不压下面要画的面板/文字/chrome */
     if (a->day_night) paint_night_tint(rs, a->view.w, a->view.h);
 
@@ -1497,6 +1599,41 @@ int app_gpx_import_dir(App *a, const char *dir)
     else            fprintf(stderr, "[gpx] %s 下没有可导入的 .gpx 文件\n", dir);
     a->need_redraw = 1;
     return added;
+}
+
+/* 把第 idx 条轨迹贴合到道路网：吸附每个轨迹点到最近道路节点，沿道路串联成
+ * 一条 RouteResult，并作为当前路线显示（沿道路的折线）。
+ * 失败（附近无路网 / 不连通 / 路由未初始化）返回非 0，并写 nav_msg 提示。 */
+int app_gpx_snap(App *a, int idx)
+{
+    if (!a) return -1;
+    if (idx < 0 || idx >= a->gpx.n_trk) return -1;
+    if (nav_ensure_router(a) != 0) {
+        snprintf(a->nav_msg, sizeof(a->nav_msg), "路由初始化失败");
+        return -1;
+    }
+    GpxTrack *tk = &a->gpx.trk[idx];
+    if (tk->n < 2) {
+        snprintf(a->nav_msg, sizeof(a->nav_msg), "轨迹点太少，无法贴合");
+        return -1;
+    }
+    RouteResult vr; memset(&vr, 0, sizeof(vr));
+    int rc = gpx_snap_to_roads(a->router, tk, &vr, 64);
+    if (rc != 0) {
+        snprintf(a->nav_msg, sizeof(a->nav_msg),
+                 rc == -3 ? "轨迹附近无路网，贴合失败" : "轨迹无法贴合到道路");
+        return rc;
+    }
+    /* 把贴合结果作为当前路线显示（沿道路的折线）。 */
+    if (a->have_rr) route_result_free(&a->rr);
+    a->rr = vr;
+    memset(&vr, 0, sizeof(vr));
+    a->have_rr = 1;
+    a->mode = 1;
+    snprintf(a->nav_msg, sizeof(a->nav_msg), "已贴合到道路（%.1f km）",
+             a->rr.total_m / 1000.0);
+    a->need_redraw = 1;
+    return 0;
 }
 
 /* 导出全部（轨迹 + 收藏）到 <config>/export.gpx。 */

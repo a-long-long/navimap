@@ -310,7 +310,7 @@ if [ -x "$BUILD/navmap_qt" ] || [ -x "$BUILD/navmap_qt.exe" ]; then
     CFG_UIT="$SHOTS/ui_test_cfg"
     /bin/rm -rf "$CFG_UIT" 2>/dev/null
     mkdir -p "$CFG_UIT/navimap"
-    printf 'day_night=0\nshow_panel=1\nshow_poi=1\nshow_labels=1\nvoice_on=1\nmode=0\nfont_size=14\nmax_class=4\nview_lat=39.94\nview_lon=116.405\nview_zoom=13\ndatum=0\nalpha_search=75\nalpha_rcol=75\n' > "$CFG_UIT/navimap/settings.ini"
+    printf 'day_night=0\nshow_panel=1\nshow_poi=1\nshow_labels=1\nvoice_on=1\nmode=0\nfont_size=14\nmax_class=4\nview_lat=39.94\nview_lon=116.405\nview_zoom=13\ndatum=0\ngrid_type=1\nalpha_search=75\nalpha_rcol=75\n' > "$CFG_UIT/navimap/settings.ini"
     run qt_ui_test "QT-UI-OK" qt_run \
         env APPDATA="$CFG_UIT/appdata" XDG_CONFIG_HOME="$CFG_UIT/xdg" \
         "$(exefile2 "$BUILD/navmap_qt")" --ui-test --w=900 --h=600
@@ -557,6 +557,13 @@ if [ -f "$SHOTS/gpx_render.log" ]; then
     fi
 fi
 
+# ---- GPX 贴合道路：route_cli --gpx-snap（#114）----
+# 把同一条 GPX 轨迹（GPX_FILE）抽稀成途经点、吸附到路网沿道路串联，
+# 输出一条沿道路的折线并跑 route_check 自检。判据只认 ROUTE-OK（"能出结果 + 路径自检过"），
+# 不卡绕行系数（道路绕远是预期行为）。该 GPX 在 7 省图（GRAPH）下必能贴合。
+# Qt 侧那条"轨迹行含「贴合」按钮 + 调用优雅返回"断言分工：这里钉**命令行端真的贴合成功**。
+run gpx_snap "ROUTE-OK" "$BUILD/route_cli" --graph="$GRAPH" --gpx-snap="$GPX_FILE"
+
 # ---- 浮层透明度：默认 75%，且**每个浮层各自独立** ----
 # 判据不是"两张图不一样"（那样设成 20% 也会过），而是**与 alpha 成正比的精确
 # 关系**：|M−H| / |O−H| == pct/100（M=该 pct、O=100%、H=0%=纯底图）。
@@ -626,7 +633,7 @@ if [ -x "$BUILD/navmap_qt.exe" ] || [ -x "$BUILD/navmap_qt" ]; then
     CFGQ="$SHOTS/ovl_qt_cfg"
     /bin/rm -rf "$CFGQ" 2>/dev/null
     mkdir -p "$CFGQ/navimap"
-    printf 'day_night=0\nshow_panel=1\nshow_poi=1\nshow_labels=1\nvoice_on=1\nmode=0\nfont_size=14\nmax_class=4\nview_lat=39.94\nview_lon=116.405\nview_zoom=13\ndatum=0\n' > "$CFGQ/navimap/settings.ini"
+    printf 'day_night=0\nshow_panel=1\nshow_poi=1\nshow_labels=1\nvoice_on=1\nmode=0\nfont_size=14\nmax_class=4\nview_lat=39.94\nview_lon=116.405\nview_zoom=13\ndatum=0\ngrid_type=1\n' > "$CFGQ/navimap/settings.ini"
     for pv in 100 75 0; do
         qt_run env APPDATA="$CFGQ" XDG_CONFIG_HOME="$CFGQ/xdg" \
             "$QEXE" --graph="$GRAPH" --w=800 --h=600 \

@@ -24,6 +24,7 @@ enum class IconKind {
     Menu,       /* 三横线 */
     Plus,       /* 加号 */
     Track,      /* 轨迹：折线 + 起终点 */
+    Via,        /* 途经点：图钉标记（路线依次经过的中间点） */
 };
 }
 

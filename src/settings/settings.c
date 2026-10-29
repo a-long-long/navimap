@@ -8,7 +8,7 @@
 
 /* ---- 可编辑设置清单（面板按此渲染；顺序即显示顺序） ---- */
 const SettingMeta SETTINGS_SCHEMA[] = {
-    { "day_night",   "昼夜模式",   ST_BOOL, 0, 0, 1, 1, NULL },
+    { "day_night",   "昼夜模式",   ST_INT,  2, 0, 2, 1, "白天\0夜间\0自动(日出日落)\0" },
     { "show_panel",  "导航面板",   ST_BOOL, 1, 0, 1, 1, NULL },
     { "show_poi",    "POI 图标",   ST_BOOL, 1, 0, 1, 1, NULL },
     { "show_labels", "地名标注",   ST_BOOL, 1, 0, 1, 1, NULL },
@@ -19,7 +19,7 @@ const SettingMeta SETTINGS_SCHEMA[] = {
     { "font_size",   "字号(pt)",   ST_INT, 14, 8, 32, 1, NULL },
     { "max_class",   "道路细节",   ST_INT,  4, 0, 4, 1, NULL },
     { "datum",       "坐标系",     ST_INT,  0, 0, 3, 1, "WGS84\0CGCS2000\0北京1954\0西安1980\0" },
-    { "grid_type",   "网格类型",   ST_INT,  1, 0, 1, 1, "经纬网\0方里格\0" },
+    { "grid_type",   "网格类型",   ST_INT,  0, 0, 1, 1, "经纬网\0方里格\0" },
 };
 const int SETTINGS_SCHEMA_N = (int)(sizeof(SETTINGS_SCHEMA) / sizeof(SETTINGS_SCHEMA[0]));
 

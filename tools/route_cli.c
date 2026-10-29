@@ -22,6 +22,7 @@
 
 #include "map/mapset.h"
 #include "map/autobuild.h"
+#include "map/gpx.h"
 #include "route/route.h"
 #include "route/maneuver.h"
 #include "utils/geo.h"
@@ -51,6 +52,8 @@ int main(int argc, char **argv)
     int repeat = 1;
     const char *graph = "products/graph";
     const char *from_s = NULL, *to_s = NULL, *geojson = NULL;
+    const char *gpx_snap = NULL;       /* --gpx-snap=<文件>：把 GPX 轨迹贴合到道路网 */
+    char *via_s[64]; int n_via = 0;   /* 途经点（可重复 --via=lat,lon） */
     int want_man = 0;
     /* ★ heur_w / heur_w_hi 故意留 0：让 router_create 按"有没有 lm.bin"兜底
        （有表 1.3 + 关掉撞顶升级，无表 1.4 + 升 1.8，见 route.h 的
@@ -65,7 +68,11 @@ int main(int argc, char **argv)
         if ((v = tc_arg_val(a, "--graph=")))      graph = v;
         else if ((v = tc_arg_val(a, "--from=")))  from_s = v;
         else if ((v = tc_arg_val(a, "--to=")))    to_s = v;
+        else if ((v = tc_arg_val(a, "--via="))) {
+            if (n_via < 64) via_s[n_via++] = strdup(v);
+        }
         else if ((v = tc_arg_val(a, "--geojson="))) geojson = v;
+        else if ((v = tc_arg_val(a, "--gpx-snap="))) gpx_snap = v;
         else if ((v = tc_arg_val(a, "--mode=")))
             opt.mode_time = (strcmp(v, "dist") != 0);
         else if ((v = tc_arg_val(a, "--max-expand=")))
@@ -99,14 +106,20 @@ int main(int argc, char **argv)
         }
     }
     if (!from_s || !to_s) {
-        fprintf(stderr, "用法: route_cli --graph=<dir> --from=lat,lon --to=lat,lon\n");
-        return 2;
+        if (!gpx_snap) {
+            fprintf(stderr, "用法: route_cli --graph=<dir> --from=lat,lon --to=lat,lon\n");
+            return 2;
+        }
     }
-    double flat, flon, tlat, tlon;
-    if (parse_ll(from_s, &flat, &flon) != 0 ||
-        parse_ll(to_s, &tlat, &tlon) != 0) {
-        fprintf(stderr, "起终点格式应为 lat,lon\n");
-        return 2;
+    double flat = 0, flon = 0, tlat = 0, tlon = 0;
+    /* --gpx-snap 模式不需要起终点：只在给了 from/to 时才解析，
+     * 否则 from_s/to_s 为 NULL，parse_ll 里 strchr(NULL) 会段错误。 */
+    if (!gpx_snap) {
+        if (parse_ll(from_s, &flat, &flon) != 0 ||
+            parse_ll(to_s, &tlat, &tlon) != 0) {
+            fprintf(stderr, "起终点格式应为 lat,lon\n");
+            return 2;
+        }
     }
 
     MapSet ms;
@@ -123,12 +136,77 @@ int main(int argc, char **argv)
     else
         printf("地标表       未加载，退回纯直线启发式（生效 w=%.2f）\n", router_heur_w(r));
 
+    /* ---- GPX 贴合道路：--gpx-snap=<文件> ----
+     * 把 GPX 里的第一条轨迹均匀抽稀成途经点，吸附到路网并沿道路串联，
+     * 输出一条沿道路的折线（RouteResult），跑 route_check 自检。 */
+    if (gpx_snap) {
+        GpxStore gs; gpx_store_init(&gs);
+        int np = gpx_parse_file(gpx_snap, &gs);
+        if (np <= 0 || gs.n_trk == 0) {
+            fprintf(stderr, "GPX 解析失败或无轨迹: %s\n", gpx_snap);
+            gpx_store_free(&gs);
+            router_destroy(r); mapset_free(&ms); return 1;
+        }
+        GpxTrack *tk = &gs.trk[0];
+        printf("GPX 轨迹      %d 条，取第 1 条（%u 点）\n", gs.n_trk, tk->n);
+        RouteResult rr; memset(&rr, 0, sizeof(rr));
+        int src = gpx_snap_to_roads(r, tk, &rr, 64);
+        if (src != 0) {
+            printf("GPX 贴合      %s\n", src == -3 ? "轨迹附近无路网"
+                                            : (src == -1 ? "不连通" : "失败"));
+            printf("ROUTE-FAIL GPX贴合失败\n");
+            gpx_store_free(&gs);
+            router_destroy(r); mapset_free(&ms); return 1;
+        }
+        /* 原轨迹折线总长（相邻点大圆求和），用于算绕行系数与合理性判据 */
+        double straight = 0;
+        for (uint32_t i = 1; i < tk->n; i++)
+            straight += nm_haversine_m(tk->lat_e7[i-1]/1e7, tk->lon_e7[i-1]/1e7,
+                                       tk->lat_e7[i]/1e7, tk->lon_e7[i]/1e7);
+        printf("贴合路线      %u 段，总长 %.2f km（轨迹折线 %.2f km，绕行系数 %.2f）\n",
+               rr.n - 1, rr.total_m/1000.0, straight/1000.0,
+               straight > 1 ? rr.total_m/straight : 0.0);
+        int fail = route_check(r, &rr);
+        /* 合理性：贴合结果不该比原轨迹折线短太多（应当大致沿着原轨迹走） */
+        if (rr.total_m + 1.0 < straight * 0.5) {
+            printf("ASSERT-FAIL 贴合路线比原轨迹短太多（%.1f vs %.1f m）\n",
+                   rr.total_m, straight);
+            fail = 1;
+        }
+        route_result_free(&rr);
+        gpx_store_free(&gs);
+        router_destroy(r); mapset_free(&ms);
+        printf("%s\n", fail ? "ROUTE-FAIL" : "ROUTE-OK");
+        return fail ? 1 : 0;
+    }
+
     RNode a, b;
     double da = 0, db = 0;
     RouteResult rr;
-    /* ★ 用 router_route_ll：吸附撞上"有小连通块里的死节点"会自动换候选重试
-       （PLAN.md §51.1）。它顺带完成第 1 次算路，所以 repeat 不会多跑一趟。 */
-    int rc = router_route_ll(r, flat, flon, tlat, tlon, &rr, &a, &b, &da, &db);
+    int rc;
+    if (n_via > 0) {
+        /* 途经点：端点 = from + 各 via + to，走 router_route_via 依次串联各段 */
+        double *la = malloc((size_t)(n_via + 2) * sizeof(double));
+        double *lo = malloc((size_t)(n_via + 2) * sizeof(double));
+        la[0] = flat; lo[0] = flon;
+        for (int i = 0; i < n_via; i++) {
+            double vla, vlo;
+            if (parse_ll(via_s[i], &vla, &vlo) != 0) {
+                fprintf(stderr, "途经点格式应为 lat,lon\n");
+                return 2;
+            }
+            la[i + 1] = vla; lo[i + 1] = vlo;
+            free(via_s[i]);
+        }
+        la[n_via + 1] = tlat; lo[n_via + 1] = tlon;
+        rc = router_route_via(r, la, lo, n_via + 2, &rr, &a, &b, &da, &db);
+        free(la); free(lo);
+        printf("途经点        %d 个\n", n_via);
+    } else {
+        /* ★ 用 router_route_ll：吸附撞上"有小连通块里的死节点"会自动换候选重试
+           （PLAN.md §51.1）。它顺带完成第 1 次算路，所以 repeat 不会多跑一趟。 */
+        rc = router_route_ll(r, flat, flon, tlat, tlon, &rr, &a, &b, &da, &db);
+    }
     if (rc == -1) {
         printf("起点吸附      失败：附近无路网（%.5f,%.5f / %.5f,%.5f）\n",
                flat, flon, tlat, tlon);
@@ -150,7 +228,7 @@ int main(int argc, char **argv)
 
     double straight = nm_haversine_m(flat, flon, tlat, tlon);
 
-    if (repeat > 1) {
+    if (repeat > 1 && n_via == 0) {
         printf("[repeat 1] 展开 %llu 节点，耗时 %llu ms\n",
                (unsigned long long)rr.expanded,
                (unsigned long long)rr.elapsed_ms);

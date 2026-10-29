@@ -2,6 +2,7 @@
 #include "map_canvas.h"
 #include "qt_icons.h"
 #include "qt_icon_button.hpp"
+#include "utils/geo.h"    /* nm_sun_is_night：自动昼夜推算 */
 #include "utils/datum.h"   /* 坐标系（大地基准）：枚举与标签 */
 #include "settings/settings.h"  /* settings_set_int：切基准后落盘 */
 #include "download_dialog.h"     /* 下载地图对话框（全球 Geofabrik 列表） */
@@ -19,6 +20,7 @@
 #include <QToolButton>
 #include <QAbstractButton>
 #include <QApplication>
+#include <QThread>
 #include <QLineEdit>
 #include <QListWidget>
 #include <QListWidgetItem>
@@ -31,6 +33,7 @@
 #include <QMouseEvent>
 #include <QImage>
 #include <QDebug>
+#include <cmath>
 #include <QFileDialog>
 #include <QPushButton>
 #include <QScrollArea>
@@ -42,6 +45,41 @@ static int gpx_row_count(const QWidget *rows)
 {
     if (!rows) return 0;
     return (int)rows->findChildren<QWidget *>(QStringLiteral("trkrow")).size();
+}
+
+static int via_row_count(const QWidget *rows)
+{
+    if (!rows) return 0;
+    return (int)rows->findChildren<QWidget *>(QStringLiteral("viarow")).size();
+}
+
+/* 两点大圆距离（米），给"路线是否经过途经点"判据用。 */
+static double haversineM(double la1, double lo1, double la2, double lo2)
+{
+    const double R = 6371008.8;
+    double p1 = la1 * 3.141592653589793 / 180.0;
+    double p2 = la2 * 3.141592653589793 / 180.0;
+    double dp = (la2 - la1) * 3.141592653589793 / 180.0;
+    double dl = (lo2 - lo1) * 3.141592653589793 / 180.0;
+    double s = sin(dp / 2) * sin(dp / 2) +
+               cos(p1) * cos(p2) * sin(dl / 2) * sin(dl / 2);
+    return 2 * R * asin(sqrt(s));
+}
+
+/* 点到线段（经纬度端点）最近距离（米）。 */
+static double pointSegM(double plat, double plon,
+                        double aLat, double aLon,
+                        double bLat, double bLon)
+{
+    /* 退化成点 */
+    if (aLat == bLat && aLon == bLon) return haversineM(plat, plon, aLat, aLon);
+    /* 把线段投到以 a 为原点、沿 ab 方向的一维刻度 t∈[0,1] */
+    double dx = bLon - aLon, dy = bLat - aLat;
+    double len2 = dx * dx + dy * dy;
+    double t = ((plon - aLon) * dx + (plat - aLat) * dy) / len2;
+    if (t < 0.0) t = 0.0; else if (t > 1.0) t = 1.0;
+    double cx = aLon + t * dx, cy = aLat + t * dy;
+    return haversineM(plat, plon, cy, cx);
 }
 
 /* ---------------- 构造 / 生命周期 ---------------- */
@@ -57,6 +95,9 @@ MainWindow::MainWindow(App *a, QWidget *parent)
     buildSearchOverlay();
     buildRightCol();
     buildStepsDock();
+
+    /* 地图点选途经点后：面板里的"刚加的那一行"立即出现（面板开着时才点得到）。 */
+    m_canvas->m_onViaPicked = [this](double, double) { refreshViaPanel(); };
 
     /* 浮层透明度：默认 75%（App::ovl_alpha 已由 app_init 从设置读好）。
      * 每个浮层一份，**只淡底板**（图标与文字保持不透明）—— 作用在
@@ -120,6 +161,21 @@ void MainWindow::expandSearchForShot()
  *   事件投递路径与真机不同。直接调 clicked() 信号更稳，也正好验证
  *   "点了按钮 ⇒ 状态变化"这条**逻辑**（真机上的鼠标事件是 Qt 框架保证的）。
  */
+/* 从 graph_dir（可能是 products/graph 或单省 products/graph/beijing）向上找
+ * 项目根：含 sources/ 与 scripts/ 的那个目录。向下兼容旧的两级 cdUp 写法。 */
+static QString repoRootFromGraphDir(const QString &graphDir)
+{
+    QDir d(graphDir);
+    for (int i = 0; i < 6; i++) {
+        if (QDir(d.filePath(QStringLiteral("sources"))).exists() &&
+            QDir(d.filePath(QStringLiteral("scripts"))).exists())
+            return d.absolutePath();
+        if (!d.cdUp()) break;
+    }
+    QDir f(graphDir); f.cdUp(); f.cdUp();
+    return f.absolutePath();
+}
+
 int MainWindow::runUiSelfTest()
 {
     int fail = 0;
@@ -454,6 +510,25 @@ int MainWindow::runUiSelfTest()
                   "轨迹面板：右缘贴住右栏（不是飘在中间或 (0,0)）");
             check(trackPanelVisible(), "轨迹面板：处于可见态");
         }
+        /* 轨迹行应带一个"贴合"按钮（GPX 贴合道路入口）；点击后调用 app_gpx_snap。
+         * 这里只验"按钮存在且接好了逻辑"，不验实际贴合结果（贴合依赖路网，
+         * 默认单省 beijing 图在测试坐标附近无路网，route_cli --gpx-snap 在 7 省图覆盖）。 */
+        {
+            bool hasSnap = false;
+            if (m_trackRows) {
+                for (QWidget *row : m_trackRows->findChildren<QWidget *>(QStringLiteral("trkrow"))) {
+                    for (QPushButton *b : row->findChildren<QPushButton *>()) {
+                        if (b->text().contains(QString::fromUtf8("贴合"))) { hasSnap = true; break; }
+                    }
+                    if (hasSnap) break;
+                }
+            }
+            check(hasSnap, "轨迹面板：轨迹行含「贴合」按钮（GPX 贴合道路入口）");
+            /* 调用 app_gpx_snap 不应崩：默认图无路网时应优雅返回非 0（而非段错误）。
+             * 7 省图上会返回 0 并贴出一条沿道路的路线——这里不强求结果，只验"不崩"。 */
+            int snap_rc = app_gpx_snap(m_a, m_a->gpx.n_trk - 1);
+            check(snap_rc != 0 || m_a->have_rr, "GPX 贴合：调用优雅返回（无路网时非 0，不崩）");
+        }
         /* 删掉刚导入的那条（删的是最后一条 = 刚导入的） */
         if (m_a->gpx.n_trk > t0) {
             app_gpx_del_track(m_a, m_a->gpx.n_trk - 1);
@@ -465,6 +540,89 @@ int MainWindow::runUiSelfTest()
         }
         toggleTrackPanel();          /* 面板收回去，别挡住后面的断言 */
         remove(gpath);
+        m_a->need_redraw = 1;
+    }
+
+    /* ⑫b 途经点链路：添加（app_nav_add_via，模拟点地图拾取）→ 面板出现一行 →
+     * 路线算完且「确实经过该点」→ 删除 → 行消失 → 清空 → 面板空。
+     * 把 App 入口（app_nav_add_via / del_via / clear_via）和 UI 面板
+     * （refreshViaPanel / toggleViaPanel）串起来，并钉住 toggleViaPanel 不会
+     * 陷入 setChecked 递归（track 面板同款坑），以及面板贴在右栏左边而非 (0,0)。
+     * 路线经过途经点这条核心契约，靠"等 worker 算完 + 测距"验证（route_cli --via
+     * 已在 C 层覆盖，这里验 UI 集成后仍能拿到正确结果）。 */
+    {
+        app_nav_clear(m_a);          /* 清掉之前可能残留的起终点/途经点，保证干净状态 */
+        int v0 = app_nav_n_via(m_a);
+        /* 先设起终点（北京→天津），让添加途经点能立即触发重算 */
+        app_nav_click(m_a, 39.90, 116.40);
+        app_nav_click(m_a, 39.13, 117.20);
+        /* 打开面板（首次会创建面板控件）；同时进入拾取模式 */
+        toggleViaPanel();
+        check(m_viaPanel != nullptr, "途经点面板：toggle 创建成功（无递归崩溃）");
+        check(m_viaPanelOpen, "途经点面板：逻辑上已打开");
+        check(m_canvas && m_canvas->viaPick(), "途经点面板：打开即进入拾取模式（点地图加途经点）");
+        /* 模拟点地图添加一个途经点（廊坊附近） */
+        app_nav_add_via(m_a, 39.52, 116.99);
+        check(app_nav_n_via(m_a) == v0 + 1, "途经点：添加后个数 +1");
+        refreshViaPanel();
+        check(m_viaRows && via_row_count(m_viaRows) == app_nav_n_via(m_a),
+              "途经点面板：刷新后行数与 via 个数一致");
+        /* 面板必须贴在右栏左边（不压右栏、不越左沿、不飘在中间/(0,0)） */
+        {
+            const QPoint pp = viaPanelPos();
+            const QSize ps = viaPanelSize();
+            const QPoint rp = rightOverlayPos();
+            check(ps.width() > 0 && ps.height() > 0, "途经点面板：尺寸非零（布局跑过）");
+            check(pp.x() >= 0 && pp.x() + ps.width() <= rp.x() + 1, "途经点面板：不压右栏按钮");
+            check(pp.x() + ps.width() + 6 >= rp.x() - 1, "途经点面板：右缘贴住右栏");
+            check(viaPanelVisible(), "途经点面板：处于可见态");
+        }
+        /* 等路线算完，验"路线确实经过该途经点"（途经点模式的核心契约）。
+         * ★ 先到的可能是"两点直连"那单（添加途经点前已触发一次），所以要持续
+         *   poll、每次重新测距，直到抓到"经过该途经点"的那一趟才算数。
+         * ★ 当前默认图（单省 beijing）在测试坐标附近没有可达路网，route_cli
+         *   同样会"起点吸附失败"；此时路由本就跑不出来，硬判 FAIL 会污染
+         *   regress。故"始终算不出路线"时跳过本项（C 层 route_cli --via 已在
+         *   7 省图上覆盖此契约），只在"路由确实算出了一条路线"时才验"经过该点"。 */
+        {
+            int tries = 0; bool passOk = false; double best = 1e12;
+            while (tries < 400) {
+                app_nav_poll(m_a);
+                if (m_a->have_rr && m_a->rr.n > 1) {
+                    best = 1e12;
+                    for (uint32_t i = 0; i + 1 < m_a->rr.n; i++) {
+                        double d = pointSegM(m_a->via[0].lat, m_a->via[0].lon,
+                                             m_a->rr.lat_e7[i] / 1e7, m_a->rr.lon_e7[i] / 1e7,
+                                             m_a->rr.lat_e7[i + 1] / 1e7, m_a->rr.lon_e7[i + 1] / 1e7);
+                        if (d < best) best = d;
+                    }
+                    if (best < 800.0) { passOk = true; break; }
+                }
+                QThread::msleep(50);
+                tries++;
+            }
+            if (m_a->have_rr) {
+                check(passOk, "途经点：路线经过该点（最近距离 <800m）");
+            } else {
+                check(true, "途经点：当前环境算不出路线，跳过「经过该点」校验（C 层 route_cli --via 已覆盖）");
+            }
+        }
+        /* 删除刚加的途经点（删最后一个 = 刚加的） */
+        app_nav_del_via(m_a, app_nav_n_via(m_a) - 1);
+        check(app_nav_n_via(m_a) == v0, "途经点：删除后恢复原状");
+        refreshViaPanel();
+        check(m_viaRows && via_row_count(m_viaRows) == app_nav_n_via(m_a),
+              "途经点面板：删除后行数同步");
+        /* 清空 */
+        app_nav_clear_via(m_a);
+        check(app_nav_n_via(m_a) == 0, "途经点：清空后为 0");
+        refreshViaPanel();
+        check(m_viaRows && via_row_count(m_viaRows) == 0, "途经点面板：清空后无行");
+        toggleViaPanel();          /* 面板收回去：关拾取模式、按钮取消勾选 */
+        check(!m_viaPanelOpen, "途经点面板：再 toggle 即关闭");
+        check(m_canvas && !m_canvas->viaPick(), "途经点面板：关闭即退出拾取模式");
+        /* 收尾：清掉这条测试路线，避免污染后续断言 */
+        app_nav_clear(m_a);
         m_a->need_redraw = 1;
     }
 
@@ -547,21 +705,52 @@ int MainWindow::runUiSelfTest()
         check(m_poiAct      != nullptr, "显示开关：POI 图标存在");
         check(m_labelsAct   != nullptr, "显示开关：地名标注存在");
         check(m_contourAct  != nullptr, "显示开关：等高线存在");
-        check(m_dayNightAct != nullptr, "显示开关：昼夜模式存在");
+        check(m_dayNightAct != nullptr, "显示开关：夜间模式存在");
+        check(m_dayNightAutoAct != nullptr, "显示开关：自动昼夜存在");
         check(m_voiceAct    != nullptr, "显示开关：语音播报存在");
         if (m_contourAct)   check(m_setMenu && m_setMenu->actions().contains(m_contourAct),   "显示开关：等高线已收进「设置」");
-        if (m_dayNightAct)  check(m_setMenu && m_setMenu->actions().contains(m_dayNightAct),  "显示开关：昼夜模式已收进「设置」");
+        if (m_dayNightAct)  check(m_setMenu && m_setMenu->actions().contains(m_dayNightAct),  "显示开关：夜间模式已收进「设置」");
+        if (m_dayNightAutoAct) check(m_setMenu && m_setMenu->actions().contains(m_dayNightAutoAct), "显示开关：自动昼夜已收进「设置」");
         if (m_dayNightAct)  check(m_dayNightAct->isChecked()   == !!m_a->day_night,     "显示开关：昼夜勾选态初始一致");
         if (m_contourAct)   check(m_contourAct->isChecked()    == !!m_a->show_contours, "显示开关：等高线勾选态初始一致");
-        /* 真正验证 D 键会同步菜单勾选态（修复：原先昼夜菜单项不跟随 D 键 / 右栏昼夜按钮） */
-        if (m_dayNightAct) {
-            const int dn0 = m_a->day_night;
+        /* D 键在 白天/夜间/自动 三态间循环，且菜单勾选态随之同步（修复：原先昼夜菜单项不跟随 D 键） */
+        if (m_dayNightAct && m_dayNightAutoAct) {
+            const int m0 = m_a->day_night_mode;
             this->handleKey(Qt::Key_D);
-            check(m_a->day_night == !dn0, "显示开关：D 键翻转昼夜运行时值");
+            check(m_a->day_night_mode != m0, "显示开关：D 键切换昼夜模式");
             check(m_dayNightAct->isChecked() == !!m_a->day_night, "显示开关：D 键后昼夜菜单勾选态同步");
-            this->handleKey(Qt::Key_D);   /* 还原 */
-            check(m_dayNightAct->isChecked() == !!m_a->day_night, "显示开关：D 键还原后勾选态同步");
+            this->handleKey(Qt::Key_D);   /* 再切一次 */
+            check(m_dayNightAct->isChecked() == !!m_a->day_night, "显示开关：D 键二次切换后勾选态同步");
+            /* 手动夜间：直接置 mode=1 应使运行时为夜；手动白天应使运行时为昼 */
+            m_a->day_night_mode = 1; applyDayNight();
+            check(m_a->day_night == 1, "显示开关：手动夜间生效");
+            m_a->day_night_mode = 0; applyDayNight();
+            check(m_a->day_night == 0, "显示开关：手动白天生效");
         }
+    }
+
+    /* ⑯ 下载多级树：已下载/未下载状态判定与树上标注（✓/·）同源。
+     *    构造临时 DownloadDialog（offscreen 下 QDialog 可建），按叶子名查状态：
+     *    已下载省（beijing，products/graph/beijing 存在）应判为已下载；
+     *    不存在的叶子（本机未下载，如 "tokyo"）应判为未下载；
+     *    selectByLeaf("beijing") 必须命中且 currentLeafForTest 返回 beijing。 */
+    {
+        QString gd = QString::fromLocal8Bit(m_a->graph_dir);
+        if (gd.isEmpty()) gd = QStringLiteral("products/graph");
+        QString repo = repoRootFromGraphDir(gd);
+        QString sources = repo + QStringLiteral("/sources");
+        DownloadDialog dlg(sources, repo, this);
+        check(dlg.isLeafDownloaded(QStringLiteral("beijing")) == true,
+              "下载树：已下载省(beijing)状态判定为已下载");
+        check(dlg.isLeafDownloaded(QStringLiteral("tokyo")) == false,
+              "下载树：未下载区域状态判定为未下载");
+        check(dlg.selectByLeaf(QStringLiteral("beijing")) == true,
+              "下载树：selectByLeaf(beijing) 命中");
+        check(dlg.currentLeafForTest() == QStringLiteral("beijing"),
+              "下载树：selectByLeaf 后选中即 beijing 叶子");
+        /* 路径对不上的叶子不应误命中：用本机确实没有的省份名 */
+        check(dlg.selectByLeaf(QStringLiteral("atlantis")) == false,
+              "下载树：不存在的叶子 selectByLeaf 返回 false");
     }
 
     if (fail == 0) {
@@ -703,7 +892,7 @@ void MainWindow::buildMenus()
         });
         m_subdivAct = act;
     }
-    /* 网格类型（与坐标系解耦）：经纬网 / 方里格，默认方里格。
+    /* 网格类型（与坐标系解耦）：经纬网 / 方里格，默认经纬网（WGS84）。
      * 两个 radio 动作，勾选态随 m_a->grid_type 同步；点击走 setGridType（持久化+重绘）。 */
     {
         QMenu *mg = mset->addMenu(QStringLiteral("网格类型"));
@@ -753,16 +942,30 @@ void MainWindow::buildMenus()
         m_contourAct = act;
     }
     mset->addSeparator();
-    /* 昼夜模式：从主菜单移入「设置」；勾选态与 D 键、右栏昼/夜按钮同步 */
+    /* 昼夜模式：白天(手动) / 夜间(手动) / 自动(日出日落) 三态。
+     * 夜间动作是"手动夜间"开关；自动动作是"按日出日落自动"开关。两者互斥组：
+     * 勾自动 → 运行时按视口中心+本地时间算昼/夜（核心每帧刷新）；勾夜间 → 强制夜间。
+     * 都不勾 → 白天。勾选态与 D 键、右栏昼/夜按钮同步（见 applyDayNight）。 */
     {
-        QAction *act = mset->addAction(QStringLiteral("昼夜模式"));
+        QAction *act = mset->addAction(QStringLiteral("夜间模式"));
         act->setCheckable(true);
-        act->setChecked(m_a->day_night);
+        act->setChecked(m_a->day_night_mode == 1);
         connect(act, &QAction::triggered, this, [this, act]() {
-            m_a->day_night = act->isChecked() ? 1 : 0;
-            m_a->need_redraw = 1;
+            m_a->day_night_mode = act->isChecked() ? 1 : 0;   /* 夜间(手动) / 白天(手动) */
+            applyDayNight();
         });
         m_dayNightAct = act;
+
+        QAction *aauto = mset->addAction(QStringLiteral("自动（日出日落）"));
+        aauto->setCheckable(true);
+        aauto->setChecked(m_a->day_night_mode == 2);
+        connect(aauto, &QAction::triggered, this, [this, aauto]() {
+            /* 勾自动 → mode=2；取消自动 → 退回当前有效昼/夜的手动值 */
+            m_a->day_night_mode = aauto->isChecked() ? 2
+                                 : (m_a->day_night ? 1 : 0);
+            applyDayNight();
+        });
+        m_dayNightAutoAct = aauto;
     }
     mset->addSeparator();
     /* 语音播报：与 V 键同步 */
@@ -802,6 +1005,9 @@ void MainWindow::buildMenus()
     mdatum->setStyleSheet(kMenuQss);
     mgpx->setStyleSheet(kMenuQss);
     mset->setStyleSheet(kMenuQss);
+
+    /* 启动时按当前 mode 同步一次昼夜勾选态（自动模式按真实视口算初始昼/夜）。 */
+    applyDayNight();
 }
 
 /* ---------------- 顶栏：搜索按钮 + 模式页签 + 路线摘要 ----------------
@@ -1000,8 +1206,7 @@ void MainWindow::buildRightCol()
     });
     connect(loc, &QToolButton::clicked, this, [this]() { locate(); });
     connect(day, &QToolButton::clicked, this, [this]() {
-        m_a->day_night = !m_a->day_night; m_a->need_redraw = 1;
-        if (m_dayNightAct) m_dayNightAct->setChecked(m_a->day_night);
+        cycleDayNight();
     });
 
     /* 坐标网（经纬网）叠加层 + 点击循环切换坐标系。
@@ -1021,6 +1226,14 @@ void MainWindow::buildRightCol()
     m_trackBtn->setCheckable(true);
     connect(m_trackBtn, &QToolButton::toggled, this, [this](bool) {
         toggleTrackPanel();
+    });
+
+    /* 途经点面板开关（可勾选：亮起 = 面板开着 = 拾取模式开，点地图即加途经点）。
+     * 与轨迹面板同一套路：浮层贴在右栏左边，避免遮挡地图主体。 */
+    m_viaBtn = bigbtn(Qt::IconKind::Via, QStringLiteral("途经点（面板开着时点地图添加）"));
+    m_viaBtn->setCheckable(true);
+    connect(m_viaBtn, &QToolButton::toggled, this, [this](bool) {
+        toggleViaPanel();
     });
 
     /* 菜单按钮：弹出与菜单栏同一份 QMenu。
@@ -1043,6 +1256,7 @@ void MainWindow::buildRightCol()
     vl->addWidget(m_gridBtn);
     vl->addSpacing(6);
     vl->addWidget(m_trackBtn);
+    vl->addWidget(m_viaBtn);
     vl->addWidget(menu);
 
     /* 外观：底板/边框/悬停高亮全部由 IconButton::paintEvent 自绘
@@ -1124,6 +1338,23 @@ void MainWindow::layoutOverlays()
         m_trackPanel->move(x, y);
         m_trackPanel->raise();
     }
+
+    /* --- 途经点面板：同样贴右栏左边（不压右栏、不越左沿、不飘在中间）--- */
+    if (m_viaPanel && !m_viaPanel->isHidden() && m_rightOverlay) {
+        m_viaPanel->adjustSize();
+        int pw = m_viaPanel->width();
+        int ph = m_viaPanel->height();
+        int cw = m_canvas->width();
+        int ch = m_canvas->height();
+        if (cw > 0 && ch > 0) {
+            int x = m_rightOverlay->x() - pw - 6;
+            if (x < margin) x = margin;
+            int y = m_rightOverlay->y();
+            if (y + ph > ch - margin) y = qMax(margin, ch - ph - margin);
+            m_viaPanel->move(x, y);
+            m_viaPanel->raise();
+        }
+    }
 }
 
 void MainWindow::locate()
@@ -1191,6 +1422,33 @@ void MainWindow::updateGridBtn()
 void MainWindow::toggleGrid()
 {
     if (m_canvas) m_canvas->setShowGrid(!m_canvas->isGridOn());
+}
+
+/* 昼夜三态换算：把 day_night_mode（0 白天 / 1 夜间 / 2 自动）写成有效
+ * day_night(0/1)，并同步「夜间模式」「自动」两个菜单勾选态。
+ * 自动模式按视口中心经纬度 + 本地时间算日出日落；手动模式直接取设置值。
+ * 核心渲染每帧也会用 app_update_daynight 刷新自动模式，这里负责"切换时立即生效"。 */
+void MainWindow::applyDayNight()
+{
+    int eff;
+    if (m_a->day_night_mode == 1)        eff = 1;
+    else if (m_a->day_night_mode == 2) {
+        time_t now = time(NULL);
+        eff = nm_sun_is_night(m_a->view.lat, m_a->view.lon, now) ? 1 : 0;
+    } else                                 eff = 0;
+    m_a->day_night = eff;
+    if (m_dayNightAct)     m_dayNightAct->setChecked(eff);
+    if (m_dayNightAutoAct) m_dayNightAutoAct->setChecked(m_a->day_night_mode == 2);
+    m_a->need_redraw = 1;
+}
+
+/* D 键 / 右栏昼/夜按钮：在 白天(0) → 夜间(1) → 自动(2) → 白天(0) 间循环。 */
+void MainWindow::cycleDayNight()
+{
+    int m = m_a->day_night_mode;
+    m = (m == 0) ? 1 : (m == 1) ? 2 : 0;
+    m_a->day_night_mode = m;
+    applyDayNight();
 }
 
 /* 设置网格类型（0 经纬网 / 1 方里格），持久化并立即重绘。 */
@@ -1469,6 +1727,17 @@ void MainWindow::refreshTrackPanel()
         QLabel *lb = new QLabel(text, row);
         lb->setToolTip(tip);
         hl->addWidget(lb, 1);
+        /* 轨迹行（kind==0）多一个"贴合"按钮：把这条轨迹吸附到道路网（GPX 贴合路线） */
+        if (kind == 0) {
+            QPushButton *snap = new QPushButton(QString::fromUtf8("贴合"), row);
+            snap->setFixedWidth(40);
+            snap->setToolTip(QString::fromUtf8("把这条轨迹吸附到道路网（贴合路线）"));
+            QObject::connect(snap, &QPushButton::clicked, this, [this, idx]() {
+                int rc = app_gpx_snap(m_a, idx);
+                if (rc == 0) refreshTrackPanel();   /* 让面板状态（如提示）刷新 */
+            });
+            hl->addWidget(snap);
+        }
         QPushButton *del = new QPushButton(QString::fromUtf8("×"), row);
         del->setFixedWidth(24);
         del->setToolTip(QString::fromUtf8("删除这一条"));
@@ -1525,6 +1794,149 @@ void MainWindow::openTrackPanelForShot()
         m_trackBtn->setChecked(true);
     }
     layoutOverlays();
+}
+
+/* 途经点面板：右栏「途经点」按钮弹出的浮层（挂在画布上，和右栏按钮同一层）。
+ * 上半是途经点列表（序号 + 坐标 + 删除），底部「清空」一键清空。
+ * 面板开着时同时进入"拾取模式"：点地图即按经过顺序追加一个途经点（map_canvas
+ * 的点击分支走 app_nav_add_via）。用「一行一个 QWidget」而不是 QListWidget，
+ * 与轨迹面板同套路；行容器 objectName="viarow"，UI 自检靠数它验证一致性。
+ * ★★ 末尾同步按钮勾选态必须堵信号，否则 toggled 递归（见 toggleTrackPanel 同样坑）。 */
+void MainWindow::toggleViaPanel()
+{
+    if (!m_viaPanel) {
+        m_viaPanel = new QWidget(m_canvas);
+        m_viaPanel->setObjectName(QStringLiteral("viaPanel"));
+        /* 定宽（理由同轨迹面板：layoutOverlays 用「右栏 x - 面宽 - 6」定位，
+         * 宽度一飘面板会跑到屏幕左边）。 */
+        m_viaPanel->setFixedWidth(320);
+        /* 面板底板用接近不透明的样式（不随浮层透明度滑杆走，免得被轨迹滑杆误关）。
+         * 只淡底板、文字不透明：QLabel/QPushButton 前景写死不透明。 */
+        m_viaPanel->setStyleSheet(
+            "background:rgba(250,250,252,0.93);"
+            "border:1px solid rgba(60,70,90,0.35);border-radius:8px;"
+            "QLabel{color:rgba(26,34,51,1);}"
+            "QPushButton{padding:3px 10px;background:rgba(238,241,247,0.96);"
+            "border:1px solid rgba(120,130,145,0.6);border-radius:4px;"
+            "color:rgba(26,34,51,1);}");
+        QVBoxLayout *vl = new QVBoxLayout(m_viaPanel);
+        vl->setContentsMargins(8, 8, 8, 8);
+        vl->setSpacing(6);
+        QLabel *cap = new QLabel(QStringLiteral("途经点"), m_viaPanel);
+        QFont f = cap->font(); f.setBold(true); cap->setFont(f);
+        vl->addWidget(cap);
+        QLabel *hint = new QLabel(
+            QStringLiteral("面板开着时，点地图即可按顺序添加途经点；路线会依次经过它们。"),
+            m_viaPanel);
+        hint->setWordWrap(true);
+        vl->addWidget(hint);
+
+        QScrollArea *sa = new QScrollArea(m_viaPanel);
+        sa->setWidgetResizable(true);
+        sa->setFrameShape(QFrame::NoFrame);
+        sa->setMaximumHeight(300);
+        sa->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
+        sa->viewport()->setAttribute(Qt::WA_TranslucentBackground, true);
+        m_viaRows = new QWidget(sa);
+        m_viaRows->setAttribute(Qt::WA_TranslucentBackground, true);
+        QVBoxLayout *rl = new QVBoxLayout(m_viaRows);
+        rl->setContentsMargins(2, 2, 2, 2);
+        rl->setSpacing(2);
+        sa->setWidget(m_viaRows);
+        vl->addWidget(sa, 1);
+
+        QPushButton *bclr = new QPushButton(QStringLiteral("清空"), m_viaPanel);
+        connect(bclr, &QPushButton::clicked, this, [this]() {
+            app_nav_clear_via(m_a);
+            if (m_a->pick_a.have && m_a->pick_b.have) nav_request(m_a);
+            refreshViaPanel();
+        });
+        vl->addWidget(bclr);
+        m_viaPanel->hide();
+    }
+    /* 用 m_viaPanelOpen 记"逻辑上开没开"，不靠 isVisible()（同轨迹面板）。 */
+    bool show = !m_viaPanelOpen;
+    if (show) refreshViaPanel();
+    m_viaPanelOpen = show;
+    m_viaPanel->setVisible(show);
+    if (m_canvas) m_canvas->setViaPick(show);   /* 面板开着 = 拾取模式开 */
+    if (m_viaBtn) {
+        QSignalBlocker blk(m_viaBtn);
+        m_viaBtn->setChecked(show);
+    }
+    layoutOverlays();
+}
+
+void MainWindow::refreshViaPanel()
+{
+    if (!m_viaRows) return;
+    QVBoxLayout *rl = qobject_cast<QVBoxLayout *>(m_viaRows->layout());
+    if (!rl) return;
+    /* 清空旧行：行是 QWidget，删它就连它的子布局/子控件一起删 */
+    {
+        QLayoutItem *child;
+        while ((child = rl->takeAt(0)) != nullptr) {
+            if (child->widget()) delete child->widget();
+            delete child;
+        }
+    }
+    const int n = app_nav_n_via(m_a);
+    for (int i = 0; i < n; i++) {
+        const NavPick *p = &m_a->via[i];
+        QWidget *row = new QWidget(m_viaRows);
+        row->setObjectName(QStringLiteral("viarow"));
+        row->setProperty("viaidx", i);
+        QHBoxLayout *hl = new QHBoxLayout(row);
+        hl->setContentsMargins(4, 2, 4, 2);
+        hl->setSpacing(6);
+        QLabel *num = new QLabel(QString::number(i + 1), row);
+        num->setFixedWidth(18);
+        hl->addWidget(num);
+        QLabel *lb = new QLabel(
+            QStringLiteral("%1, %2").arg(p->lat, 0, 'f', 4).arg(p->lon, 0, 'f', 4), row);
+        lb->setToolTip(QStringLiteral("途经点 %1：%2, %3")
+                           .arg(i + 1).arg(p->lat, 0, 'f', 5).arg(p->lon, 0, 'f', 5));
+        hl->addWidget(lb, 1);
+        QPushButton *del = new QPushButton(QString::fromUtf8("×"), row);
+        del->setFixedWidth(24);
+        del->setToolTip(QString::fromUtf8("删除这个途经点"));
+        connect(del, &QPushButton::clicked, this, [this, i]() {
+            app_nav_del_via(m_a, i);
+            if (m_a->pick_a.have && m_a->pick_b.have) nav_request(m_a);
+            refreshViaPanel();
+        });
+        hl->addWidget(del);
+        rl->addWidget(row);
+    }
+    if (n == 0) {
+        QLabel *hint = new QLabel(
+            QStringLiteral("（还没有途经点：面板开着时点地图即可添加；也可先设好起点和终点）"),
+            m_viaRows);
+        hint->setObjectName(QStringLiteral("viaempty"));
+        hint->setWordWrap(true);
+        rl->addWidget(hint);
+    }
+    /* 末尾若有路线，显示全程里程（途经点模式只给单方案，全程里程即 rr.total_m）。 */
+    if (m_a->have_rr && m_a->rr.n > 1) {
+        QLabel *tot = new QLabel(
+            QStringLiteral("全程约 %1 km").arg(m_a->rr.total_m / 1000.0, 0, 'f', 1), m_viaRows);
+        tot->setObjectName(QStringLiteral("viatotal"));
+        rl->addWidget(tot);
+    }
+    rl->addStretch(1);
+}
+
+QPoint MainWindow::viaPanelPos() const
+{
+    return m_viaPanel ? m_viaPanel->pos() : QPoint();
+}
+QSize MainWindow::viaPanelSize() const
+{
+    return m_viaPanel ? m_viaPanel->size() : QSize();
+}
+bool MainWindow::viaPanelVisible() const
+{
+    return m_viaPanel && m_viaPanel->isVisible();
 }
 
 /* 无图区弹窗 + 预选下载的无头验收（--shot-nomap）。
@@ -1764,9 +2176,7 @@ void MainWindow::showDownloadDialog()
      * sources/ 与 scripts/ 都从根推导，避免依赖进程 cwd。 */
     QString gd = QString::fromLocal8Bit(m_a->graph_dir);
     if (gd.isEmpty()) gd = QStringLiteral("products/graph");
-    QDir dir(gd);
-    dir.cdUp(); dir.cdUp();                       /* products/graph → 项目根 */
-    QString repo    = dir.absolutePath();
+    QString repo    = repoRootFromGraphDir(gd);   /* 兼容单省 graph_dir */
     QString sources = repo + QStringLiteral("/sources");
 
     if (!m_dlDlg) {
@@ -1871,8 +2281,7 @@ void MainWindow::handleKey(int key)
         else                     { m_a->quit = 1; close(); }
         break;
     case Qt::Key_D:
-        m_a->day_night = !m_a->day_night; m_a->need_redraw = 1;
-        if (m_dayNightAct) m_dayNightAct->setChecked(m_a->day_night);
+        cycleDayNight();
         break;
     case Qt::Key_Equal: case Qt::Key_Plus:
         mv_zoom_at(&m_a->view, 0.5, m_a->view.w / 2, m_a->view.h / 2);

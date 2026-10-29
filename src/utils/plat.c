@@ -1631,4 +1631,30 @@ int nm_thread_spawn(void (*f)(void *), void *arg)
     return 0;
 }
 
+int nm_has_gpu(void)
+{
+#ifdef _WIN32
+    /* 装了 GL 驱动（opengl32.dll 可加载）即认为有 GPU 图形栈 */
+    HMODULE h = LoadLibraryA("opengl32.dll");
+    if (h) { FreeLibrary(h); return 1; }
+    return 0;
+#else
+    /* Linux/macOS：看是否有 DRI 渲染设备节点 */
+    if (access("/dev/dri/renderD128", F_OK) == 0) return 1;
+    if (access("/dev/dri/card0", F_OK) == 0) return 1;
+    DIR *d = opendir("/dev/dri");
+    if (d) {
+        struct dirent *e;
+        int found = 0;
+        while ((e = readdir(d)) != NULL) {
+            if (strncmp(e->d_name, "renderD", 7) == 0) { found = 1; break; }
+            if (strncmp(e->d_name, "card", 4) == 0)    { found = 1; break; }
+        }
+        closedir(d);
+        if (found) return 1;
+    }
+    return 0;
+#endif
+}
+
 #endif

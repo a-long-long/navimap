@@ -137,7 +137,7 @@ void MapCanvas::setShowGrid(bool v)
 }
 
 /* ---- 坐标网格（经纬网 / 方里格，与坐标系解耦）：Qt 端叠加层，C 渲染核心一行不改 ----
- * 网格类型由 m_a->grid_type 决定（默认方里格）；坐标系（m_a->datum）只管读数。
+ * 网格类型由 m_a->grid_type 决定（默认经纬网 WGS84）；坐标系（m_a->datum）只管读数。
  * 经纬网：用 mv_visible_bbox 取可见范围（WGS84），把四角换到所选基准取范围，
  *   再按 nice 1/2/5 步进取该基准下的经线/纬线；每条线两端先换回 WGS84 再 mv_project，
  *   标签标基准坐标。旋转角 rot 是投影的一部分，所以网格随地图一起转，天然正确。
@@ -598,7 +598,12 @@ void MapCanvas::mouseReleaseEvent(QMouseEvent *e)
     if (abs((int)ep.x() - m_downx) + abs((int)ep.y() - m_downy) <= 4) {
         double la, lo;
         mv_unproject(&m_a->view, (int)ep.x(), (int)ep.y(), &la, &lo);
-        app_nav_click(m_a, la, lo);          /* 先起点后终点，后台算路 */
+        if (m_viaPick) {                     /* 途经点拾取模式：左键=加一个途经点 */
+            app_nav_add_via(m_a, la, lo);
+            if (m_onViaPicked) m_onViaPicked(la, lo);
+        } else {
+            app_nav_click(m_a, la, lo);      /* 先起点后终点，后台算路 */
+        }
     }
 }
 

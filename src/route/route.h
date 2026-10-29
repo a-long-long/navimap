@@ -3,6 +3,7 @@
 
 #include <stdint.h>
 #include "map/mapset.h"
+#include "map/gpx.h"           /* GpxTrack：GPX 贴合道路（route 依赖 map，include 合法） */
 
 /* ---------------------------------------------------------------------------
  * 跨省路线计算（阶段 8）
@@ -225,9 +226,30 @@ int     router_route_alts(Router *r, double flat, double flon, double tlat, doub
                           RouteResultSet *out, RNode *fa, RNode *fb,
                           double *da, double *db);
 
+/* 途经点多段算路：依次把相邻两点当作一段算路，拼接成一条依次经过所有途经点的
+ * 完整路线。lats/lons 为 n 个经纬度（n>=2，顺序 = 经过顺序）；第 0 个当起点、
+ * 第 n-1 个当终点、中间的当途经点。
+ * 实现：首段走 router_route_ll（自带吸附+死节点换候选重试）并取得其终点节点，
+ * 之后每段以"上一段终点节点"为固定起点、对当前终点做吸附后 router_plan，
+ * 从而**整条折线在途经点处严格连续**（相邻段共用同一节点，无跳变）。
+ * 返回 0 = 找到（out->ok=1）；<0 失败（与 router_route_ll 同口径；任一段失败即整体失败，
+ * out 清零）。fa/fb 返回首段起点与末段终点的吸附节点（可为 NULL）；da/db 为对应吸附距离。 */
+int     router_route_via(Router *r, const double *lats, const double *lons, int n,
+                         RouteResult *out, RNode *fa, RNode *fb,
+                         double *da, double *db);
+
 /* 计算 from → to。返回 0 = 找到（out->ok=1）；-1 = 不连通；-2 = 内存/规模超限 */
 int     router_plan(Router *r, RNode from, RNode to, RouteResult *out);
 void    route_result_free(RouteResult *rr);
+
+/* GPX 贴合道路：把一条 GPX 轨迹吸附到路网，输出一条沿道路的 RouteResult。
+ * 思路：把轨迹点均匀抽稀到至多 max_wp 个途经点（避免相邻近点之间反复算路），
+ * 再用 router_route_via 依次串联——每段自动吸附到最近道路节点。
+ * 返回的 out 是沿道路的多段折线（与普通算路同一套 RouteResult），调用方负责
+ * route_result_free。tk 为空或点数 < 2 返回 -1；吸附失败 -3；不连通 -1。
+ * GpxTrack 定义在 map/gpx.h，route.h 已直接 include 它（route 依赖 map 合法）。 */
+int     gpx_snap_to_roads(Router *r, const GpxTrack *tk,
+                         RouteResult *out, int max_wp);
 /* 释放整个 RouteResultSet（逐条 route_result_free）。供 NavResult / App 的
  * 多方案容器在重算 / 退出时整组释放。 */
 void    route_result_set_free(RouteResultSet *s);

@@ -77,8 +77,19 @@ public:
     void gpxDelFav(int idx);       /* 删一个收藏 */
     void refreshTrackPanel();      /* 轨迹/收藏列表内容与 App 同步后重画面板 */
 
+    /* 途经点面板（右栏「途经点」按钮弹出；挂在画布上的浮层）。
+     * 列表显示当前所有途经点（按经过顺序），每行可删除；底部「清空」一键清空。
+     * 点击地图（在拾取模式下）新增途经点，route 重算会经过它们。 */
+    void toggleViaPanel();
+    void refreshViaPanel();        /* 途经点列表与 App::via[] 同步后重画面板 */
+
     /* MapCanvas 键盘事件转发到这里（焦点在画布上） */
     void handleKey(int key);
+
+    /* 昼夜三态：在 白天(0)→夜间(1)→自动(2) 之间循环（D 键 / 右栏昼/夜按钮共用）。
+     * applyDayNight 把 day_night_mode 换算成有效 day_night 并同步菜单勾选态。 */
+    void cycleDayNight();
+    void applyDayNight();
 
     /* 无头 UI 自检（--ui-test 用）：断言"搜索按钮→点击→输入框出现→Esc 收起"
      * 这条交互链，以及每个按钮都有悬停提示。
@@ -116,6 +127,11 @@ public:
     QPoint trackPanelPos() const;
     QSize  trackPanelSize() const;
     bool   trackPanelVisible() const;
+
+    /* 途经点面板几何读取（UI 自检用，与轨迹面板同套路） */
+    QPoint viaPanelPos() const;
+    QSize  viaPanelSize() const;
+    bool   viaPanelVisible() const;
 
 protected:
     /* 监听画布 Resize（右栏浮层重新定位）+ 搜索框的 Esc（收起搜索框） */
@@ -157,7 +173,8 @@ private:
     QToolButton  *m_gridBtn = nullptr;    /* 右栏「坐标网」按钮（悬停提示带当前坐标系） */
     QList<QAction*> m_datumActs;           /* ☰ 菜单里的坐标系动作（与悬停提示同步） */
     QAction      *m_contourAct = nullptr;  /* 设置菜单「等高线」勾选项（与 O 键同步） */
-    QAction      *m_dayNightAct = nullptr; /* 设置菜单「昼夜模式」勾选项（与 D 键、右栏昼/夜按钮同步） */
+    QAction      *m_dayNightAct = nullptr; /* 设置菜单「夜间模式」勾选项（与 D 键、右栏昼/夜按钮同步） */
+    QAction      *m_dayNightAutoAct = nullptr; /* 设置菜单「自动（日出日落）」勾选项 */
     /* 设置菜单里的地图信息显示 / 播报开关（原 SDL 设置面板承载的开关，#88 拆 SDL 壳后由 Qt 菜单接管） */
     QAction      *m_voiceAct  = nullptr;   /* 「语音播报」（与 V 键同步） */
     QAction      *m_poiAct    = nullptr;   /* 「POI 图标」 */
@@ -169,6 +186,11 @@ private:
     QWidget      *m_trackRows  = nullptr;   /* 滚动区里的行容器（每条轨迹/收藏一行） */
     QToolButton  *m_trackBtn   = nullptr;   /* 右栏「轨迹」按钮（可勾选，亮起=面板开） */
     bool          m_trackPanelOpen = false;  /* 轨迹面板是否"逻辑上打开"（0% 时不真的显示） */
+    /* 途经点面板（右栏「途经点」按钮弹出；挂在画布上的浮层） */
+    QWidget      *m_viaPanel   = nullptr;
+    QWidget      *m_viaRows    = nullptr;   /* 滚动区里的行容器（每个途经点一行） */
+    QToolButton  *m_viaBtn     = nullptr;   /* 右栏「途经点」按钮（可勾选，亮起=面板开/拾取模式） */
+    bool          m_viaPanelOpen = false;   /* 途经点面板是否"逻辑上打开" */
     QString       m_lastPick;            /* 最近一次选中的地点（按钮提示用） */
     int           m_step_count = -1;     /* 步骤面板增量刷新哨兵 */
     DownloadDialog *m_dlDlg = nullptr;    /* 下载地图对话框（懒创建） */

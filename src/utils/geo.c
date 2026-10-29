@@ -1,6 +1,11 @@
 #include "utils/geo.h"
 
 #include <stdlib.h>
+#include <time.h>
+
+#ifndef M_PI
+#define M_PI 3.14159265358979323846
+#endif
 
 double nm_haversine_m(double lat1, double lon1, double lat2, double lon2)
 {
@@ -101,4 +106,56 @@ double nm_mercator_y_fast(double lat)
     if (i >= MY_N) i = MY_N - 1;
     double f = u - (double)i;
     return t[i] + (t[i + 1] - t[i]) * f;
+}
+
+/* ------------------------------------------------------------------ */
+/* 日出日落（太阳高度角）                                              */
+/*                                                                     */
+/* 标准周期项公式（赤纬 + 时差），算本地太阳时下的太阳天顶距；天顶距   */
+/* > 90.833°（含大气折射修正）即判为夜间。纬度 lat、经度 lon 单位度，   */
+/* 东经/北纬为正。utc 为 time_t 秒。                                   */
+/* 极区：cos_zen 被夹到 [-1,1]，天顶距恒 >90 即恒夜、恒 <90 即恒昼，   */
+/* 公式自然成立，不会除零或越界。                                     */
+/* ------------------------------------------------------------------ */
+
+int nm_sun_is_night(double lat, double lon, time_t utc)
+{
+    struct tm t;
+#if defined(_WIN32)
+    gmtime_s(&t, &utc);
+#else
+    gmtime_r(&utc, &t);
+#endif
+    int year  = t.tm_year + 1900;
+    int month = t.tm_mon + 1;
+    int day   = t.tm_mday;
+    double utc_hours = t.tm_hour + t.tm_min / 60.0 + t.tm_sec / 3600.0;
+
+    /* 一年中的第几天（1..366），闰年 2 月后 +1 */
+    static const int cum[12] = { 0, 31, 59, 90, 120, 151, 181, 212, 243, 273, 304, 334 };
+    int doy = cum[month - 1] + day;
+    if (month > 2 && ((year % 4 == 0 && year % 100 != 0) || year % 400 == 0)) doy++;
+
+    double rad = M_PI / 180.0;
+    double gamma = 2.0 * M_PI / 365.0 * (doy - 1.0 + (utc_hours - 12.0) / 24.0);
+
+    /* 时差（分钟） */
+    double eqtime = 229.18 * (0.000075
+                   + 0.001868 * cos(gamma) - 0.032077 * sin(gamma)
+                   - 0.014615 * cos(2 * gamma) - 0.040849 * sin(2 * gamma));
+    /* 赤纬（弧度） */
+    double decl = 0.006918 - 0.399912 * cos(gamma) + 0.070257 * sin(gamma)
+                  - 0.006758 * cos(2 * gamma) + 0.000907 * sin(2 * gamma)
+                  - 0.002697 * cos(3 * gamma) + 0.001480 * sin(3 * gamma);
+    /* 真太阳时（分钟）= UTC 分钟 + 时差 + 经度修正（每度 4 分钟，东经为正） */
+    double tst = utc_hours * 60.0 + eqtime + 4.0 * lon;
+    /* 时角（度）：正午为 0，每小时 15° */
+    double ha = tst / 4.0 - 180.0;
+
+    double cos_zen = sin(lat * rad) * sin(decl)
+                   + cos(lat * rad) * cos(decl) * cos(ha * rad);
+    if (cos_zen >  1.0) cos_zen =  1.0;
+    if (cos_zen < -1.0) cos_zen = -1.0;
+    double zen = acos(cos_zen) / rad;
+    return zen > 90.833 ? 1 : 0;
 }

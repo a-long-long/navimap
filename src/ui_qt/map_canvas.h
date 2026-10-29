@@ -18,6 +18,7 @@
  */
 #include <QWidget>
 #include <QImage>
+#include <functional>   /* m_onViaPicked 回调（避开 Qt 信号槽/moc） */
 
 extern "C" {
 #include "ui/window.h"      /* App / app_* / mv_* 全在这里 */
@@ -97,6 +98,14 @@ public:
 
     /* 坐标网叠加层开关（右栏「坐标网」按钮控制） */
     bool m_showGrid = false;
+
+    /* 途经点拾取模式：开启后左键点击地图不再设起/终点，而是添加一个途经点。
+     * 由「添加途经点」按钮 toggle；m_onViaPicked 在添加后回调（刷新途经点面板）。 */
+    bool m_viaPick = false;
+    std::function<void(double, double)> m_onViaPicked;
+
+    void setViaPick(bool v) { m_viaPick = v; }
+    bool viaPick() const { return m_viaPick; }
 };
 
 #endif

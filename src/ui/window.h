@@ -86,6 +86,14 @@ typedef struct {
      * 主线程只提交请求 + 收割结果，绝不直接调 router_*。 */
     Router       *router;        /* 惰性创建：第一次算路才建（状态表约 30MB） */
     NavPick       pick_a, pick_b;/* 起点 / 终点 */
+    /* ---- 途经点（阶段 6 功能：添加途经点）----
+     * via[] 是在起点与终点之间、要求路线依次经过的中间点（按经过顺序排列）。
+     * n_via==0 时退化为普通两点算路；>0 时后台走 router_route_via。
+     * 每段（起→via1→…→终点）的里程记录在 via_seg_km[]，给面板显示"全程/各段"用。 */
+#define MAX_VIA 31
+    NavPick       via[MAX_VIA];  /* 途经点 */
+    int           n_via;         /* 当前途经点个数（≤ MAX_VIA） */
+    double        via_seg_km[MAX_VIA + 1]; /* 各段里程（km）：0=起→via1 … 末=via_k→终 */
     RouteResult   rr;             /* 当前主路线（= 选中方案，指针从 ralts 搬来） */
     int           have_rr;
     RouteResultSet ralts;        /* 多方案集合（含已选中的那一条，指针已被搬走） */
@@ -144,10 +152,12 @@ typedef struct {
 
     /* ---- nav-desktop 风格界面状态（chrome.c 绘制 + 命中测试）----
      * 这些是纯 UI 状态，与导航/渲染算法无关；改它们不影响算路结果。 */
-    int           day_night;      /* 0 昼 / 1 夜（夜间半透明蒙版） */
+    int           day_night;      /* 有效值：0 昼 / 1 夜（夜间半透明蒙版），由 day_night_mode 推算 */
+    int           day_night_mode; /* 昼夜模式：0 白天(手动) / 1 夜间(手动) / 2 自动(日出日落) */
+    int           gpu_available;  /* 运行环境是否检测到 GPU（nm_has_gpu），仅信息展示用 */
     int           mode;           /* 顶栏模式页签：0 浏览 / 1 导航 */
     int           datum;          /* 坐标系（大地基准）：0 WGS84 / 1 CGCS2000 / 2 北京54 / 3 西安80（只管坐标读数） */
-    int           grid_type;      /* 网格类型（与坐标系解耦）：0 经纬网 / 1 方里格（默认 1） */
+    int           grid_type;      /* 网格类型（与坐标系解耦）：0 经纬网(WGS84，默认) / 1 方里格(高斯-克吕格公里网) */
     int           menu_open;      /* 主菜单浮层是否展开 */
     int           chrome_menu_item;/* 菜单命中项下标（chrome_hit 写入） */
     int           win_drag;       /* 自绘标题栏拖拽中 */
@@ -270,9 +280,14 @@ int  app_render_to_buf(App *a, void *px, int w, int h, size_t stride,
  * 都在后台线程里。 */
 void app_nav_click(App *a, double lat, double lon);   /* 左键点一下：先起点后终点 */
 void app_nav_clear(App *a);                           /* 右键 / c 键 */
+void app_nav_add_via(App *a, double lat, double lon); /* 添加途经点（按经过顺序） */
+void app_nav_del_via(App *a, int idx);               /* 删除第 idx 个途经点 */
+void app_nav_clear_via(App *a);                      /* 清空全部途经点 */
+int  app_nav_n_via(const App *a);                    /* 当前途经点个数 */
 void app_nav_fit(App *a);                             /* f 键：缩放到整条路线 */
 void app_nav_toggle_panel(App *a);                    /* p 键 */
 void app_nav_poll(App *a);                            /* 主循环每帧调用，收割结果 */
+void nav_request(App *a);                             /* 提交一次算路（起终点齐了才生效） */
 void app_nav_select_alt(App *a, int k);              /* 切换多方案中的第 k 条（0..n-1） */
 
 /* ---- 模拟导航 ---- */
@@ -313,5 +328,6 @@ int  app_gpx_del_track(App *a, int idx);         /* 删第 idx 条轨迹；0 成
  * 进度/结果打到 stderr（C 前端从终端启动，stderr 可见）；同时标红重绘。 */
 int  app_gpx_import_dir(App *a, const char *dir);   /* 扫描 dir 下 *.gpx 逐个导入；返回新增轨迹条数 */
 int  app_gpx_export_default(App *a);                /* 导出到 <config>/export.gpx；0 成功 */
+int  app_gpx_snap(App *a, int idx);                /* 把第 idx 条轨迹贴合到道路网，结果作当前路线显示 */
 
 #endif

@@ -3,6 +3,11 @@
 
 #include <stdint.h>
 #include <math.h>
+#include <time.h>
+
+#ifdef __cplusplus
+extern "C" {
+#endif
 
 #define NM_EARTH_R_M 6371008.8
 #define NM_DEG_NANO  1000000000LL   /* PBF 默认 granularity=100 → 单位是 1e-7 度 */
@@ -29,5 +34,14 @@ void nm_mercator_inv(double wx, double wy, double *lat, double *lon);
    不在 gdb/验收里期待它与 nm_mercator 逐位相等——它有意为之地差一点点，
    换来的是 5~6 倍的投影速度。 */
 double nm_mercator_y_fast(double lat);
+
+/* 日出日落：给定 lat/lon（度，北纬/东经为正）与 UTC 秒，返回 1=夜间（太阳在地平线下，
+ * 用含折射的日出/日落阈值 90.833°）。本地太阳时算法，不依赖系统时区，对"自动昼夜"足够。
+ * 极区恒昼/恒夜也能正确处理（天顶距恒 >90 即判夜间）。 */
+int nm_sun_is_night(double lat, double lon, time_t utc);
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif

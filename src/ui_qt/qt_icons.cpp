@@ -152,6 +152,30 @@ void drawTrack(QPainter &p)
     p.drawEllipse(QRectF(14.4, 2.4, 4.4, 4.4));
 }
 
+/* 途经点：一个图钉标记（外圈 + 实心中心 + 向下小三角），代表路线依次经过的
+ * 中间点。与 Locate（十字准星）和 Track（折线）区分开。 */
+void drawVia(QPainter &p)
+{
+    const double cx = 10.0, cy = 7.5, r = 4.8;
+    /* 外圈 */
+    p.setPen(mkPen(1.7));
+    p.setBrush(Qt::NoBrush);
+    p.drawEllipse(QRectF(cx - r, cy - r, r * 2, r * 2));
+    /* 实心中心点 */
+    p.setBrush(QBrush(kInk));
+    p.setPen(Qt::NoPen);
+    p.drawEllipse(QRectF(cx - 1.6, cy - 1.6, 3.2, 3.2));
+    /* 向下小三角（图钉尖） */
+    p.setPen(mkPen(1.5));
+    p.setBrush(QBrush(kInk));
+    QPainterPath tri;
+    tri.moveTo(cx - 2.2, cy + r - 0.4);
+    tri.lineTo(cx + 2.2, cy + r - 0.4);
+    tri.lineTo(cx, cy + r + 3.4);
+    tri.closeSubpath();
+    p.drawPath(tri);
+}
+
 }  /* namespace */
 
 /* ---- 直接在 QPainter 上绘制（供 IconButton 的 paintEvent 调用）----
@@ -182,6 +206,7 @@ void qt_draw_icon(QPainter &p, Qt::IconKind kind, double size)
     case Qt::IconKind::Menu:    drawMenu(p);              break;
     case Qt::IconKind::Plus:    drawPlus(p);              break;
     case Qt::IconKind::Track:   drawTrack(p);             break;
+    case Qt::IconKind::Via:     drawVia(p);               break;
     }
     p.restore();
 }

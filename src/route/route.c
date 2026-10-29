@@ -20,6 +20,7 @@
 #include "route/restr.h"
 #include "route/cost.h"
 #include "route/sew.h"
+#include "map/gpx.h"          /* GpxTrack：GPX 贴合道路用 */
 
 /* ---------------------------------------------------------------------------
  * 跨省 A* 路由（状态主键 = 坐标，见 route.h 顶部说明）
@@ -285,6 +286,124 @@ int router_route_ll(Router *r, double flat, double flon, double tlat, double tlo
         }
     }
     return -2;
+}
+
+/* 途经点多段算路：每段独立吸附+算路，但相邻段共用"上一段的终点节点"以保证连续。
+ * 见 route.h 声明处的说明。 */
+int router_route_via(Router *r, const double *lats, const double *lons, int n,
+                     RouteResult *out, RNode *fa, RNode *fb,
+                     double *da, double *db)
+{
+    if (out) memset(out, 0, sizeof(*out));
+    if (n < 2) return -1;
+
+    RouteResult *legs = calloc((size_t)(n - 1), sizeof(RouteResult));
+    if (!legs) return -3;
+
+    RNode prev_end = {0};
+    int rc = 0;
+
+    /* 首段：用 router_route_ll（自带吸附 + 死节点换候选重试），取其终点做后续固定起点 */
+    rc = router_route_ll(r, lats[0], lons[0], lats[1], lons[1], &legs[0], fa, fb, da, db);
+    if (rc != 0) {
+        route_result_free(&legs[0]);
+        free(legs);
+        return rc < 0 ? rc : -3;
+    }
+    prev_end = legs[0].pts[legs[0].n - 1];
+
+    /* 后续段：起点固定 = 上一段终点节点；终点对应当前途经点/终点吸附后的候选 */
+    for (int i = 1; i < n - 1; i++) {
+        RNode B[SNAP_TRY]; double DB[SNAP_TRY];
+        int nb = router_nearest_k(r, lats[i + 1], lons[i + 1], B, SNAP_TRY, DB);
+        if (i == n - 2 && fb) *fb = B[0];          /* 末段终点候选先填最近的 */
+        if (i == n - 2 && db) *db = DB[0];
+        if (nb <= 0) { rc = -1; goto fail; }
+        int found = 0;
+        for (int c = 0; c < nb; c++) {
+            rc = router_plan(r, prev_end, B[c], &legs[i]);
+            if (rc == 0) {
+                if (i == n - 2 && fb) *fb = B[c];
+                if (i == n - 2 && db) *db = DB[c];
+                found = 1; break;
+            }
+            route_result_free(&legs[i]);
+            if (rc == -3) goto fail;               /* 超限：直接放弃 */
+            /* -1 不连通：换候选 */
+        }
+        if (!found) { rc = -2; goto fail; }
+        prev_end = legs[i].pts[legs[i].n - 1];
+    }
+
+    /* 拼接：首段全拷；之后每段从 index 1 开始拷（与上一端共用节点，跳过重复点） */
+    {
+        uint64_t total_pts = 0;
+        for (int i = 0; i < n - 1; i++) total_pts += legs[i].n;
+        /* 拼接时每段只跳过第 1 个点（与上一段共用节点），共跳过 (段数-1) = (n-2) 个重复点；
+         * 段数 = n-1，故去掉 n-2 个重叠端点（n=2 时退化为普通两点，不减）。 */
+        uint64_t N = total_pts - (uint64_t)(n - 2);   /* 实际不重复点数 */
+        if (N == 0) { rc = -2; goto fail; }
+
+        out->n = (uint32_t)N;
+        out->pts    = malloc((size_t)N * sizeof(RNode));
+        out->lat_e7 = malloc((size_t)N * sizeof(int32_t));
+        out->lon_e7 = malloc((size_t)N * sizeof(int32_t));
+        uint32_t nseg = (uint32_t)(N - 1);
+        out->edge_idx  = malloc((size_t)nseg * sizeof(uint32_t));
+        out->from_node = malloc((size_t)nseg * sizeof(uint32_t));
+        out->edge_cls  = malloc((size_t)nseg * sizeof(uint8_t));
+        out->edge_flags= malloc((size_t)nseg * sizeof(uint8_t));
+        out->seg_m     = malloc((size_t)nseg * sizeof(uint32_t));
+        out->seg_ds    = malloc((size_t)nseg * sizeof(uint32_t));
+        if (!out->pts || !out->lat_e7 || !out->lon_e7 ||
+            (nseg > 0 && (!out->edge_idx || !out->from_node || !out->edge_cls ||
+                          !out->edge_flags || !out->seg_m || !out->seg_ds))) {
+            rc = -3; goto fail;
+        }
+
+        uint32_t w = 0;
+        for (int i = 0; i < n - 1; i++) {
+            uint32_t start = (i == 0) ? 0 : 1;
+            for (uint32_t j = start; j < legs[i].n; j++) {
+                out->pts[w]    = legs[i].pts[j];
+                out->lat_e7[w] = legs[i].lat_e7[j];
+                out->lon_e7[w] = legs[i].lon_e7[j];
+                w++;
+            }
+        }
+        uint32_t s = 0;
+        for (int i = 0; i < n - 1; i++) {
+            for (uint32_t j = 0; j + 1 < legs[i].n; j++) {
+                out->edge_idx[s]  = legs[i].edge_idx[j];
+                out->from_node[s] = legs[i].from_node[j];
+                out->edge_cls[s]  = legs[i].edge_cls[j];
+                out->edge_flags[s]= legs[i].edge_flags[j];
+                out->seg_m[s]     = legs[i].seg_m[j];
+                out->seg_ds[s]    = legs[i].seg_ds[j];
+                s++;
+            }
+        }
+
+        double tm = 0, ts = 0; uint64_t expanded = 0, seams = 0;
+        for (int i = 0; i < n - 1; i++) {
+            tm += legs[i].total_m; ts += legs[i].total_s;
+            expanded += legs[i].expanded; seams += legs[i].n_seams;
+        }
+        out->total_m   = tm;
+        out->total_s   = ts;
+        out->expanded  = expanded;
+        out->n_seams   = seams;
+        out->ok        = 1;
+    }
+
+    for (int i = 0; i < n - 1; i++) route_result_free(&legs[i]);
+    free(legs);
+    return 0;
+
+fail:
+    for (int i = 0; i < n - 1; i++) route_result_free(&legs[i]);
+    free(legs);
+    return rc;
 }
 
 /* 多方案对比（阶段 12）：同一对端点算 K 条备选。
@@ -985,6 +1104,43 @@ static int plan_search(Router *r, RNode from, RNode to, RouteResult *out,
  * ★ 判据见 §45.8：别只看手挑的路线定 w，它们恰好是好走的那类 ——
  *   我第一版就是这么把收益说成 −90%，无偏随机样本上其实只有 −18%。
  * ------------------------------------------------------------------------- */
+/* ---------------------------------------------------------------------------
+ * GPX 贴合道路：把一条 GPX 轨迹吸附到路网，输出一条沿道路的 RouteResult。
+ *
+ * 思路：把轨迹点均匀抽稀到至多 max_wp 个途经点（首尾必取），再用
+ * router_route_via 依次串联——每段内部自动吸附到最近道路节点。这样既不冗余
+ * （相邻近点之间不再反复算路），又能保证结果贴着道路。
+ * 返回的 out 是沿道路的多段折线，与普通算路同一套 RouteResult，调用方负责
+ * route_result_free。点数 < 2 返回 -1；吸附失败 -3；任一段不连通 -1。
+ * ------------------------------------------------------------------------- */
+int gpx_snap_to_roads(Router *r, const GpxTrack *tk, RouteResult *out, int max_wp)
+{
+    if (!r || !tk || !out) return -1;
+    if (tk->n < 2) return -1;
+    if (max_wp < 2) max_wp = 2;
+
+    int n = (int)tk->n;
+    int m = n < max_wp ? n : max_wp;          /* 实际途经点数（含首末） */
+    double *la = malloc((size_t)m * sizeof(double));
+    double *lo = malloc((size_t)m * sizeof(double));
+    if (!la || !lo) { free(la); free(lo); return -2; }
+
+    /* 均匀取索引：第 0 个取首点、第 m-1 个取末点，中间等距分布 */
+    for (int i = 0; i < m; i++) {
+        int idx = (m == 1) ? 0 : (n - 1) * i / (m - 1);
+        if (idx < 0) idx = 0;
+        if (idx >= n) idx = n - 1;
+        la[i] = tk->lat_e7[idx] / 1e7;
+        lo[i] = tk->lon_e7[idx] / 1e7;
+    }
+
+    RNode f, t; double da = 0, db = 0;
+    memset(out, 0, sizeof(*out));
+    int rc = router_route_via(r, la, lo, m, out, &f, &t, &da, &db);
+    free(la); free(lo);
+    return rc;
+}
+
 int router_plan(Router *r, RNode from, RNode to, RouteResult *out)
 {
     uint64_t t0 = now_ms();
@@ -1020,7 +1176,6 @@ done:
     if (rc == 0 || rc == -1) out->elapsed_ms = now_ms() - t0;
     return rc;
 }
-
 size_t route_restr2_count(const Router *r, uint32_t prov)
 {
     if (!r || prov >= (uint32_t)r->ms->n) return 0;

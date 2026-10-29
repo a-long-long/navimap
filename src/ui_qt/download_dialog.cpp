@@ -3,6 +3,9 @@
 
 #include <QTreeWidget>
 #include <QTreeWidgetItem>
+#include <QBrush>
+#include <QColor>
+#include <QPair>
 #include <QLabel>
 #include <QLineEdit>
 #include <QProgressBar>
@@ -24,8 +27,10 @@
 #include <QApplication>
 #include <QClipboard>
 
-/* 树节点存的角色：UserRole = geofabrik path（枝为空串） */
+/* 树节点存的角色：UserRole = geofabrik path（枝为空串）；
+ * UserRole+1 = 节点基础显示名（刷新状态时据此重算后缀，避免后缀叠加） */
 static const int ROLE_PATH = Qt::UserRole;
+static const int ROLE_NAME = Qt::UserRole + 1;
 
 namespace {
     static GeoRegion leaf(const char *nm, const char *p)
@@ -52,9 +57,10 @@ DownloadDialog::DownloadDialog(const QString &sourcesDir, const QString &repoRoo
     resize(840, 580);
 
     m_tree = new QTreeWidget;
-    m_tree->setHeaderLabel(QString::fromUtf8("可下载区域"));
+    m_tree->setHeaderLabel(QString::fromUtf8("可下载区域（✓已下载 ·未下载）"));
     fillTree(m_tree->invisibleRootItem(), buildRegions());
-    m_tree->expandToDepth(0);
+    refreshStatus();                 /* 计算每个节点的已下载状态/子区域计数 */
+    m_tree->expandToDepth(0);        /* 默认展开到洲级 */
 
     m_info = new QLabel(QString::fromUtf8("选择左侧一个地区，查看下载链接并下载。"));
     m_url  = new QLineEdit; m_url->setReadOnly(true);
@@ -313,13 +319,54 @@ void DownloadDialog::fillTree(QTreeWidgetItem *parent, const QVector<GeoRegion> 
 {
     for (const GeoRegion &r : rs) {
         auto *it = new QTreeWidgetItem(parent);
-        it->setText(0, r.name);
+        /* 仅搭结构 + 存 path/name；文本与颜色由 refreshStatus() 统一计算，
+         * 这样刷新状态不必重建整棵树（保留展开/选中状态）。 */
         it->setData(0, ROLE_PATH, QVariant(r.path));   /* 枝的 path 为空串 */
+        it->setData(0, ROLE_NAME, QVariant(r.name));
         it->setChildIndicatorPolicy(r.kids.isEmpty()
                                     ? QTreeWidgetItem::DontShowIndicator
                                     : QTreeWidgetItem::ShowIndicator);
         if (!r.kids.isEmpty()) fillTree(it, r.kids);
     }
+}
+
+bool DownloadDialog::regionDownloaded(const QString &path) const
+{
+    if (path.isEmpty()) return false;              /* 枝不计已下载 */
+    QString nm = path.section('/', -1);            /* asia/china/gansu → gansu */
+    if (QDir(m_repo + "/products/graph/" + nm).exists()) return true;
+    if (QFile::exists(m_sources + "/" + nm + "-latest.osm.pbf")) return true;
+    return false;
+}
+
+void DownloadDialog::refreshStatus()
+{
+    QTreeWidgetItem *root = m_tree->invisibleRootItem();
+    for (int i = 0; i < root->childCount(); i++)
+        refreshItem(root->child(i));
+}
+
+QPair<int,int> DownloadDialog::refreshItem(QTreeWidgetItem *it)
+{
+    QString path = it->data(0, ROLE_PATH).toString();
+    QString base = it->data(0, ROLE_NAME).toString();
+
+    if (it->childCount() == 0) {                  /* 叶子：直接判定 */
+        bool dl = regionDownloaded(path);
+        it->setText(0, base + (dl ? QString::fromUtf8("  ✓已下载")
+                                  : QString::fromUtf8("  ·未下载")));
+        it->setForeground(0, QBrush(dl ? QColor(0, 128, 0) : QColor(120, 120, 120)));
+        return qMakePair(1, dl ? 1 : 0);
+    }
+
+    int total = 0, d = 0;                          /* 枝：汇总子节点 */
+    for (int i = 0; i < it->childCount(); i++) {
+        QPair<int,int> c = refreshItem(it->child(i));
+        total += c.first; d += c.second;
+    }
+    it->setText(0, base + QString::fromUtf8("  (%1/%2)").arg(d).arg(total));
+    it->setForeground(0, QBrush(Qt::black));
+    return qMakePair(total, d);
 }
 
 /* ---------------- 选中 / 信息 ---------------- */
@@ -377,6 +424,23 @@ QString DownloadDialog::currentLeafForTest() const
 {
     QString p = currentPath();
     return p.isEmpty() ? QString() : p.section('/', -1);
+}
+
+bool DownloadDialog::isLeafDownloaded(const QString &leaf) const
+{
+    if (leaf.isEmpty() || !m_tree) return false;
+    std::function<QString(QTreeWidgetItem *)> walk =
+        [&](QTreeWidgetItem *parent) -> QString {
+        for (int i = 0; i < parent->childCount(); i++) {
+            QTreeWidgetItem *it = parent->child(i);
+            QString path = it->data(0, ROLE_PATH).toString();
+            if (!path.isEmpty() && path.section('/', -1) == leaf) return path;
+            if (QString sub = walk(it); !sub.isEmpty()) return sub;
+        }
+        return QString();
+    };
+    QString p = walk(m_tree->invisibleRootItem());
+    return !p.isEmpty() && regionDownloaded(p);
 }
 
 void DownloadDialog::onSelChanged()
@@ -546,6 +610,7 @@ void DownloadDialog::onConvertFinished(int code, QProcess::ExitStatus)
 {
     if (code == 0) {
         m_log->append(QString::fromUtf8("转换完成 ✓ 地图已就绪。"));
+        refreshStatus();                 /* 刚下载的省翻成「✓已下载」 */
         if (m_onFinished) m_onFinished(m_dlName);
         // 生成等高线（如果用户勾选了）
         if (m_contourCb && m_contourCb->isChecked()) {

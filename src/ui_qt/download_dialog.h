@@ -43,12 +43,24 @@ public:
      * 真正要钉的是"选中的那一行就是期望的那个"。 */
     QString currentLeafForTest() const;
 
+    /* 自检用：按叶子名查该区域是否已下载。复用与树标注（✓/·）同源的
+     * regionDownloaded 判定，避免在测试里解析树控件文本。 */
+    bool isLeafDownloaded(const QString &leaf) const;
+
     /* 下载 + 转换都成功后回调；name 为省/地区名（不含扩展名），便于提示。
      * 用回调代替 Qt 信号槽：本项目 Qt 前端刻意不用 Q_OBJECT，免去 moc 步骤。 */
     void setOnFinished(std::function<void(const QString &name)> cb)
     { m_onFinished = std::move(cb); }
 
 private:
+    /* 判定某 geofabrik 路径（叶子）是否已下载：检查 products/graph/<名> 目录
+     * 或 sources/<名>-latest.osm.pbf 是否存在。枝（path 空）恒返回 false。 */
+    bool regionDownloaded(const QString &path) const;
+    /* 刷新整棵树的状态标注（已下载/未下载 + 枝节点子区域计数）。 */
+    void refreshStatus();
+    /* 递归刷新单个节点；返回 (叶子总数, 已下载叶子数)，供父节点汇总。 */
+    QPair<int,int> refreshItem(QTreeWidgetItem *it);
+
     void onSelChanged();
     void startDownload();
     void beginDownload();                       /* 真正开始下载（跳过查存/HEAD 之后） */
