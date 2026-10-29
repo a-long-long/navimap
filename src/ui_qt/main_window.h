@@ -59,7 +59,8 @@ public:
      * 撤掉后留下的坐标网按钮悬停提示里显示"当前坐标系"（updateDatumTip） */
     void setDatum(int id);
     void updateDatumTip();             /* 刷新坐标网按钮悬停提示里的"当前坐标系 + 网格类型" */
-    void toggleGrid();                 /* 坐标网按钮：点击开关网格（网格类型由「设置」菜单独立选） */
+    void toggleGrid();                 /* 右栏坐标网右键菜单「显示坐标网」用：开关网格 */
+    void cycleGridDatum();             /* 坐标网按钮左键：关→开（保持基准）→ 循环切换坐标系 */
     void setGridType(int t);           /* 设置网格类型（0 经纬网 / 1 方里格），持久化 */
     void updateGridBtn();              /* 同步按钮悬停提示（图标本身不显文字） */
     void applyOverlayAlpha();          /* 把 App::ovl_alpha 作用到本前端的浮层上 */
@@ -170,8 +171,11 @@ private:
     QMenu        *m_menuMain = nullptr;  /* 右栏「菜单」按钮弹出的主菜单（同时挂在菜单栏） */
     QMenu        *m_setMenu  = nullptr;   /* 「设置」子菜单（地图信息显示开关集中地） */
     QWidget      *m_rightOverlay = nullptr; /* 右上角浮层容器（挂在画布上） */
-    QToolButton  *m_gridBtn = nullptr;    /* 右栏「坐标网」按钮（悬停提示带当前坐标系） */
+    QToolButton  *m_gridBtn = nullptr;    /* 右栏「坐标网」按钮：左键循环切换坐标系，右键菜单精确选 + 开关网格 */
+    QMenu        *m_gridCtx = nullptr;     /* 坐标网按钮右键菜单（显示网格 + 坐标系） */
+    QAction      *m_gridShowAct = nullptr; /* 右键菜单「显示坐标网」勾选项 */
     QList<QAction*> m_datumActs;           /* ☰ 菜单里的坐标系动作（与悬停提示同步） */
+    QList<QAction*> m_gridDatumActs;       /* 右键菜单里的坐标系动作（与 ☰ 菜单、悬停提示同步） */
     QAction      *m_contourAct = nullptr;  /* 设置菜单「等高线」勾选项（与 O 键同步） */
     QAction      *m_dayNightAct = nullptr; /* 设置菜单「夜间模式」勾选项（与 D 键、右栏昼/夜按钮同步） */
     QAction      *m_dayNightAutoAct = nullptr; /* 设置菜单「自动（日出日落）」勾选项 */
