@@ -623,6 +623,10 @@ int offscreen_shot_main(int argc, char **argv)
     printf("edges_visited  %llu\n", (unsigned long long)st.visited);
     printf("edges_drawn    %llu\n", (unsigned long long)st.drawn);
     printf("areas_drawn    %llu\n", (unsigned long long)st.areas_drawn);
+    /* ★ 面要素 LOD 档位的判据锚点（确定性量，不用时间）：
+     *   走"小面画点"快速路径的面数。AREA_DOT_PX 定档 4 时这个数会变，
+     *   它直接反映"多少面被简化成单个像素"，与机器负载无关。 */
+    printf("areas_dotted   %llu\n", (unsigned long long)st.areas_dotted);
     printf("lines_drawn    %llu\n", (unsigned long long)st.lines_drawn);
     printf("dedup_skipped  %llu\n", (unsigned long long)st.dedup_skipped);
     printf("place_labels   %llu\n", (unsigned long long)st.labels_drawn);

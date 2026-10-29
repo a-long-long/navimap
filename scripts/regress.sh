@@ -72,6 +72,53 @@ shot() {                      # shot <名字> <省目录|graph> <lat> <lon> <zoo
         --out="$SHOTS/$name.bmp"
 }
 
+# ---- 面要素 LOD 档位（AREA_DOT_PX）的主判据 ----
+# 2026-10-29 决策：AREA_DOT_PX 定档 4（z9 −21%，净损失 3.5%）。
+#
+# ★ 主判据用**确定性量**「走小面路径的面数」(areas_dotted)，**不用时间**：
+#   时间会被机器负载放大一个数量级（同一条路线手跑三次 502/503/522 ms，
+#   而在 load average 10 + swap 满的机器上会跑出 3885 ms）⇒ 时间型判据必然 flaky，
+#   而 flaky 判据比没有判据更糟（久了大家会习惯性忽略 FAIL）。
+#   areas_dotted 是"多少个面被简化成单个像素"，只取决于数据与档位常量，
+#   与机器负载完全无关。
+#
+# 判据形式（skill §61：已知缺陷写成**上界**，不写成"必须等于"）：
+#   areas_dotted 落在 [LO, HI] 区间内 ⇒ 通过
+#   ⇒ 将来档位调整（无论是产品决策还是 bug 修复）只要落在区间外就会报出来，
+#     而区间本身留了余量，不会因为数据微调就假 FAIL。
+area_lod_tier() {             # area_lod_tier <名字> <zoom> <dotted_lo> <dotted_hi> <drawn>
+    local name=$1 z=$2 lo=$3 hi=$4 want_drawn=$5
+    local log="$SHOTS/$name.log"
+    "$BUILD/navmap_qt" --shot-offscreen --graph="$GRAPH" \
+        --lat=39.90 --lon=116.40 --zoom="$z" --w=1280 --h=800 \
+        --out="$SHOTS/$name.bmp" >"$log" 2>&1
+    local rc=$?
+    local dotted drawn
+    dotted=$(awk '/^areas_dotted/{print $2}' "$log")
+    drawn=$(awk '/^areas_drawn/{print $2}' "$log")
+    if [ "$rc" != 0 ] || [ -z "$dotted" ] || [ -z "$drawn" ]; then
+        fail=$((fail + 1))
+        printf '%-28s FAIL rc=%s 期望 areas_dotted/areas_drawn 输出\n' "$name" "$rc"
+        tail -n 6 "$log" | sed 's/^/      | /'
+        return
+    fi
+    # 面一个都不能少：简化只改画法，不改要素数（实测恒为 113933 @ z9）
+    if [ "$drawn" != "$want_drawn" ]; then
+        fail=$((fail + 1))
+        printf '%-28s FAIL areas_drawn=%s（应为 %s：简化不该改变要素数）\n' \
+            "$name" "$drawn" "$want_drawn"
+        return
+    fi
+    if [ "$dotted" -ge "$lo" ] && [ "$dotted" -le "$hi" ]; then
+        pass=$((pass + 1))
+        printf '%-28s OK   (dotted=%s 在 [%s,%s])\n' "$name" "$dotted" "$lo" "$hi"
+    else
+        fail=$((fail + 1))
+        printf '%-28s FAIL dotted=%s 不在 [%s,%s]（AREA_DOT_PX 档位被改动？）\n' \
+            "$name" "$dotted" "$lo" "$hi"
+    fi
+}
+
 echo "=== 渲染 / 覆盖（每省 z13 + 跨省 z9/z11/z13 + 无图区域）"
 # 各省取省会附近，保证落在省内而不是省界外面
 shot r_beijing  "$GRAPH/beijing"  39.90 116.40 13
@@ -86,6 +133,19 @@ shot r_all_z9   "$GRAPH"          39.90 116.40  9
 shot r_all_z11  "$GRAPH"          39.90 116.40 11
 shot r_all_z13  "$GRAPH"          39.90 116.40 13
 shot r_nomap    "$GRAPH"          30.00 110.00 11   # 图集外：必须出下载提示横幅
+
+echo "=== 面要素 LOD 档位（AREA_DOT_PX=4，2026-10-29 定档）"
+# 主判据是确定性量 areas_dotted（走小面路径的面数），不是时间。
+# 实测基线（AREA_DOT_PX=4，8 省图 / 北京中心 / 1280×800）：
+#   z9  dotted=104379（档位 2 时是 76007）  drawn=113933
+#   z11 dotted=20938                         drawn=36568
+#   z13 dotted=22471                         drawn=37661
+# 区间留了余量（z9 用 ±8%），数据微调不会假 FAIL；而档位被改动就会报出来。
+# 区间要能区分相邻档位（负向对照实测：档位 2 ⇒ dotted=76007、
+# 档位 4 ⇒ 104379、档位 8 ⇒ 111916）—— 上限卡在 108000，档位 8 就被抓到。
+area_lod_tier area_lod_z9  9  98000 108000 113933
+area_lod_tier area_lod_z11 11 19500  22500  36568
+area_lod_tier area_lod_z13 13 21000  24000  37661
 
 echo "=== 路网 / 导航 / 限制 / 索引"
 run route_cross "ROUTE-OK"  "$BUILD/route_cli"  --graph="$GRAPH" --from=39.90,116.40 --to=34.75,113.62
