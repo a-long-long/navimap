@@ -372,8 +372,9 @@ int MainWindow::runUiSelfTest()
     }
 
     /* ⑪ 坐标系（大地基准）：右栏**没有下拉框**了，"当前基准"只剩坐标网按钮
-     *    悬停提示这一处常驻显示 ⇒ 提示必须带上当前基准标签与来源说明，
-     *    且切基准后**随之更新**（否则用户看到的是过期基准）。
+     *    悬停提示这一处常驻显示 ⇒ 提示必须带上当前基准标签（"坐标系：<label>"），
+     *    且切基准后**随之更新**（否则用户看到的是过期基准）。来源说明已归入菜单/
+     *    坐标系说明，按钮提示刻意做短（避免超出界面），故不再要求含 datum_note。
      *    同时验读数**真的变**（前缀换成基准短名）、切回去能**原样恢复**：
      *    只查"变了"会漏掉抖动，只查"恢复"会漏掉根本没生效。 */
     {
@@ -382,10 +383,9 @@ int MainWindow::runUiSelfTest()
 
         setDatum(DATUM_WGS84);
         QString tip = m_gridBtn->toolTip();
-        check(tip.contains(QStringLiteral("当前坐标系：") +
-                           QString::fromUtf8(datum_label(DATUM_WGS84))) &&
-              tip.contains(QString::fromUtf8(datum_note(DATUM_WGS84))),
-              "悬停提示带当前坐标系（WGS84）标签与来源说明");
+        check(tip.contains(QStringLiteral("坐标系：") +
+                           QString::fromUtf8(datum_label(DATUM_WGS84))),
+              "悬停提示带当前坐标系（WGS84）标签");
 
         m_canvas->update();   /* 光标位置沿用上一条断言里那次 MouseMove，保持固定 */
         const QString t_wgs = m_canvas->cursorCoordsText();
@@ -397,7 +397,7 @@ int MainWindow::runUiSelfTest()
         setDatum(DATUM_WGS84);
         const QString t_back = m_canvas->cursorCoordsText();
 
-        check(tip_bj.contains(QStringLiteral("当前坐标系：") +
+        check(tip_bj.contains(QStringLiteral("坐标系：") +
                               QString::fromUtf8(datum_label(DATUM_BJ54))),
               "切到北京54：悬停提示里的当前坐标系随之更新");
 
@@ -626,9 +626,10 @@ int MainWindow::runUiSelfTest()
         m_a->need_redraw = 1;
     }
 
-    /* ⑬ 坐标网按钮：左键**循环切换坐标系**（关 → 开且保持基准 → 循环推进），
+    /* ⑬ 坐标网按钮：左键在 关 → 各坐标系 → 关 之间循环（循环态含"关"）。
      *    右键菜单可精确选坐标系 + 开关网格。网格类型（经纬网/方里格）与坐标系已解耦。
-     *    逐状态验：左键第 1 下 关→开（基准不变）；之后每次推进 datum；循环回绕；
+     *    逐状态验：左键第 1 下 关→开（基准不变）；之后每次推进 datum；完整循环
+     *    = DATUM_COUNT 个坐标系 + 1 个「关」共 DATUM_COUNT+1 态回绕；"关"可达；
      *    右键菜单 datum 动作与「显示坐标网」开关都生效；悬停提示"网格类型"由
      *    m_a->grid_type 决定、与 datum 无关。 */
     {
@@ -647,7 +648,7 @@ int MainWindow::runUiSelfTest()
         check(m_canvas->isGridOn(), "左键①：关 → 开（保持坐标系）");
         check((int)m_a->datum == keep_d, "左键①：开时坐标系不变");
 
-        /* 第 2 下：循环切换坐标系（WGS84→CGCS2000→北京54→西安80→回绕） */
+        /* 第 2 下：循环切换坐标系（WGS84→CGCS2000→北京54→西安80→关→回绕） */
         const int before = (int)m_a->datum;
         emit m_gridBtn->clicked();
         QApplication::processEvents();
@@ -656,12 +657,22 @@ int MainWindow::runUiSelfTest()
         check(m_gridBtn->toolTip().contains(QString::fromUtf8(datum_label((DatumId)after))),
               "左键②：悬停提示跟随新坐标系");
 
-        /* 连续点 DATUM_COUNT 次应回到 after（循环无 off 态） */
-        for (int i = 0; i < (int)DATUM_COUNT; i++) {
+        /* 完整循环 = DATUM_COUNT 个坐标系 + 1 个「关」共 DATUM_COUNT+1 态，
+         * 回绕到 after 态（开 + 同一坐标系）。 */
+        for (int i = 0; i < (int)DATUM_COUNT + 1; i++) {
             emit m_gridBtn->clicked();
             QApplication::processEvents();
         }
-        check((int)m_a->datum == after, "左键：连续切换 DATUM_COUNT 次回绕到起点");
+        check(m_canvas->isGridOn() && (int)m_a->datum == after,
+              "左键：完整循环(含关)回绕到原态");
+
+        /* 再从当前态连续点直到「关」，验证"关"确实是循环末项之后的档 */
+        int guard = 0;
+        while (m_canvas->isGridOn() && guard++ < 16) {
+            emit m_gridBtn->clicked();
+            QApplication::processEvents();
+        }
+        check(!m_canvas->isGridOn(), "左键：循环到末项再点一次 → 关");
 
         /* 右键菜单：精确选坐标系 + 开关网格 */
         check(!m_gridDatumActs.isEmpty(), "右键菜单：坐标系动作已建");
@@ -675,9 +686,9 @@ int MainWindow::runUiSelfTest()
             /* 网格开关 */
             bool g0 = m_canvas->isGridOn();
             m_gridShowAct->trigger(); QApplication::processEvents();
-            check(m_canvas->isGridOn() != g0, "右键菜单：切换网格开关（开→关）");
+            check(m_canvas->isGridOn() != g0, "右键菜单：切换网格开关（关→开）");
             m_gridShowAct->trigger(); QApplication::processEvents();
-            check(m_canvas->isGridOn() == g0, "右键菜单：再切回原状态（关→开）");
+            check(m_canvas->isGridOn() == g0, "右键菜单：再切回原状态（开→关）");
 
             /* 解耦：网格类型不受坐标系影响 */
             m_canvas->setShowGrid(true);
@@ -1434,30 +1445,37 @@ void MainWindow::setDatum(int id)
     m_a->need_redraw = 1;   /* 经纬网/读数立即按新基准重绘 */
 }
 
-/* 坐标网按钮左键：关 → 开（保持当前基准）→ 循环切换坐标系。
- * ★ 上版把它做成"纯开关"丢掉了坐标系切换入口；这里还原成最初的循环切换，
- *   并把"关"作为循环外的独立开关（右键菜单「显示坐标网」），互不干扰。 */
+/* 坐标网按钮左键：在 关 → WGS84 → CGCS2000 → 北京54 → 西安80 → 关 间循环。
+ * 「关」是循环的一档（不再只是循环外的独立开关），左键一路点到底必能关掉网格。
+ * ★ 从「关」进入循环时归到第一档 WGS84，保证 关→d0→…→d3→关 是一个闭合全循环；
+ *   否则关态会停在"最后一个坐标系"上，导致 关↔末档 死循环、回不到 WGS84。
+ * 右键菜单仍可精确选坐标系 + 开关网格，与左键循环互不干扰。 */
 void MainWindow::cycleGridDatum()
 {
     if (!m_canvas) return;
     if (!m_canvas->isGridOn()) {
-        /* 关 → 开：保持当前坐标系（不动 datum） */
+        /* 关 → 开：进入循环第一档（WGS84） */
         m_canvas->setShowGrid(true);
+        if ((int)m_a->datum != (int)DATUM_WGS84) setDatum((int)DATUM_WGS84);
         updateGridBtn();
         m_a->need_redraw = 1;
         return;
     }
-    /* 开 → 循环切换坐标系（WGS84→CGCS2000→北京54→西安80→回绕） */
+    /* 开 → 循环推进坐标系；已是最后一个（西安80）则回到「关」 */
     int next = (int)m_a->datum + 1;
-    if (next >= (int)DATUM_COUNT) next = 0;
+    if (next >= (int)DATUM_COUNT) {
+        m_canvas->setShowGrid(false);
+        updateGridBtn();
+        m_a->need_redraw = 1;
+        return;
+    }
     setDatum(next);
 }
 
-/* 坐标网按钮的悬停提示：按钮只管开/关，提示里把**网格类型**与**坐标系**分开讲。
- * 两者已解耦：网格类型（经纬网/方里格，默认方里格）由「设置」菜单选；
- * 坐标系（大地基准）只管读数，由「坐标系」菜单选。提示随 setGridType/setDatum 更新。
- * 精度/来源文案取 datum_note()：它和 datum.c 的参数表同文件维护，
- * 西安80 只换椭球、经纬度与 WGS84 几乎一样，不说明会被当成没生效。 */
+/* 坐标网按钮的悬停提示：简洁三行，避免超出界面、也别堆砌长篇来源说明
+ * （datum_note 的来龙去脉已随菜单项/坐标系说明承载，不再塞进窄按钮的提示）。
+ * 网格类型（经纬网/方里格）与坐标系（大地基准）已解耦，各自由菜单选；
+ * 提示随 setGridType/setDatum/开关态刷新。 */
 void MainWindow::updateDatumTip()
 {
     if (!m_gridBtn) return;
@@ -1467,12 +1485,10 @@ void MainWindow::updateDatumTip()
     QString tip;
     tip += QStringLiteral("坐标网：%1\n")
                .arg(on ? QStringLiteral("开") : QStringLiteral("关"));
-    tip += QStringLiteral("网格类型：%1\n")
-               .arg(gt == GRID_GK ? QStringLiteral("方里格（公里）")
-                                   : QStringLiteral("经纬网（度）"));
-    tip += QStringLiteral("当前坐标系：%1\n").arg(QString::fromUtf8(datum_label(id)));
-    tip += QString::fromUtf8(datum_note(id));
-    tip += QStringLiteral("\n左键：关→开→循环切换坐标系；右键菜单：精确选坐标系 / 开关网格");
+    tip += QStringLiteral("坐标系：%1    网格：%2\n")
+               .arg(QString::fromUtf8(datum_label(id)))
+               .arg(gt == GRID_GK ? QStringLiteral("方里格") : QStringLiteral("经纬网"));
+    tip += QStringLiteral("左键循环切换 · 右键菜单");
     m_gridBtn->setToolTip(tip);
 }
 

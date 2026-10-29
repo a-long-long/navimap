@@ -233,19 +233,6 @@ void MapCanvas::drawGraticule(QPainter &p)
         for (double m = baseLat; m <= la1 + 1e-9; m += step)
             for (int k = 1; k <= 4; k++) { double s = m + k * f; if (s <= la1 + 1e-9) subPar(s); }
     }
-
-    /* 左上角图例：标出当前经纬网所用坐标系（与右下角读数的基准短名一致）。 */
-    {
-        QString leg = QString::fromUtf8(datum_short(id)) + QStringLiteral(" 经纬网");
-        QFont lf = p.font();
-        lf.setPointSize(9);
-        p.setFont(lf);
-        QRect br = p.fontMetrics().boundingRect(leg);
-        int lx = 10, ly = 54;
-        p.fillRect(lx - 3, ly - 2, br.width() + 8, br.height() + 4, QColor(255, 255, 255, 205));
-        p.setPen(QColor(40, 60, 95, 225));
-        p.drawText(lx, ly + br.height(), leg);
-    }
 }
 
 /* 方里格（高斯公里网）：非 WGS84 坐标系用。datum_gk_forward/inverse 内部把 WGS84
@@ -294,8 +281,11 @@ void MapCanvas::drawGraticuleGK(QPainter &p, DatumId id)
         mv_project(&m_a->view, lat1, lon1, &x1, &y1);
         mv_project(&m_a->view, lat2, lon2, &x2, &y2);
         p.drawLine(x1, y1, x2, y2);
-        /* 标签放北端（顶边，y+10 内缩）避免落到画布外（与 WGS84 经纬网同套路）。 */
-        snprintf(buf, sizeof(buf), "%d", (int)round((Yk - 500000.0) / 1000.0));
+        /* 标签放北端（顶边，y+10 内缩）避免落到画布外（与 WGS84 经纬网同套路）。
+         * ★ 刻度 = 高斯坐标公里数（含 500km 假东偏移，国标写法）：Y/1000。
+         *   不要写 (Y-500000)/1000 —— 那是相对中央经线的带符号偏移，北京在西侧会
+         *   显示成负数（如 -51），与国标方里格读数（如 449）不符，看着像"刻度不准"。 */
+        snprintf(buf, sizeof(buf), "%d", (int)round(Yk / 1000.0));
         p.drawText(x2 + 2, y2 + 10, QString::fromUtf8(buf));
     }
     /* 横线（等 X 北向）：每整 step 米一条，从 Ymin 到 Ymax */
@@ -338,18 +328,8 @@ void MapCanvas::drawGraticuleGK(QPainter &p, DatumId id)
             }
     }
 
-    /* 左上角图例：标出当前为方里格（与读数坐标系解耦，仅标注网格类型） */
-    {
-        QString leg = QStringLiteral("方里格");
-        QFont lf = p.font();
-        lf.setPointSize(9);
-        p.setFont(lf);
-        QRect br = p.fontMetrics().boundingRect(leg);
-        int lx = 10, ly = 54;
-        p.fillRect(lx - 3, ly - 2, br.width() + 8, br.height() + 4, QColor(255, 255, 255, 205));
-        p.setPen(QColor(40, 60, 95, 225));
-        p.drawText(lx, ly + br.height(), leg);
-    }
+    /* 左上角不再单独画网格图例：当前坐标系 / 网格类型已由右下角坐标框承载
+     * （经纬网显示经纬度、方里格显示高斯公里网坐标），避免"方里格"等字样冗余。 */
 }
 
 /* ---- 比例尺：与 chrome.c 的 draw_scale 同一套换算，Qt 侧重画 ---- */
@@ -401,8 +381,24 @@ QString MapCanvas::cursorCoordsText() const
         la = m_a->view.lat;
         lo = m_a->view.lon;
     }
-    /* 读数按所选基准呈现（底图几何仍是 WGS84，只换读数/标注的基准） */
+    /* 读数按所选基准 / 网格类型呈现（底图几何仍是 WGS84，只换读数/标注口径）。 */
     DatumId id = (DatumId)m_a->datum;
+
+    /* 方里格（高斯-克吕格公里网）：与 drawGraticuleGK 用同一中央经线取样，
+     * 读数直接给出高斯坐标（X 北 / Y 东，公里），和屏幕上画的方里格一一对应。 */
+    if (m_a->grid_type == GRID_GK) {
+        const double lon0 = round(m_a->view.lon / 3.0) * 3.0;   /* 3° 带中央经线 */
+        DatumId gid = grid_gk_datum(id);
+        double X, Y;
+        datum_gk_forward(gid, la, lo, lon0, &X, &Y);
+        int zone = (int)round(lon0 / 3.0);
+        return QString::asprintf("%s %s GK%d带 X%.3f Y%.3f km",
+                                 datum_short(gid),
+                                 has_cursor ? "光标" : "中心",
+                                 zone, X / 1000.0, Y / 1000.0);
+    }
+
+    /* 经纬网：按所选基准呈现经纬度 */
     double lad, lod;
     datum_wgs84_to(id, la, lo, 0, &lad, &lod, NULL);
 
