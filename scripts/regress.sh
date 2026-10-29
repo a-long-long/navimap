@@ -301,7 +301,18 @@ qt_run() {
 }
 if [ -x "$BUILD/navmap_qt" ] || [ -x "$BUILD/navmap_qt.exe" ]; then
     exefile2() { if [ -x "$1.exe" ]; then echo "$1.exe"; else echo "$1"; fi; }
+    # ★ ui-test 必须**用独立配置目录**跑：它断言"浮层默认透明度 75%"，
+    #   读的是真实设置文件。而设置文件会被程序退出时写回（app_persist_settings），
+    #   ⇒ 任何一次带 --ovl-alpha=...=0 的实验、或用户自己把某个浮层调成 0，
+    #   都会污染真实配置、让这条用例假红（实测踩过：负向对照实验写回
+    #   alpha_search=0 → ui-test 报 6 项不符，其中 4 项是搜索浮层连锁失败）。
+    #   隔离后这条用例只受代码影响，不受本机状态影响。
+    CFG_UIT="$SHOTS/ui_test_cfg"
+    /bin/rm -rf "$CFG_UIT" 2>/dev/null
+    mkdir -p "$CFG_UIT/navimap"
+    printf 'day_night=0\nshow_panel=1\nshow_poi=1\nshow_labels=1\nvoice_on=1\nmode=0\nfont_size=14\nmax_class=4\nview_lat=39.94\nview_lon=116.405\nview_zoom=13\ndatum=0\nalpha_search=75\nalpha_rcol=75\n' > "$CFG_UIT/navimap/settings.ini"
     run qt_ui_test "QT-UI-OK" qt_run \
+        env APPDATA="$CFG_UIT/appdata" XDG_CONFIG_HOME="$CFG_UIT/xdg" \
         "$(exefile2 "$BUILD/navmap_qt")" --ui-test --w=900 --h=600
 fi
 
@@ -649,13 +660,20 @@ if [ -x "$BUILD/navmap_qt.exe" ] || [ -x "$BUILD/navmap_qt" ]; then
             --ovl-alpha=alpha_search=$pv --shot="$SHOTS/ovl_qts_$pv.bmp" \
             > "$SHOTS/ovl_qts_$pv.log" 2>&1
     done
-    # ★ --rect 必须框住**整个按钮**：判据 3（逐浮层独立）要求矩形外零变化，
-    #   按钮几何随平台字体度量浮动（Linux 实测 10,38,84,36 / Windows 曾是
-    #   10,31,74,36），矩形取两者并集再各留 ~6px 余量 ⇒ 两台机器都不假红。
-    #   真误伤（串浮层）是标题栏那种上万 px 的整块变化，不会被这点余量放过去。
+    # ★ --rect 必须框住**整个按钮**：判据 3（逐浮层独立）要求矩形外零变化。
+    #   ★ 2026-10-29 坐标随 UI 改版更新：远端取消顶栏菜单栏后，搜索浮层从
+    #     顶栏下沿移到**画布左上角**，位置由代码固定（main_window.cpp 的
+    #     margin=10 ⇒ move(10,10)），不再随顶栏高度浮动 ⇒ 跨平台位置稳定了，
+    #     只有按钮**宽度**仍随平台字体度量浮动（图标+「搜索」二字）。
+    #     Linux 实测：按钮整体 x 10..93 / y 10..45（84x36），文字区 x 49..80。
+    #     矩形取 6,6,96,44（比按钮各留 4px 余量，够盖住 Windows 侧宽度浮动），
+    #     fgrect 取 45,18,40,20（框住文字区，两侧各留 4~5px 余量）。
+    #     真误伤（串浮层）是标题栏那种上万 px 的整块变化，不会被这点余量放过去。
+    #   ★ 负向对照随坐标更新重验过：注入"文字 pen 也乘系数"后，
+    #     前景判据 20/800 ⇒ FAIL（阈值 60），判据仍有分辨力。
     if python3 "$ROOT/scripts/ovl_px.py" "$SHOTS/ovl_qts_100.bmp" \
             "$SHOTS/ovl_qts_75.bmp" "$SHOTS/ovl_qts_0.bmp" \
-            --rect=10,25,95,55 --fgrect=37,38,32,18 --fg-min=60 --pct=75 \
+            --rect=6,6,96,44 --fgrect=45,18,40,20 --fg-min=60 --pct=75 \
             > "$SHOTS/ovl_qts.log" 2>&1; then
         pass=$((pass + 1)); printf '%-28s OK   (Qt 搜索按钮：底板 75%% + 「搜索」字清晰)\n' "qt_ovl_text"
     else

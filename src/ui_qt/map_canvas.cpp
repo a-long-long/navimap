@@ -264,8 +264,10 @@ void MapCanvas::drawGraticuleGK(QPainter &p, DatumId id)
     for (int i = 0; i < 4; i++) {
         double X, Y;
         datum_gk_forward(id, bbox[corner[i][0]], bbox[corner[i][1]], lon0, &X, &Y);
-        if (X < Xmin) Xmin = X; if (X > Xmax) Xmax = X;
-        if (Y < Ymin) Ymin = Y; if (Y > Ymax) Ymax = Y;
+        if (X < Xmin) Xmin = X;
+        if (X > Xmax) Xmax = X;
+        if (Y < Ymin) Ymin = Y;
+        if (Y > Ymax) Ymax = Y;
     }
     double span = qMax(Xmax - Xmin, Ymax - Ymin);
     if (span <= 0) return;
