@@ -23,8 +23,7 @@
   本机 Release 走 CMake 原生 Qt5（**本机只有 Qt5 dev 在 `~/.local/qt5-dev/usr`，无 Qt6 cmake 模块**）：
   `source env.sh && cmake -S . -B build_rel -DCMAKE_BUILD_TYPE=Release -DCMAKE_PREFIX_PATH=/home/along/.local/qt5-dev/usr -DQt5_DIR=/home/along/.local/qt5-dev/usr/lib/aarch64-linux-gnu/cmake/Qt5 && cmake --build build_rel -j$(nproc)`
 - 本机无头自检：`export QT_QPA_PLATFORM=offscreen QT_QPA_PLATFORM_PLUGIN_PATH=/usr/lib/aarch64-linux-gnu/qt5/plugins`
-  后跑 `./build_rel/navmap_qt --shot-offscreen --graph=products/graph/beijing --lat=39.90 --lon=116.40 --zoom=13 --out=x.bmp`（或 `--ui-test`）。
-  GUI：桌面终端直接 `./build_rel/navmap_qt --graph=products/graph/beijing`（已装 qtwayland5）。
+  后跑 `--shot-offscreen` / `--ui-test`。GUI：桌面终端直接 `./build_rel/navmap_qt --graph=products/graph/beijing`（已装 qtwayland5）。
   ★ 交互 GUI **不认** `--lat/--lon`（仅离屏认）；启动视图来自 `~/.config/navimap/settings.ini` 的
   `view_lat/view_lon`（默认北京 39.9/116.4）。本机数据齐全：`products/graph/` 有 **7 省**
   （beijing/hebei/henan/liaoning/shaanxi/shandong/shanxi）+ `lm.bin` + `places_auto.db`，`sources/` 有 8 省 pbf（含 tianjin）。
@@ -88,16 +87,15 @@
   完全相同**（`M == O 且 O != H`）。★★ 中文 14px 抗锯齿无 coverage=1 纯色核 ⇒ "逐像素相同"对文字数不到 ⇒
   文字用**口径 b**：相对底图偏离量 `|e75|/|e100| > (1+pct/100)/2`，且**必须框准前景区域**（`--fgrect`）才有判别力。
 - ★★★ **凡是会写回用户配置的实验参数（`--ovl-alpha` 等），跑实验必须隔离配置**
-  （`XDG_CONFIG_HOME=/tmp/xxx` + `APPDATA=/tmp/xxx/appdata`）。否则程序退出时 `app_persist_settings`
-  把实验值写进 `~/.config/navimap/settings.ini` ⇒ **污染用户真实配置**，且后续回归里"断言默认配置值"的
-  用例全部假红。实测踩过：一次 `--ovl-alpha=alpha_search=0` 实验 ⇒ 真实配置被写成 `alpha_search=0` ⇒
-  之后每次 `qt_ui_test` 报 6 项不符（4 项是搜索浮层连锁失败），一度误判成"上游引入的回归"。
-- ★★ **回归里"断言默认配置值"的用例必须用独立配置目录**（`qt_ui_test` 已修：$SHOTS/ui_test_cfg）。
-  判别力验法：故意把真实配置污染成坏值 ⇒ 该用例仍 PASS 才算隔离有效。
-- ★★ **UI 改版会让像素判据的硬编码坐标失效**：上游"取消顶栏菜单栏"后搜索浮层从顶栏下沿移到画布左上角
-  （`margin=10 ⇒ move(10,10)`），按钮由 y 25..55 上移到 y 10..45 ⇒ 旧 `--rect/--fgrect` 整块错位。
-  修法不是"放宽坐标"，而是**先量新位置**（100% vs 0% 差分包围盒 + 深色像素聚类）再定新坐标，
-  并**随坐标更新重跑负向对照**（注入"文字 pen 也乘系数"⇒ 前景判据必须 FAIL）。
+  （`XDG_CONFIG_HOME=/tmp/xxx` + `APPDATA=/tmp/xxx/appdata`）。否则退出时 `app_persist_settings` 把实验值
+  写进 `~/.config/navimap/settings.ini` ⇒ **污染用户真实配置** ⇒ 后续回归里"断言默认配置值"的用例全部假红。
+  实测踩过：一次 `--ovl-alpha=alpha_search=0` 实验 ⇒ 真实配置被写成 0 ⇒ 之后每次 `qt_ui_test` 报 6 项不符
+  （4 项是搜索浮层连锁失败），一度误判成"上游引入的回归"。
+  ⇒ 回归里"断言默认配置值"的用例也必须用独立配置目录（`qt_ui_test` 已修）。隔离的判别力验法：
+  故意把真实配置污染成坏值 ⇒ 该用例仍 PASS 才算隔离有效。
+- ★★ **UI 改版会让像素判据的硬编码坐标失效** ⇒ 判据坐标是"每次 UI 改版都要重测"的活资产。
+  改判据先**量新位置**（100% vs 0% 差分包围盒 + 深色像素聚类）再定新坐标，并**随坐标重跑负向对照**
+  （注入"文字 pen 也乘系数"⇒ 前景判据必须 FAIL）。
 
 ## 语音播报（2026-10-25）
 
@@ -137,8 +135,7 @@
   「退出码 + 标记」双判据，标记缺失会被判成假 FAIL（踩过）。
 - ★ CMake 换源后**旧 .o 不自动清**：查符号级依赖前先确认 .o 归属（残留 `chrome.c.o` 会让 `nm`
   误以为环还在）。
-- 重构验收口径：零警告 + 依赖门禁 + **出图逐字节一致**（`scripts/bmpdiff.py`）+ `--ui-test` 33 项
-  + regress 全量（基线现 **78 通过 / 3 失败**，3 项是环境缺失）。
+- 重构验收口径：零警告 + 依赖门禁 + **出图逐字节一致**（`scripts/bmpdiff.py`）+ `--ui-test` 33 项  + regress 全量（基线现 **78 通过 / 3 失败**，3 项是环境缺失）。
 
 ## 坐标系（`src/utils/datum.c`）
 
@@ -168,6 +165,8 @@
 - 新增 `Buf` 必须同步设 `.esz`（memset 清零 ⇒ 重 PBF 阶段无声崩溃）。sqlite rowid 会复用：删 track 必须同时删
   tpoint 子表。**`sqlite3_open` 不建父目录** ⇒ 目录不存在时返回 NULL、调用方照常报成功 ⇒ 用户数据静默不落盘；
   开库前先 `nm_mkdir_p`。本机 `rm` 是 safe-delete 改名 ⇒ 真删 `/bin/rm`。
+- ★ **UI 改版后像素判据的硬编码坐标必然失效** ⇒ 判据坐标是"每次 UI 改版都要重测"的活资产，
+  不是一次写死的常量。改判据要**先量新位置**再改，并随坐标更新重跑负向对照。
 
 ## 已达成水平
 
