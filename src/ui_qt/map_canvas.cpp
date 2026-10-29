@@ -244,6 +244,7 @@ void MapCanvas::drawGraticuleGK(QPainter &p, DatumId id)
     double bbox[4];
     mv_visible_bbox(&m_a->view, bbox);   /* WGS84 [la0(底), lo0(左), la1(顶), lo1(右)] */
     const double lon0 = round(((bbox[1] + bbox[3]) * 0.5 / 3.0)) * 3.0;  /* 3° 带中央经线 */
+    const int   zone = (int)round(lon0 / 3.0);                             /* 带号（如 39） */
 
     /* 可见区四角 WGS84 → 高斯平面坐标（米），取范围 */
     static const int corner[4][2] = { {0,1}, {0,3}, {2,1}, {2,3} };
@@ -284,8 +285,10 @@ void MapCanvas::drawGraticuleGK(QPainter &p, DatumId id)
         /* 标签放北端（顶边，y+10 内缩）避免落到画布外（与 WGS84 经纬网同套路）。
          * ★ 刻度 = 高斯坐标公里数（含 500km 假东偏移，国标写法）：Y/1000。
          *   不要写 (Y-500000)/1000 —— 那是相对中央经线的带符号偏移，北京在西侧会
-         *   显示成负数（如 -51），与国标方里格读数（如 449）不符，看着像"刻度不准"。 */
-        snprintf(buf, sizeof(buf), "%d", (int)round(Yk / 1000.0));
+         *   显示成负数（如 -51），与国标方里格读数（如 449）不符，看着像"刻度不准"。
+         *   带号并入东坐标前两位（国标完整东坐标 = 带号×1000 + Y/1000，如 39 带→39449），
+         *   这样只看网格线也能知道在哪一带。 ★ 与右下角读数 GK%d带 同一算法。 */
+        snprintf(buf, sizeof(buf), "%d", (int)round(zone * 1000.0 + Yk / 1000.0));
         p.drawText(x2 + 2, y2 + 10, QString::fromUtf8(buf));
     }
     /* 横线（等 X 北向）：每整 step 米一条，从 Ymin 到 Ymax */
