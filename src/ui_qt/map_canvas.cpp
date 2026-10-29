@@ -301,9 +301,9 @@ void MapCanvas::drawGraticuleGK(QPainter &p, DatumId id)
         mv_project(&m_a->view, lat2, lon2, &x2, &y2);
         p.drawLine(x1, y1, x2, y2);
         /* 标签放西端（左边，x+2 内缩）避免落到画布外（与 WGS84 经纬网同套路）。
-         * 带号作为前缀**拼接**到北向公里数（%d%d，非数值相加，同东向）：39 带 + 4419 → "394419"。
-         * 北坐标国标虽不带带号，J 先生要求两轴都标注带号，故统一并入。 */
-        snprintf(buf, sizeof(buf), "%d%d", zone, (int)round(Xk / 1000.0));
+         * 北向（纵坐标 / 北坐标）按国标**不带带号**，只标纯公里数（如 4419）；
+         * 带号只属于东向（横坐标 / 东坐标），见上方竖线标签。 */
+        snprintf(buf, sizeof(buf), "%d", (int)round(Xk / 1000.0));
         p.drawText(x1 + 2, y1 - 3, QString::fromUtf8(buf));
     }
 
