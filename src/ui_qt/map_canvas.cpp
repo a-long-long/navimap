@@ -286,9 +286,10 @@ void MapCanvas::drawGraticuleGK(QPainter &p, DatumId id)
          * ★ 刻度 = 高斯坐标公里数（含 500km 假东偏移，国标写法）：Y/1000。
          *   不要写 (Y-500000)/1000 —— 那是相对中央经线的带符号偏移，北京在西侧会
          *   显示成负数（如 -51），与国标方里格读数（如 449）不符，看着像"刻度不准"。
-         *   带号并入东坐标前两位（国标完整东坐标 = 带号×1000 + Y/1000，如 39 带→39449），
-         *   这样只看网格线也能知道在哪一带。 ★ 与右下角读数 GK%d带 同一算法。 */
-        snprintf(buf, sizeof(buf), "%d", (int)round(zone * 1000.0 + Yk / 1000.0));
+         *   带号作为前缀**拼接**到公里数（%d%d，非数值相加！）：39 带 + 449 → "39449"。
+         *   ★ 之前写成 zone*1000+Y/1000 是数值相加，东向 3 位公里数巧合正确，
+         *     北向 4 位公里数会变成 39000+4430=43430（吃掉了 39 前缀），故改用拼接。 */
+        snprintf(buf, sizeof(buf), "%d%d", zone, (int)round(Yk / 1000.0));
         p.drawText(x2 + 2, y2 + 10, QString::fromUtf8(buf));
     }
     /* 横线（等 X 北向）：每整 step 米一条，从 Ymin 到 Ymax */
@@ -299,8 +300,10 @@ void MapCanvas::drawGraticuleGK(QPainter &p, DatumId id)
         mv_project(&m_a->view, lat1, lon1, &x1, &y1);
         mv_project(&m_a->view, lat2, lon2, &x2, &y2);
         p.drawLine(x1, y1, x2, y2);
-        /* 标签放西端（左边，x+2 内缩）避免落到画布外（与 WGS84 经纬网同套路）。 */
-        snprintf(buf, sizeof(buf), "%d", (int)round(Xk / 1000.0));
+        /* 标签放西端（左边，x+2 内缩）避免落到画布外（与 WGS84 经纬网同套路）。
+         * 带号作为前缀**拼接**到北向公里数（%d%d，非数值相加，同东向）：39 带 + 4419 → "394419"。
+         * 北坐标国标虽不带带号，J 先生要求两轴都标注带号，故统一并入。 */
+        snprintf(buf, sizeof(buf), "%d%d", zone, (int)round(Xk / 1000.0));
         p.drawText(x1 + 2, y1 - 3, QString::fromUtf8(buf));
     }
 
