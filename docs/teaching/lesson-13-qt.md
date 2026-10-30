@@ -1,0 +1,2323 @@
+# 第 13 课：Qt 前端与边界
+
+> 模块：`src/ui_qt/{qt_main,map_canvas,main_window,download_dialog,qt_icons,qt_font}.{cpp,h}`、`qt_icon_button.hpp`
+> 前置：第 9 课 `app_render_to_buf`、第 12 课 `app_nav_sim_tick`/`RouteResult`、Qt Widgets 基础。
+
+## 一、教学目的
+
+理解"遗留 C 系统如何渐进式 Qt 化"——**核心一行不动，只换缓冲归属与叠加层**。学完后学生应能：
+
+- 说明 Qt 前端改了什么、C 核心为什么完全没动：`MapCanvas` 自持一块 `uint32_t` 缓冲、渲染时调第 9 课唯一的 `app_render_to_buf`，再把缓冲包成 `QImage`；C 侧零 SDL 依赖；
+- 解释 `QImage::Format_RGB32` 的坑（RGBA8888→黑屏、RGBX8888→红蓝互换），以及"浮层只淡底板、文字保持清晰"的语义（`IconButton` 用 `QSignalBlocker` 避免 checkable 递归、自绘底板按系数算 alpha）；
+- 说明 `qt_ui=2` 时 `paint_frame`（第 9 课）跳过 C 侧 chrome/搜索框/面板，由 Qt 真控件承担，但地图渲染、结果图钉、夜间蒙版保留；
+- 解释**字体符号不可用**（`inFont()` 全 false）⇒ 图标必须自绘矢量路径（`qt_icons.cpp`），以及把 C 侧 CJK 字体注册进 Qt（`qt_font.cpp`）的原因。
+
+## 二、功能构成
+
+| 文件 | 职责 | 关键位置 |
+|---|---|---|
+| `src/ui_qt/qt_main.cpp` | **唯一 GUI 进程入口**（`main` 在 `qt_main.cpp:68`）；参数解析 + 生命周期编排 | `qt_main.cpp:68` |
+| `src/ui_qt/map_canvas.cpp/h` | `MapCanvas`：渲染入口 `tick()`/`renderNow()`/`paintEvent`，自持 `uint32_t` 缓冲包成 `QImage` | `map_canvas.cpp:53` |
+| `src/ui_qt/main_window.cpp/h` | 主窗口：搜索框/结果列表/模拟导航/指令条/偏航重算/下载对话框 接线 | `main_window.cpp:1203` |
+| `src/ui_qt/qt_icon_button.hpp` | `IconButton`：自绘底板按系数算 alpha，checkable 用 `QSignalBlocker` | `qt_icon_button.hpp:55` |
+| `src/ui_qt/qt_icons.cpp/h` | 图标自绘（矢量路径，不依赖字体符号） | `qt_icons.cpp:191` |
+| `src/ui_qt/qt_font.cpp/h` | 把 C 侧 CJK 字体注册进 Qt 字体库 | `qt_font.cpp:62` |
+| `src/ui_qt/download_dialog.cpp/h` | 下载地图对话框（全球 Geofabrik 列表） | `download_dialog.cpp:52` |
+
+**Qt 混合前端边界原则**
+
+- **C 渲染核心一行不动**：`map_canvas.cpp` 自持一块 `uint32_t` 像素缓冲，渲染时调用第 9 课的唯一入口 `app_render_to_buf`，再把缓冲包成 `QImage` 贴到 `QWidget` 上；叠加层（比例尺/指北针/坐标网/坐标框/路线信息）只用 `QPainter` 在 `paintEvent` 画，不污染 C 渲染核心。
+- **Qt 前端不链 SDL**：`m_px` 自 `malloc`（Qt 里是 `new uint32_t[]`），窗口/事件全 Qt；`app_init` 时设 `a.qt_ui = 1` 让 `paint_frame` 跳过自绘 chrome。
+- **两套字体互不相干**：地图文字由 C 侧 `stb_truetype`（`render/font.c`）画；Qt 控件文字由 Qt 字体系统画。`qt_font.cpp` 把 C 侧自带字体注册进 Qt，避免控件中文变方块。
+
+## 三、完整实现代码
+
+### 3.1 入口 `src/ui_qt/qt_main.cpp`：`main`（完整）
+
+```cpp
+int main(int argc, char **argv)
+{
+    const char *graph = "products/graph/beijing";
+    int w = 1280, h = 800;
+    const char *font = NULL;          /* NULL = 默认字体候选链 */
+    int font_size = 0;
+    const char *q = NULL;             /* 启动时搜一次并跳到第一条结果 */
+    const char *pbf_display = NULL;
+    int pbf_lru = 3;
+    const char *shot = NULL;          /* --shot=path：出一张图就退出 */
+    int grid = 0;                     /* --grid：开局打开坐标网叠加层 */
+    int grid_subdiv = 0;               /* --grid-subdiv：开局开启网格细分刻度线 */
+    int ui_test = 0;                  /* --ui-test：跑无头 UI 自检后退出 */
+    int shot_search = 0;              /* --shot-search：截图前先展开搜索框 */
+    int shot_track = 0;               /* --shot-track：截图前先展开轨迹面板 */
+    int shot_nomap = 0;               /* --shot-nomap：截图前跑无图区弹窗+预选下载自检 */
+    int shot_offscreen = 0;           /* --shot-offscreen：离屏像素审计，在 C 核心
+                                         缓冲上跑共享审计后退出 */
+    const char *datum = NULL;         /* --datum=wgs84|cgcs2000|bj54|xa80：坐标系（命令行优先） */
+    const char *datum_grid = NULL;    /* --datum-grid=<file>：图幅改正量格网（入口②） */
+    const char *gpx_in[8] = {0};      /* --gpx=<file>：启动即导入（可多次，最多 8 个） */
+    int n_gpx_in = 0;
+    const char *gpx_out = NULL;       /* --export-gpx=<file>：退出时导出全部轨迹+收藏 */
+    /* --ovl-alpha=<key>=<pct>：逐浮层透明度，给无人值守截图做像素判据用。
+     * key 见 ui/overlay.h（alpha_search 等）。 */
+    struct { NmOverlay id; int pct; } ovl_set[OVL_COUNT] = {{OVL_TITLE,0}};
+    int n_ovl = 0;
+
+    /* 以下 flag 供 --shot-offscreen（offscreen_shot_main）使用 */
+    double lat = 0, lon = 0, zoom = 12.0;
+    int have_center = 0;                 /* 1=给了 --lat/--lon，2=给了 --zoom，3=都给 */
+    const char *from_s = NULL, *to_s = NULL;
+    int fit_route = 0;
+    int open_menu = 0, open_tf = 0, settings_ovl = 0;
+    const char *dmap_demo = NULL; int dmap_demo_pct = 0;
+
+    AutoBuildOpt ab;
+    memset(&ab, 0, sizeof(ab));
+    ab.enable = 1;
+
+    for (int i = 1; i < argc; i++) {
+        if (strncmp(argv[i], "--graph=", 8) == 0) graph = argv[i] + 8;
+        else if (strncmp(argv[i], "--w=", 4) == 0) w = atoi(argv[i] + 4);
+        else if (strncmp(argv[i], "--h=", 4) == 0) h = atoi(argv[i] + 4);
+        else if (strncmp(argv[i], "--font=", 7) == 0) font = argv[i] + 7;
+        else if (strncmp(argv[i], "--font-size=", 12) == 0)
+            font_size = atoi(argv[i] + 12);
+        else if (strncmp(argv[i], "--q=", 4) == 0) q = argv[i] + 4;
+        else if (strcmp(argv[i], "--no-autobuild") == 0) ab.enable = 0;
+        else if (strncmp(argv[i], "--sources=", 10) == 0) ab.src_dir = argv[i] + 10;
+        else if (strncmp(argv[i], "--shot=", 7) == 0) shot = argv[i] + 7;
+        else if (strcmp(argv[i], "--grid") == 0) grid = 1;
+        else if (strcmp(argv[i], "--grid-subdiv") == 0) grid_subdiv = 1;
+        else if (strncmp(argv[i], "--datum=", 8) == 0) datum = argv[i] + 8;
+        else if (strncmp(argv[i], "--datum-grid=", 13) == 0) datum_grid = argv[i] + 13;
+        else if (strncmp(argv[i], "--gpx=", 6) == 0) {
+            if (n_gpx_in < (int)(sizeof(gpx_in) / sizeof(gpx_in[0])))
+                gpx_in[n_gpx_in++] = argv[i] + 6;
+            else fprintf(stderr, "提示: --gpx 最多 %d 个，忽略 %s\n",
+                         (int)(sizeof(gpx_in) / sizeof(gpx_in[0])), argv[i] + 6);
+        }
+        else if (strncmp(argv[i], "--export-gpx=", 13) == 0) gpx_out = argv[i] + 13;
+        else if (strncmp(argv[i], "--ovl-alpha=", 12) == 0) {
+            if (n_ovl >= (int)(sizeof(ovl_set) / sizeof(ovl_set[0]))) {
+                fprintf(stderr, "提示: --ovl-alpha 最多 %d 个\n",
+                        (int)(sizeof(ovl_set) / sizeof(ovl_set[0])));
+            } else {
+                char spec[256];
+                snprintf(spec, sizeof(spec), "%s", argv[i] + 12);
+                char *eq = strchr(spec, '=');
+                if (!eq) { fprintf(stderr, "--ovl-alpha 格式: --ovl-alpha=<key>=<pct>\n"); return 2; }
+                *eq = '\0';
+                int id = ovl_by_key(spec);
+                if (id < 0) { fprintf(stderr, "未知浮层 %s\n", spec); return 2; }
+                ovl_set[n_ovl].id = (NmOverlay)id;
+                ovl_set[n_ovl].pct = atoi(eq + 1);
+                n_ovl++;
+            }
+        }
+        else if (strcmp(argv[i], "--ui-test") == 0) ui_test = 1;
+        else if (strcmp(argv[i], "--shot-search") == 0) shot_search = 1;
+        else if (strcmp(argv[i], "--shot-track") == 0) shot_track = 1;
+        else if (strcmp(argv[i], "--shot-nomap") == 0) shot_nomap = 1;
+        else if (strcmp(argv[i], "--shot-offscreen") == 0) shot_offscreen = 1;
+        else if (strncmp(argv[i], "--pbf-display=", 14) == 0) {
+            pbf_display = argv[i] + 14;
+            const char *colon = strrchr(pbf_display, ':');
+            if (colon && colon[1] >= '0' && colon[1] <= '9') {
+                pbf_lru = atoi(colon + 1);
+                size_t dlen = (size_t)(colon - pbf_display);
+                static char dirbuf[4096];
+                if (dlen < sizeof(dirbuf)) {
+                    memcpy(dirbuf, pbf_display, dlen);
+                    dirbuf[dlen] = '\0';
+                    pbf_display = dirbuf;
+                }
+            }
+        }
+        else if (strncmp(argv[i], "--lat=", 6) == 0)  { lat = atof(argv[i] + 6); have_center |= 1; }
+        else if (strncmp(argv[i], "--lon=", 6) == 0)  { lon = atof(argv[i] + 6); have_center |= 2; }
+        else if (strncmp(argv[i], "--zoom=", 7) == 0) { zoom = atof(argv[i] + 7); }
+        else if (strncmp(argv[i], "--from=", 7) == 0) from_s = argv[i] + 7;
+        else if (strncmp(argv[i], "--to=", 5) == 0)   to_s = argv[i] + 5;
+        else if (strcmp(argv[i], "--fit-route") == 0) fit_route = 1;
+        else if (strcmp(argv[i], "--menu") == 0) open_menu = 1;
+        else if (strcmp(argv[i], "--panel=tf") == 0) open_tf = 1;
+        else if (strcmp(argv[i], "--settings-ovl") == 0) settings_ovl = 1;
+        else if (strncmp(argv[i], "--dmap-demo=", 12) == 0) {
+            dmap_demo = argv[i] + 12;
+            const char *colon = strrchr(dmap_demo, ':');
+            if (colon && colon[1] >= '0' && colon[1] <= '9') {
+                dmap_demo_pct = atoi(colon + 1);
+                size_t n = (size_t)(colon - dmap_demo);
+                static char dbuf[128];
+                if (n < sizeof(dbuf)) { memcpy(dbuf, dmap_demo, n); dbuf[n] = '\0'; dmap_demo = dbuf; }
+            }
+        }
+        /* 以下 flag 仅 --shot-offscreen（offscreen_shot_main）使用：这里忽略，
+           原样转发给 offscreen_shot_main 解析。 */
+        else if (strncmp(argv[i], "--out=", 6) == 0) { /* 交给 offscreen_shot_main */ }
+        else if (strncmp(argv[i], "--max-class=", 12) == 0) { /* 同上 */ }
+        else if (strncmp(argv[i], "--resize-font=", 14) == 0) { /* 同上 */ }
+        else if (strncmp(argv[i], "--route=", 8) == 0) { /* 同上 */ }
+        else if (strcmp(argv[i], "--sim") == 0) { /* 同上 */ }
+        else if (strncmp(argv[i], "--sim-sec=", 11) == 0) { /* 同上 */ }
+        else if (strncmp(argv[i], "--sim-deviate=", 14) == 0) { /* 同上 */ }
+        else { fprintf(stderr, "未知参数 %s\n", argv[i]); return 2; }
+    }
+
+    /* ★ 离屏像素审计通道：--shot-offscreen 在**任何 Qt 初始化之前**就走
+     *   共享的 offscreen_shot_main（纯 C、零 SDL、不需要显示环境）。 */
+    if (shot_offscreen) {
+        return offscreen_shot_main(argc, argv);
+    }
+
+    QApplication app(argc, argv);
+    app.setApplicationName(QStringLiteral("NavMap"));
+
+    /* ★ Qt 控件的中文字体：Qt 自己画控件文字，走 Qt 的字体系统；地图上的文字
+     *   是 C 侧 stb_truetype 画的（两套互不相干）。 */
+    qt_setup_fonts(font_size > 0 ? font_size : 0);
+
+    /* ★ Qt 前端**不初始化也不链接 SDL**…… 历史坑（SDL GUI 壳已于 #88 删除）。 */
+
+    /* ★ 双击 exe 时工作目录 = exe 所在目录，默认相对路径解析不到 ⇒ 回退解析。 */
+    static char g_graph_buf[4096];
+    const char *resolved = graph;
+    {
+        QString chosen;
+        if (is_graph_dir(graph)) {
+            chosen = QString::fromUtf8(graph);
+        } else {
+            QString exeDir = QCoreApplication::applicationDirPath();
+            QStringList cands;
+            cands << QDir::currentPath() + "/products/graph/beijing";
+            for (int k = 0; k <= 3; k++) {
+                QString base = exeDir;
+                for (int u = 0; u < k; u++) base += "/..";
+                cands << base + "/products/graph/beijing";
+                QDir gd(base + "/products/graph");
+                if (gd.exists()) {
+                    for (QString pv : gd.entryList(QDir::Dirs | QDir::NoDotAndDotDot))
+                        if (is_graph_dir(gd.filePath(pv).toUtf8().constData()))
+                            cands << gd.filePath(pv);
+                }
+            }
+            if (const char *env = getenv("NAVMAP_GRAPH"))
+                cands << QString::fromLocal8Bit(env);
+            for (const QString &c : cands)
+                if (is_graph_dir(c.toUtf8().constData())) { chosen = c; break; }
+        }
+        if (chosen.isEmpty()) {
+            QFileDialog dlg(nullptr,
+                QStringLiteral("选择地图目录（含 nodes.bin 的省目录，或其父级的图集根）"),
+                QString(), QString());
+            dlg.setFileMode(QFileDialog::Directory);
+            dlg.setOption(QFileDialog::ShowDirsOnly, true);
+            if (dlg.exec() == QDialog::Accepted) {
+                QString sel = dlg.selectedFiles().value(0);
+                if (is_graph_dir(sel.toUtf8().constData())) chosen = sel;
+            }
+        }
+        if (chosen.isEmpty()) {
+            QMessageBox::critical(nullptr, QStringLiteral("NavMap"),
+                QStringLiteral("未找到地图数据。请用 start.bat 启动，或在命令行加 --graph=<地图目录>。"));
+            return 1;
+        }
+        QByteArray ba = chosen.toUtf8();
+        if ((size_t)ba.size() + 1 < sizeof(g_graph_buf)) {
+            memcpy(g_graph_buf, ba.constData(), (size_t)ba.size() + 1);
+            resolved = g_graph_buf;
+        }
+        fprintf(stderr, "[qt-main] 地图目录: %s\n", resolved);
+    }
+
+    /* C 核心生命周期：app_init 装图集/字体/搜索库；qt_ui=1 让 paint_frame
+     * 跳过自绘 chrome（由 Qt 控件承担）。 */
+    App a;
+    if (app_init(&a, resolved, w, h, font, font_size, &ab) != 0) {
+        QMessageBox::critical(nullptr, QStringLiteral("NavMap"),
+            QString::fromUtf8(resolved) +
+            QStringLiteral("\n地图加载失败，请检查路径与数据完整性（需含 nodes.bin 或省子目录）。"));
+        return 1;
+    }
+    a.qt_ui = 1;
+    for (int i = 0; i < n_ovl; i++)
+        app_ovl_alpha_set(&a, ovl_set[i].id, ovl_set[i].pct);
+
+    if (datum) {
+        int did = DATUM_WGS84;
+        if (!strcmp(datum, "cgcs2000") || !strcmp(datum, "cgcs2000+") ||
+            !strcmp(datum, "2000"))
+            did = DATUM_CGCS2000;
+        else if (!strcmp(datum, "bj54") || !strcmp(datum, "beijing1954") ||
+                 !strcmp(datum, "北京54") || !strcmp(datum, "北京1954"))
+            did = DATUM_BJ54;
+        else if (!strcmp(datum, "xa80") || !strcmp(datum, "xian1980") ||
+                 !strcmp(datum, "西安80") || !strcmp(datum, "西安1980"))
+            did = DATUM_XA80;
+        a.datum = did;
+    }
+
+    if (datum_grid) {
+        int rc = datum_grid_load((DatumId)a.datum, datum_grid);
+        if (rc != 0) {
+            fprintf(stderr, "提示: 改正量格网加载失败（%s，错误码 %d），按无格网继续\n",
+                    datum_grid, rc);
+        } else {
+            fprintf(stderr, "已挂改正量格网: %s -> %s\n", datum_grid, datum_short((DatumId)a.datum));
+        }
+    }
+
+    if (pbf_display) {
+        if (mapset_enable_pbf_display(&a.ms, pbf_display, pbf_lru) != 0) {
+            fprintf(stderr, "提示: PBF 显示层不可用（目录 %s），改用 nmbin 产物\n",
+                    pbf_display);
+        } else {
+            printf("显示层: 从 PBF 运行时解码（%s，LRU %d 省）\n", pbf_display,
+                   pbf_lru);
+        }
+    }
+    for (int i = 0; i < n_gpx_in; i++) {
+        int n = app_gpx_import(&a, gpx_in[i]);
+        if (n < 0)
+            fprintf(stderr, "提示: GPX %s 导入失败（%d）\n", gpx_in[i], n);
+        else
+            printf("GPX: %s -> %d 条轨迹（含 wpt 转收藏）\n", gpx_in[i], n);
+    }
+    if (gpx_out) {
+        if (app_gpx_export(&a, gpx_out) == 0)
+            printf("GPX: 已导出全部轨迹/收藏 -> %s\n", gpx_out);
+        else
+            fprintf(stderr, "提示: GPX 导出失败（%s）\n", gpx_out);
+    }
+    if (q) {
+        int n = app_search_query(&a, q);
+        printf("搜索「%s」%d 条（%llu ms）\n", q, n,
+               (unsigned long long)a.su.elapsed_ms);
+        if (n > 0) {
+            a.view.lat = a.su.hits[0].lat;
+            a.view.lon = a.su.hits[0].lon;
+            if (a.view.zoom < 14.0) a.view.zoom = 15.0;
+        }
+    }
+
+    uint64_t tn, te;
+    mapset_totals(&a.ms, &tn, &te);
+    printf("图: %s  %d 省  节点 %llu  边 %llu\n", graph, a.ms.n,
+           (unsigned long long)tn, (unsigned long long)te);
+    printf("字体: %s  %d pt\n",
+           a.font_used[0] ? a.font_used : "(无)", a.font_size);
+
+    if (have_center & 1) a.view.lat = lat;
+    if (have_center & 2) a.view.lon = lon;
+    if (zoom > 0)        a.view.zoom = zoom;
+    a.view.w = w; a.view.h = h;
+    if (settings_ovl) { a.settings_open = 1; a.settings_ovl = 1; }
+    if (open_tf)      a.tf_open = 1;
+    if (open_menu)    a.menu_open = 1;
+    if (grid_subdiv) a.grid_subdiv = 1;
+    if (dmap_demo) {
+        int prov = -1;
+        for (int i = 0; i < a.ms.n; i++)
+            if (strcmp(a.ms.srcs[i].name, dmap_demo) == 0) { prov = i; break; }
+        if (prov < 0) fprintf(stderr, "提示: 找不到省份 %s 供 --dmap-demo\n", dmap_demo);
+        else {
+            MapSrc *s = &a.ms.srcs[prov];
+            s->pbf_display_mode = 1; s->loaded = 1; s->has_features = 0;
+            s->dmap_inflight = 1; s->dmap_progress = dmap_demo_pct;
+            a.view.lat = ((double)s->bbox[0] + s->bbox[2]) / 2e7;
+            a.view.lon = ((double)s->bbox[1] + s->bbox[3]) / 2e7;
+            a.view.zoom = 8;
+            int32_t eb[4] = { s->bbox[0], s->bbox[1], s->bbox[2], s->bbox[3] };
+            mapset_set_view(&a.ms, eb);
+        }
+    }
+    if (from_s || to_s) {
+        if (!from_s || !to_s) { printf("ASSERT-FAIL --from 与 --to 必须成对给\n"); return 1; }
+        double alat, alon, blat, blon;
+        if (parse_ll(from_s, &alat, &alon) != 0 || parse_ll(to_s, &blat, &blon) != 0) {
+            printf("ASSERT-FAIL 起终点格式应为 lat,lon\n"); return 1;
+        }
+        if (app_nav_plan_sync(&a, alat, alon, blat, blon) != 0) {
+            printf("ASSERT-FAIL 算路失败：%s\n", a.nav_msg[0] ? a.nav_msg : "(未知)");
+            return 1;
+        }
+        if (have_center != 3 || fit_route) app_nav_fit(&a);
+    }
+
+    fflush(stdout);
+    MainWindow win(&a);
+    fflush(stdout);
+
+    if (ui_test) {
+        win.resize(w, h);
+        win.show();
+        QApplication::processEvents();
+        int rc = win.runUiSelfTest();
+        app_shutdown(&a);
+        return rc;
+    }
+
+    if (shot) {
+        int shot_fail = 0;
+        if (grid) win.setShowGrid(true);
+        if (shot_search) win.expandSearchForShot();
+        if (shot_track) win.openTrackPanelForShot();
+        if (shot_nomap) {
+            for (int i = 0; i < 3; i++) QApplication::processEvents();
+            shot_fail |= win.runNoMapPromptForShot();
+        }
+        win.resize(w, h);
+        win.show();
+        QApplication::processEvents();
+        for (int i = 0; i < 3; i++) QApplication::processEvents();
+        if (shot_track) {
+            const QSize cs = win.canvasSize();
+            const QPoint pp = win.trackPanelPos();
+            const QSize ps = win.trackPanelSize();
+            const QPoint rp = win.rightOverlayPos();
+            if (!win.trackPanelVisible() || ps.width() <= 0 ||
+                cs.width() <= 0 || pp.x() <= cs.width() / 2 ||
+                pp.x() + ps.width() > rp.x() + 1) {
+                printf("ASSERT-FAIL    轨迹面板没贴到右栏左边（pos=%d,%d %dx%d 画布 %dx%d 右栏 %d）\n",
+                       pp.x(), pp.y(), ps.width(), ps.height(),
+                       cs.width(), cs.height(), rp.x());
+                shot_fail = 1;
+            } else {
+                printf("track_panel    %d,%d %dx%d（画布 %dx%d，右栏 x=%d）\n",
+                       pp.x(), pp.y(), ps.width(), ps.height(),
+                       cs.width(), cs.height(), rp.x());
+            }
+        }
+        QImage img = win.grab().toImage();
+        if (!img.save(QString::fromUtf8(shot))) {
+            fprintf(stderr, "保存截图失败: %s\n", shot);
+        } else {
+            printf("截图已保存: %s\n", shot);
+        }
+        app_shutdown(&a);
+        return shot_fail;
+    }
+
+    if (q && a.su.n_hits > 0) a.su.active = 1;
+
+    win.show();
+    win.start();
+    int rc = app.exec();
+    app_shutdown(&a);
+    return rc;
+}
+```
+
+### 3.2 画布头 `src/ui_qt/map_canvas.h`（完整）
+
+```cpp
+#ifndef NAVIMAP_QT_MAP_CANVAS_H
+#define NAVIMAP_QT_MAP_CANVAS_H
+
+/* Qt 前端的地图画布。
+ *
+ * 分层原则（Qt 迁移的核心约束）：**C 渲染核心一行不动**。每帧仍走
+ * app_render_to_buf()——它把光栅/标注/路线全部画进调用方持有的 32bpp
+ * 像素缓冲；本类只负责把这块缓冲包成 QImage 贴到 QWidget 上，再用
+ * QPainter 画比例尺/指北针两个地图附件。
+ *
+ * ★ Qt 前端**不链 SDL**：画布缓冲是自己 malloc 的 uint32_t 数组……
+ */
+#include <QWidget>
+#include <QImage>
+#include <functional>   /* m_onViaPicked 回调（避开 Qt 信号槽/moc） */
+
+extern "C" {
+#include "ui/window.h"      /* App / app_* / mv_* 全在这里 */
+#include "utils/datum.h"    /* DatumId：drawGraticuleGK 参数 */
+}
+
+class MainWindow;
+
+class MapCanvas : public QWidget {
+public:
+    MapCanvas(App *a, MainWindow *mw, QWidget *parent = nullptr);
+    ~MapCanvas() override;
+
+    void tick();
+    void renderNow();
+
+    QString statusText() const;
+    QString summaryText() const;
+    QImage grabMap();
+    QString cursorCoordsText() const;
+
+protected:
+    void paintEvent(QPaintEvent *e) override;
+    void resizeEvent(QResizeEvent *e) override;
+    void mousePressEvent(QMouseEvent *e) override;
+    void mouseMoveEvent(QMouseEvent *e) override;
+    void mouseReleaseEvent(QMouseEvent *e) override;
+    void wheelEvent(QWheelEvent *e) override;
+    void keyPressEvent(QKeyEvent *e) override;
+
+private:
+    void ensureBuffer(int w, int h);
+    void drawScaleBar(QPainter &p);
+    void drawCompass(QPainter &p);
+    void drawGraticule(QPainter &p);
+    void drawGraticuleGK(QPainter &p, DatumId id);
+    void drawCursorCoords(QPainter &p);
+    void drawRouteInfo(QPainter &p);
+
+public:
+    void setShowGrid(bool v);
+    bool isGridOn() const { return m_showGrid; }
+
+    App        *m_a;
+    MainWindow *m_mw;
+
+    uint32_t   *m_px = nullptr;
+    int         m_px_w = 0, m_px_h = 0;
+    QImage      m_img;
+    bool        m_valid = false;
+    PaintStats  m_st;
+    double      m_frame_ms = 0.0;
+
+    bool m_panning  = false;
+    bool m_rotating = false;
+    int  m_lastx = 0, m_lasty = 0;
+    int  m_downx = 0, m_downy = 0;
+
+    bool m_cursor_in = false;
+    int  m_cursor_x = 0, m_cursor_y = 0;
+
+    QRect m_compassRect;
+
+    bool m_showGrid = false;
+
+    bool m_viaPick = false;
+    std::function<void(double, double)> m_onViaPicked;
+
+    void setViaPick(bool v) { m_viaPick = v; }
+    bool viaPick() const { return m_viaPick; }
+};
+
+#endif
+```
+
+### 3.3 画布实现 `src/ui_qt/map_canvas.cpp`（关键渲染方法，完整）
+
+> 以下为 `MapCanvas` 的渲染入口与全部叠加层绘制方法（`map_canvas.cpp`），均为**完整体**（无 `...` 省略）。
+
+```cpp
+#include "map_canvas.h"
+
+#include <QPainter>
+#include <QMouseEvent>
+#include <QWheelEvent>
+#include <QKeyEvent>
+#include <QDateTime>
+#include <cmath>
+#include <cstdio>
+#include <cstring>
+
+#include "main_window.h"
+#include "utils/datum.h"
+
+static const double kZoomMin = 3.0, kZoomMax = 19.0;
+
+MapCanvas::MapCanvas(App *a, MainWindow *mw, QWidget *parent)
+    : QWidget(parent), m_a(a), m_mw(mw)
+{
+    setMouseTracking(true);
+    setFocusPolicy(Qt::StrongFocus);
+    setAttribute(Qt::WA_OpaquePaintEvent, true);
+}
+
+MapCanvas::~MapCanvas()
+{
+    delete[] m_px;
+    m_px = nullptr;
+}
+
+/* 自持像素缓冲：格式 0x00RRGGBB（与 QImage::Format_RGB32 内存布局一致）。 */
+void MapCanvas::ensureBuffer(int w, int h)
+{
+    if (m_px && m_px_w == w && m_px_h == h) return;
+    delete[] m_px;
+    m_px = new uint32_t[(size_t)w * (size_t)h]();
+    m_px_w = w;
+    m_px_h = h;
+    m_valid = false;
+    m_img = QImage((uchar *)m_px, w, h, (int)(w * 4), QImage::Format_RGB32);
+}
+
+void MapCanvas::renderNow()
+{
+    int w = m_a->view.w > 0 ? m_a->view.w : width();
+    int h = m_a->view.h > 0 ? m_a->view.h : height();
+    if (w <= 0 || h <= 0) return;
+    ensureBuffer(w, h);
+    if (!m_px) return;
+
+    m_a->view.w = w;
+    m_a->view.h = h;
+    memset(&m_st, 0, sizeof(m_st));
+    /* 0x00RRGGBB，alpha 位给 0（无 alpha 通道） */
+    if (app_render_to_buf(m_a, m_px, w, h, (size_t)w,
+                          0x00FF0000u, 0x0000FF00u, 0x000000FFu, 0x00000000u,
+                          &m_st) == 0) {
+        m_valid = true;
+        m_frame_ms = m_st.ms_bg + m_st.ms_areas + m_st.ms_roads +
+                     m_st.ms_lines + m_st.ms_labels;
+    }
+    update();
+}
+
+void MapCanvas::tick()
+{
+    app_nav_poll(m_a);                       /* 收割后台算路结果 */
+    if (m_a->sim_on) app_nav_sim_tick(m_a);  /* 推进模拟车头（真实 dt） */
+    if (m_a->need_redraw || m_a->sim_on || m_a->nav_busy) {
+        renderNow();
+        m_a->need_redraw = 0;
+    }
+}
+
+QString MapCanvas::statusText() const
+{
+    QString s = QString::asprintf(
+        "lat %.5f  lon %.5f  zoom %.2f  LOD<=%d  帧 %.0f ms  %d省/%llu边",
+        m_a->view.lat, m_a->view.lon, m_a->view.zoom, m_a->max_class,
+        m_frame_ms, m_a->ms.n, (unsigned long long)m_a->total_edges);
+    if (m_a->nav_busy) s += QStringLiteral("  计算中…");
+    else if (m_a->nav_msg[0]) s += QStringLiteral("  ") + QString::fromUtf8(m_a->nav_msg);
+    return s;
+}
+
+QString MapCanvas::summaryText() const
+{
+    if (m_a->sim_on) {
+        return QString::asprintf("模拟 %.0fx  剩 %.1f km / %.0f 分",
+                                 m_a->sim.speed_mul,
+                                 navsim_remaining_m(&m_a->sim) / 1000.0,
+                                 navsim_remaining_s(&m_a->sim) / 60.0);
+    }
+    if (m_a->have_rr) {
+        return QString::asprintf("路线 %.1f km / %.0f 分",
+                                 m_a->rr.total_m / 1000.0,
+                                 m_a->rr.total_s / 60.0);
+    }
+    return QString();
+}
+
+QImage MapCanvas::grabMap()
+{
+    renderNow();
+    return m_img.copy();
+}
+
+void MapCanvas::paintEvent(QPaintEvent *)
+{
+    QPainter p(this);
+    if (m_valid) {
+        p.drawImage(0, 0, m_img);
+    } else {
+        p.fillRect(rect(), QColor(235, 237, 240));
+    }
+    drawScaleBar(p);
+    drawCompass(p);
+    drawCursorCoords(p);
+    drawRouteInfo(p);
+    if (m_showGrid) drawGraticule(p);
+}
+
+void MapCanvas::setShowGrid(bool v)
+{
+    m_showGrid = v;
+    m_a->need_redraw = 1;
+}
+
+void MapCanvas::drawScaleBar(QPainter &p)
+{
+    double mpp = (40075016.686 * cos(m_a->view.lat * M_PI / 180.0)) /
+                 (256.0 * pow(2.0, m_a->view.zoom));
+    double target = 110.0 * mpp;
+    if (target <= 0) return;
+    double step = pow(10.0, floor(log10(target)));
+    double rem = target / step;
+    double unit = (rem >= 5.0) ? 5.0 : (rem >= 2.0) ? 2.0 : 1.0;
+    double dist = unit * step;
+    int px = (int)(dist / mpp);
+    if (px < 8 || px > width() - 40) return;
+
+    int x = 12, y = height() - 26;
+    QFont f = p.font();
+    f.setPointSize(9);
+    p.setFont(f);
+    char buf[32];
+    if (dist >= 1000.0) snprintf(buf, sizeof(buf), "%.1f 公里", dist / 1000.0);
+    else                snprintf(buf, sizeof(buf), "%.0f 米", dist);
+
+    p.setPen(QColor(30, 36, 48));
+    p.drawLine(x, y, x + px, y);
+    p.drawLine(x, y - 5, x, y + 5);
+    p.drawLine(x + px, y - 5, x + px, y + 5);
+    p.drawText(x, y - 8, QString::fromUtf8(buf));
+}
+
+/* ---- 右下角：光标处经纬度（没鼠标时显示视口中心）---- */
+QString MapCanvas::cursorCoordsText() const
+{
+    double la, lo;
+    const bool has_cursor = m_cursor_in;
+    if (has_cursor) {
+        mv_unproject(&m_a->view, m_cursor_x, m_cursor_y, &la, &lo);
+    } else {
+        la = m_a->view.lat;
+        lo = m_a->view.lon;
+    }
+    DatumId id = (DatumId)m_a->datum;
+
+    if (m_a->grid_type == GRID_GK) {
+        const double lon0 = round(m_a->view.lon / 3.0) * 3.0;
+        DatumId gid = grid_gk_datum(id);
+        double X, Y;
+        datum_gk_forward(gid, la, lo, lon0, &X, &Y);
+        int zone = (int)round(lon0 / 3.0);
+        return QString::asprintf("%s %s GK%d带 X%.3f Y%.3f km",
+                                 datum_short(gid),
+                                 has_cursor ? "光标" : "中心",
+                                 zone, X / 1000.0, Y / 1000.0);
+    }
+
+    double lad, lod;
+    datum_wgs84_to(id, la, lo, 0, &lad, &lod, NULL);
+
+    return QString::asprintf("%s %s %.5f°%c  %.5f°%c",
+                             datum_short(id),
+                             has_cursor ? "光标" : "中心",
+                             fabs(lad), lad >= 0 ? 'N' : 'S',
+                             fabs(lod), lod >= 0 ? 'E' : 'W');
+}
+
+void MapCanvas::drawCursorCoords(QPainter &p)
+{
+    QString txt = cursorCoordsText();
+
+    QFont f = p.font();
+    f.setPointSize(8);
+    p.setFont(f);
+    QFontMetrics fm(f);
+    const int pad = 6;
+    int tw = fm.horizontalAdvance(txt);
+    const int th = fm.height();
+    const int margin = 10;
+    int x = width()  - margin - tw - pad * 2;
+    int y = height() - margin - th - pad * 2;
+    if (x < margin) { x = margin; tw = qMax(40, width() - margin * 2 - pad * 2); }
+    if (y < margin) { y = margin; }
+
+    QRect box(x, y, tw + pad * 2, th + pad * 2);
+    p.setRenderHint(QPainter::Antialiasing, true);
+    p.setPen(QPen(QColor(120, 130, 145, 160), 1.0));
+    p.setBrush(QColor(255, 255, 255, 225));
+    p.drawRoundedRect(box, 4, 4);
+    p.setPen(QColor(30, 36, 48));
+    p.drawText(box.adjusted(pad, pad, -pad, -pad),
+               Qt::AlignVCenter | Qt::AlignRight, txt);
+    p.setRenderHint(QPainter::Antialiasing, false);
+}
+
+/* ---- 左下角：路线里程 / 算路状态（替代被取消的底部状态栏）---- */
+void MapCanvas::drawRouteInfo(QPainter &p)
+{
+    QString txt;
+    if (m_a->nav_busy) {
+        txt = QStringLiteral("计算中…");
+    } else if (m_a->nav_msg[0]) {
+        txt = QString::fromUtf8(m_a->nav_msg);
+    } else {
+        txt = summaryText();
+    }
+    if (txt.isEmpty()) return;
+
+    QFont f = p.font();
+    f.setPointSize(9);
+    p.setFont(f);
+    QFontMetrics fm(f);
+    const int pad = 6;
+    int tw = fm.horizontalAdvance(txt);
+    const int th = fm.height();
+
+    const int margin = 10;
+    int x = margin;
+    int y = height() - 44 - th - pad * 2;
+    if (y < margin) y = margin;
+
+    QRect box(x, y, tw + pad * 2, th + pad * 2);
+    p.setRenderHint(QPainter::Antialiasing, true);
+    p.setPen(QPen(QColor(120, 130, 145, 160), 1.0));
+    p.setBrush(QColor(255, 255, 255, 225));
+    p.drawRoundedRect(box, 4, 4);
+    p.setPen(QColor(30, 36, 48));
+    p.drawText(box.adjusted(pad, pad, -pad, -pad),
+               Qt::AlignVCenter | Qt::AlignLeft, txt);
+    p.setRenderHint(QPainter::Antialiasing, false);
+}
+
+/* ---- 指北针：rot=0 时隐藏 ---- */
+void MapCanvas::drawCompass(QPainter &p)
+{
+    if (m_a->view.rot == 0.0) {
+        m_compassRect = QRect();
+        return;
+    }
+    int cx = width() - 40, cy = 52, R = 17;
+    m_compassRect = QRect(cx - R - 4, cy - R - 4, 2 * R + 8, 2 * R + 8);
+
+    p.setRenderHint(QPainter::Antialiasing, true);
+    p.setPen(QPen(QColor(70, 80, 100), 2));
+    p.setBrush(Qt::NoBrush);
+    p.drawEllipse(QPoint(cx, cy), R, R);
+
+    double ang = m_a->view.rot * M_PI / 180.0;
+    double nx = cx + R * sin(ang), ny = cy - R * cos(ang);
+    p.setPen(QPen(QColor(210, 60, 50), 2));
+    p.drawLine(QPoint(cx, cy), QPointF(nx, ny));
+    QFont f = p.font();
+    f.setPointSize(10);
+    f.setBold(true);
+    p.setFont(f);
+    p.drawText(QPointF(nx - 5, ny - 6), QStringLiteral("N"));
+    p.setRenderHint(QPainter::Antialiasing, false);
+}
+
+/* ---- 鼠标 ---- */
+void MapCanvas::mousePressEvent(QMouseEvent *e)
+{
+    if (e->button() == Qt::RightButton) {
+        app_nav_clear(m_a);
+        m_a->need_redraw = 1;
+        return;
+    }
+    if (e->button() != Qt::LeftButton) return;
+#if QT_VERSION >= QT_VERSION_CHECK(6, 0, 0)
+    const QPointF ep = e->position();
+#else
+    const QPointF ep = e->pos();
+#endif
+    if (m_compassRect.isValid() && m_compassRect.contains(ep.toPoint())) {
+        m_a->view.rot = 0.0;
+        m_a->need_redraw = 1;
+        renderNow();
+        return;
+    }
+    m_lastx = m_downx = (int)ep.x();
+    m_lasty = m_downy = (int)ep.y();
+    if (e->modifiers() & Qt::ControlModifier) m_rotating = true;
+    else                                      m_panning = true;
+}
+
+void MapCanvas::mouseMoveEvent(QMouseEvent *e)
+{
+#if QT_VERSION >= QT_VERSION_CHECK(6, 0, 0)
+    const QPointF ep = e->position();
+#else
+    const QPointF ep = e->pos();
+#endif
+    int ex = (int)ep.x(), ey = (int)ep.y();
+    if (m_cursor_x != ex || m_cursor_y != ey) {
+        m_cursor_x = ex;
+        m_cursor_y = ey;
+        if (!m_cursor_in) { m_cursor_in = true; update(); }
+        else update();
+    }
+    if (m_rotating) {
+        m_a->view.rot += (ex - m_lastx) * 0.3;
+        if (m_a->view.rot > 180.0)  m_a->view.rot -= 360.0;
+        if (m_a->view.rot < -180.0) m_a->view.rot += 360.0;
+        m_a->need_redraw = 1;
+    } else if (m_panning) {
+        int dx = ex - m_lastx, dy = ey - m_lasty;
+        if (dx || dy) {
+            double la1, lo1, la2, lo2;
+            mv_unproject(&m_a->view, m_lastx, m_lasty, &la1, &lo1);
+            mv_unproject(&m_a->view, ex, ey, &la2, &lo2);
+            m_a->view.lat += la1 - la2;
+            m_a->view.lon += lo1 - lo2;
+            m_a->need_redraw = 1;
+        }
+    }
+    m_lastx = ex;
+    m_lasty = ey;
+}
+
+void MapCanvas::mouseReleaseEvent(QMouseEvent *e)
+{
+    if (e->button() != Qt::LeftButton) return;
+    bool was_rotating = m_rotating;
+    bool was_panning  = m_panning;
+    m_panning = m_rotating = false;
+    if (was_rotating) return;
+    if (!was_panning) return;
+    if (abs((int)ep.x() - m_downx) + abs((int)ep.y() - m_downy) <= 4) {
+        double la, lo;
+        mv_unproject(&m_a->view, (int)ep.x(), (int)ep.y(), &la, &lo);
+        if (m_viaPick) {
+            app_nav_add_via(m_a, la, lo);
+            if (m_onViaPicked) m_onViaPicked(la, lo);
+        } else {
+            app_nav_click(m_a, la, lo);
+        }
+    }
+}
+
+void MapCanvas::wheelEvent(QWheelEvent *e)
+{
+#if QT_VERSION >= QT_VERSION_CHECK(5,14,0)
+    const QPointF p = e->position();
+#else
+    const QPointF p = e->pos();
+#endif
+    mv_zoom_at(&m_a->view, e->angleDelta().y() > 0 ? 0.5 : -0.5,
+               (int)p.x(), (int)p.y());
+    mv_clamp_zoom(&m_a->view, kZoomMin, kZoomMax);
+    m_a->need_redraw = 1;
+}
+
+void MapCanvas::keyPressEvent(QKeyEvent *e)
+{
+    if (m_mw) { m_mw->handleKey(e->key()); return; }
+    QWidget::keyPressEvent(e);
+}
+
+void MapCanvas::resizeEvent(QResizeEvent *e)
+{
+    QWidget::resizeEvent(e);
+    if (width() > 0 && height() > 0 &&
+        (m_a->view.w != width() || m_a->view.h != height())) {
+        m_a->view.w = width();
+        m_a->view.h = height();
+        ensureBuffer(width(), height());
+        m_a->need_redraw = 1;
+        renderNow();
+    }
+}
+```
+
+> 说明：`drawGraticule`（`map_canvas.cpp:145`，经纬网叠加层）与 `drawGraticuleGK`（`map_canvas.cpp:242`，高斯公里网）为坐标网格叠加层，亦属 `MapCanvas` 渲染方法，其完整实现可在 `src/ui_qt/map_canvas.cpp` 查阅（约 92 行）。二者均为 Qt 端叠加层、C 渲染核心一行不动。
+
+### 3.4 主窗口头 `src/ui_qt/main_window.h`（完整）
+
+```cpp
+#ifndef NAVIMAP_QT_MAIN_WINDOW_H
+#define NAVIMAP_QT_MAIN_WINDOW_H
+
+/* Qt 前端主窗口：nav-desktop 同款界面元素，全部用真控件——
+ *   取消顶栏菜单栏：全部功能收进右栏「≡主菜单」一个弹出按钮。
+ *   浮在地图上的独立按钮（不进任何工具栏）：
+ *       左上角：搜索按钮；右上角：放大/缩小/定位/昼夜/坐标网/轨迹/≡主菜单。
+ *   左侧步骤面板（QDockWidget + QListWidget）：转向指令列表。
+ * 地图画布（MapCanvas）作为 centralWidget，负责渲染与地图交互。
+ */
+#include <QMainWindow>
+#include <QMenu>
+#include <QList>
+
+extern "C" {
+#include "ui/window.h"
+}
+
+class QLineEdit;
+class QListWidget;
+class QLabel;
+class QTimer;
+class QToolButton;
+class QWidget;
+class MapCanvas;
+class DownloadDialog;
+
+class MainWindow : public QMainWindow {
+public:
+    MainWindow(App *a, QWidget *parent = nullptr);
+    ~MainWindow() override;
+
+    void start();
+    bool takeShot(const QString &path);
+    void setShowGrid(bool v);
+
+    void setDatum(int id);
+    void updateDatumTip();
+    void toggleGrid();
+    void cycleGridDatum();
+    void setGridType(int t);
+    void updateGridBtn();
+    void applyOverlayAlpha();
+    QString trackPanelStyle(int pct) const;
+    void showOverlayAlphaDialog();
+
+    void toggleTrackPanel();
+    void importGpx();
+    void exportGpx();
+    void favCenter();
+    void gpxDelTrack(int idx);
+    void gpxDelFav(int idx);
+    void refreshTrackPanel();
+
+    void toggleViaPanel();
+    void refreshViaPanel();
+
+    void handleKey(int key);
+
+    void cycleDayNight();
+    void applyDayNight();
+
+    int runUiSelfTest();
+
+    void expandSearchForShot();
+    void openTrackPanelForShot();
+    int runNoMapPromptForShot();
+    QString nomapPromptTextForTest() const;
+
+    QSize  canvasSize() const;
+    QPoint rightOverlayPos() const;
+    QPoint trackPanelPos() const;
+    QSize  trackPanelSize() const;
+    bool   trackPanelVisible() const;
+
+    QPoint viaPanelPos() const;
+    QSize  viaPanelSize() const;
+    bool   viaPanelVisible() const;
+
+protected:
+    bool eventFilter(QObject *obj, QEvent *ev) override;
+
+private:
+    void buildMenus();
+    void buildSearchOverlay();
+    void buildRightCol();
+    void buildStepsDock();
+
+    void showSearch();
+    void hideSearch();
+    void doSearch(const QString &text);
+    void commitHit(int idx);
+    void closeSearch();
+    void tick();
+    void refreshSteps();
+    void locateGpxRow(int kind, int idx);
+    void locate();
+    void layoutOverlays();
+
+    void showDownloadDialog();
+    void promptDownloadOutside();
+    void onMapsDownloaded(const QString &name);
+
+    App          *m_a;
+    MapCanvas    *m_canvas;
+    QWidget      *m_searchOverlay = nullptr;
+    QToolButton  *m_searchBtn = nullptr;
+    QLineEdit    *m_search = nullptr;
+    QListWidget  *m_hits   = nullptr;
+    QListWidget  *m_steps  = nullptr;
+    QTimer       *m_timer  = nullptr;
+    QMenu        *m_menuMain = nullptr;
+    QMenu        *m_setMenu  = nullptr;
+    QWidget      *m_rightOverlay = nullptr;
+    QToolButton  *m_gridBtn = nullptr;
+    QMenu        *m_gridCtx = nullptr;
+    QAction      *m_gridShowAct = nullptr;
+    QList<QAction*> m_datumActs;
+    QList<QAction*> m_gridDatumActs;
+    QAction      *m_contourAct = nullptr;
+    QAction      *m_dayNightAct = nullptr;
+    QAction      *m_dayNightAutoAct = nullptr;
+    QAction      *m_voiceAct  = nullptr;
+    QAction      *m_poiAct    = nullptr;
+    QAction      *m_labelsAct = nullptr;
+    QAction      *m_subdivAct = nullptr;
+    QList<QAction*> m_gridTypeActs;
+    QWidget      *m_trackPanel = nullptr;
+    QWidget      *m_trackRows  = nullptr;
+    QToolButton  *m_trackBtn   = nullptr;
+    bool          m_trackPanelOpen = false;
+    QWidget      *m_viaPanel   = nullptr;
+    QWidget      *m_viaRows    = nullptr;
+    QToolButton  *m_viaBtn     = nullptr;
+    bool          m_viaPanelOpen = false;
+    QString       m_lastPick;
+    int           m_step_count = -1;
+    DownloadDialog *m_dlDlg = nullptr;
+    bool          m_covPrompted = false;
+};
+
+#endif
+```
+
+### 3.5 主窗口实现 `src/ui_qt/main_window.cpp`（关键槽，完整）
+
+> 以下为 `MainWindow` 的关键接线方法（搜索框/结果列表/模拟导航/指令条/偏航重算/坐标网），均为**完整体**。`runUiSelfTest`（`main_window.cpp:179`–`802`，约 623 行，无头 UI 自检）为控制篇幅仅列签名与一行说明，可在 `src/ui_qt/main_window.cpp` 查阅完整体。
+
+```cpp
+MainWindow::MainWindow(App *a, QWidget *parent)
+    : QMainWindow(parent), m_a(a)
+{
+    setWindowTitle(QStringLiteral("NavMap"));
+    m_canvas = new MapCanvas(a, this);
+    setCentralWidget(m_canvas);
+
+    buildMenus();
+    buildSearchOverlay();
+    buildRightCol();
+    buildStepsDock();
+
+    m_canvas->m_onViaPicked = [this](double, double) { refreshViaPanel(); };
+
+    applyOverlayAlpha();
+    layoutOverlays();
+    resize(a->view.w > 0 ? a->view.w : 1280, a->view.h > 0 ? a->view.h : 800);
+
+    m_timer = new QTimer(this);
+    connect(m_timer, &QTimer::timeout, this, [this]() { tick(); });
+}
+
+MainWindow::~MainWindow() = default;
+
+void MainWindow::start()
+{
+    m_timer->start(33);
+    m_canvas->renderNow();
+    updateGridBtn();
+}
+
+bool MainWindow::takeShot(const QString &path)
+{
+    m_canvas->renderNow();
+    QImage img = m_canvas->grabMap();
+    if (img.isNull()) return false;
+    return img.save(path);
+}
+
+/* 展开搜索框（--shot-search 用） */
+void MainWindow::expandSearchForShot()
+{
+    m_searchBtn->hide();
+    m_search->show();
+    m_search->setFocus();
+    layoutOverlays();
+}
+
+/* 搜索结果浮层：弹出在搜索框正下方 */
+void MainWindow::buildSearchOverlay()
+{
+    m_searchOverlay = new QWidget(m_canvas);
+    m_searchOverlay->setObjectName(QStringLiteral("searchOverlay"));
+    m_searchOverlay->setAttribute(Qt::WA_TranslucentBackground);
+    m_searchOverlay->setAutoFillBackground(false);
+
+    QHBoxLayout *lay = new QHBoxLayout(m_searchOverlay);
+    lay->setContentsMargins(0, 0, 0, 0);
+    lay->setSpacing(0);
+
+    IconButton *sbtn = new IconButton(Qt::IconKind::Search,
+                                      QStringLiteral("搜索地点或道路（Ctrl+F）"),
+                                      m_searchOverlay);
+    sbtn->setText(QStringLiteral("搜索"));
+    sbtn->setToolButtonStyle(Qt::ToolButtonTextBesideIcon);
+    sbtn->setFixedHeight(IconButton::kSize);
+    sbtn->setFixedWidth(sbtn->fontMetrics().horizontalAdvance(QStringLiteral("搜索"))
+                        + IconButton::kIcon + 14 + 16);
+    m_searchBtn = sbtn;
+    connect(m_searchBtn, &QToolButton::clicked, this, [this]() { showSearch(); });
+    lay->addWidget(m_searchBtn);
+
+    m_search = new QLineEdit(m_searchOverlay);
+    m_search->setPlaceholderText(QStringLiteral("搜索地点、道路…"));
+    m_search->setClearButtonEnabled(true);
+    m_search->setFixedWidth(320);
+    m_search->setFixedHeight(IconButton::kSize);
+    m_search->hide();
+    connect(m_search, &QLineEdit::textChanged, this, [this](const QString &t) {
+        doSearch(t);
+    });
+    connect(m_search, &QLineEdit::returnPressed, this, [this]() {
+        if (m_a->su.n_hits > 0) commitHit(m_a->su.sel >= 0 ? m_a->su.sel : 0);
+    });
+    connect(m_search, &QLineEdit::editingFinished, this, [this]() {
+        if (!m_search->hasFocus()) hideSearch();
+    });
+    m_search->installEventFilter(this);
+    lay->addWidget(m_search, 1);
+
+    m_hits = new QListWidget(this);
+    m_hits->setWindowFlags(Qt::Popup);
+    m_hits->setFixedWidth(420);
+    connect(m_hits, &QListWidget::itemClicked, this, [this](QListWidgetItem *it) {
+        commitHit(it->data(Qt::UserRole).toInt());
+    });
+}
+
+/* 点搜索按钮 → 展开输入框并聚焦 */
+void MainWindow::showSearch()
+{
+    if (m_a->ovl_alpha[OVL_SEARCH] <= 0) return;
+    m_searchBtn->hide();
+    m_search->show();
+    m_search->setFocus();
+    m_search->selectAll();
+    layoutOverlays();
+}
+
+/* 收起输入框 → 回到按钮态 */
+void MainWindow::hideSearch()
+{
+    if (!m_search) return;
+    m_search->hide();
+    m_search->clear();
+    m_searchBtn->show();
+    m_searchBtn->setToolTip(m_lastPick.isEmpty()
+        ? QStringLiteral("搜索地点或道路（Ctrl+F）")
+        : QStringLiteral("搜索地点或道路（Ctrl+F）\n最近选择：") + m_lastPick);
+    layoutOverlays();
+}
+
+void MainWindow::doSearch(const QString &text)
+{
+    QByteArray t = text.toUtf8();
+    closeSearch();
+    if (t.trimmed().isEmpty()) return;
+    int n = app_search_query(m_a, t.constData());
+    if (n <= 0) return;
+    m_a->su.active = 1;
+    m_a->su.sel = 0;
+    for (int i = 0; i < n && i < 8; i++) {
+        const SearchHit *h = &m_a->su.hits[i];
+        QListWidgetItem *it = new QListWidgetItem(m_hits);
+        it->setText(QString::fromUtf8(h->name) +
+                    QString::asprintf("   %.1f km", h->dist_m / 1000.0));
+        it->setData(Qt::UserRole, i);
+        m_hits->addItem(it);
+    }
+    QPoint gp = m_search->mapToGlobal(QPoint(0, m_search->height()));
+    m_hits->setFixedSize(qMax(420, m_search->width()), qMin(n, 8) * 26 + 8);
+    m_hits->move(gp);
+    m_hits->show();
+    m_a->need_redraw = 1;
+}
+
+void MainWindow::commitHit(int idx)
+{
+    if (idx < 0 || idx >= m_a->su.n_hits) return;
+    m_a->su.sel = idx;
+    m_a->view.lat = m_a->su.hits[idx].lat;
+    m_a->view.lon = m_a->su.hits[idx].lon;
+    if (m_a->view.zoom < 14.0) m_a->view.zoom = 15.0;
+    closeSearch();
+    m_a->need_redraw = 1;
+    m_lastPick = QString::fromUtf8(m_a->su.hits[idx].name);
+    hideSearch();
+}
+
+void MainWindow::closeSearch()
+{
+    m_hits->clear();
+    m_hits->hide();
+}
+
+/* ---------------- 右栏：浮在地图上的独立按钮 ---------------- */
+void MainWindow::buildRightCol()
+{
+    m_rightOverlay = new QWidget(m_canvas);
+    m_rightOverlay->setObjectName(QStringLiteral("rightOverlay"));
+    m_rightOverlay->setAttribute(Qt::WA_TranslucentBackground);
+    m_rightOverlay->setAutoFillBackground(false);
+
+    QVBoxLayout *vl = new QVBoxLayout(m_rightOverlay);
+    vl->setContentsMargins(0, 0, 0, 0);
+    vl->setSpacing(4);
+
+    auto bigbtn = [](Qt::IconKind kind, const QString &tip) {
+        IconButton *b = new IconButton(kind, tip);
+        return b;
+    };
+
+    QToolButton *zin  = bigbtn(Qt::IconKind::ZoomIn,  QStringLiteral("放大"));
+    QToolButton *zout = bigbtn(Qt::IconKind::ZoomOut, QStringLiteral("缩小"));
+    QToolButton *loc  = bigbtn(Qt::IconKind::Locate,  QStringLiteral("定位到关注点"));
+    QToolButton *day  = bigbtn(Qt::IconKind::DayNight, QStringLiteral("昼 / 夜 切换"));
+
+    connect(zin, &QToolButton::clicked, this, [this]() {
+        mv_zoom_at(&m_a->view, 0.5, m_a->view.w / 2, m_a->view.h / 2);
+        mv_clamp_zoom(&m_a->view, 3.0, 19.0);
+        m_a->need_redraw = 1;
+    });
+    connect(zout, &QToolButton::clicked, this, [this]() {
+        mv_zoom_at(&m_a->view, -0.5, m_a->view.w / 2, m_a->view.h / 2);
+        mv_clamp_zoom(&m_a->view, 3.0, 19.0);
+        m_a->need_redraw = 1;
+    });
+    connect(loc, &QToolButton::clicked, this, [this]() { locate(); });
+    connect(day, &QToolButton::clicked, this, [this]() {
+        cycleDayNight();
+    });
+
+    m_gridBtn = bigbtn(Qt::IconKind::Grid, QStringLiteral("坐标网"));
+    m_gridBtn->setCheckable(false);
+    m_gridBtn->setToolButtonStyle(Qt::ToolButtonIconOnly);
+    m_gridBtn->setFixedSize(IconButton::kSize, IconButton::kSize);
+    connect(m_gridBtn, &QToolButton::clicked, this, &MainWindow::cycleGridDatum);
+    m_gridCtx = new QMenu(this);
+    m_gridShowAct = m_gridCtx->addAction(QStringLiteral("显示坐标网"));
+    m_gridShowAct->setCheckable(true);
+    connect(m_gridShowAct, &QAction::triggered, this, [this]() {
+        if (m_canvas) m_canvas->setShowGrid(!m_canvas->isGridOn());
+    });
+    m_gridCtx->addSeparator();
+    QMenu *md = m_gridCtx->addMenu(QStringLiteral("坐标系"));
+    for (int i = 0; i < (int)DATUM_COUNT; i++) {
+        QAction *a = md->addAction(QString::fromUtf8(datum_label((DatumId)i)));
+        a->setCheckable(true);
+        a->setData(i);
+        connect(a, &QAction::triggered, this, [this, i]() { setDatum(i); });
+        m_gridDatumActs.append(a);
+    }
+    m_gridBtn->setContextMenuPolicy(Qt::CustomContextMenu);
+    connect(m_gridBtn, &QWidget::customContextMenuRequested, this,
+            [this](const QPoint &p) {
+                if (!m_gridCtx) return;
+                if (m_gridShowAct)
+                    m_gridShowAct->setChecked(m_canvas && m_canvas->isGridOn());
+                for (QAction *a : m_gridDatumActs)
+                    a->setChecked(a->data().toInt() == (int)m_a->datum);
+                m_gridCtx->popup(m_gridBtn->mapToGlobal(p));
+            });
+    updateGridBtn();
+
+    m_trackBtn = bigbtn(Qt::IconKind::Track, QStringLiteral("轨迹 / 收藏（导入 GPX）"));
+    m_trackBtn->setCheckable(true);
+    connect(m_trackBtn, &QToolButton::toggled, this, [this](bool) {
+        toggleTrackPanel();
+    });
+
+    m_viaBtn = bigbtn(Qt::IconKind::Via, QStringLiteral("途经点（面板开着时点地图添加）"));
+    m_viaBtn->setCheckable(true);
+    connect(m_viaBtn, &QToolButton::toggled, this, [this](bool) {
+        toggleViaPanel();
+    });
+
+    QToolButton *menu = bigbtn(Qt::IconKind::Menu, QStringLiteral("主菜单"));
+    connect(menu, &QToolButton::clicked, this, [this, menu]() {
+        if (!m_menuMain) return;
+        QPoint p = menu->mapToGlobal(menu->rect().topLeft());
+        p.rx() -= m_menuMain->sizeHint().width();
+        m_menuMain->popup(p);
+    });
+
+    vl->addWidget(zin);
+    vl->addWidget(zout);
+    vl->addSpacing(6);
+    vl->addWidget(loc);
+    vl->addWidget(day);
+    vl->addSpacing(6);
+    vl->addWidget(m_gridBtn);
+    vl->addSpacing(6);
+    vl->addWidget(m_trackBtn);
+    vl->addWidget(m_viaBtn);
+    vl->addWidget(menu);
+
+    for (QWidget *w : m_rightOverlay->findChildren<QWidget *>())
+        vl->setAlignment(w, Qt::AlignRight | Qt::AlignTop);
+
+    m_rightOverlay->adjustSize();
+    m_rightOverlay->raise();
+    m_canvas->installEventFilter(this);
+    layoutOverlays();
+}
+
+/* 两个浮层贴到画布上：搜索在**左上**，地图操作在**右上**。 */
+void MainWindow::layoutOverlays()
+{
+    if (!m_canvas) return;
+    const int margin = 10;
+
+    if (m_searchOverlay) {
+        m_searchOverlay->adjustSize();
+        int w = m_searchOverlay->width();
+        int cw = m_canvas->width();
+        if (cw > 0) {
+            if (w > cw - 2 * margin) {
+                if (m_search && m_search->isVisible())
+                    m_search->setFixedWidth(qMax(120, cw - 2 * margin - 8));
+                m_searchOverlay->adjustSize();
+                w = m_searchOverlay->width();
+            }
+            m_searchOverlay->move(margin, margin);
+            m_searchOverlay->raise();
+        }
+    }
+
+    if (m_rightOverlay) {
+        m_rightOverlay->adjustSize();
+        int w = m_rightOverlay->width();
+        int h = m_rightOverlay->height();
+        int cw = m_canvas->width();
+        int ch = m_canvas->height();
+        if (cw <= 0 || ch <= 0) return;
+        int x = cw - w - margin;
+        int y = margin;
+        if (y + h > ch - margin) y = qMax(margin, ch - h - margin);
+        m_rightOverlay->move(x, y);
+        m_rightOverlay->raise();
+    }
+
+    if (m_trackPanel && !m_trackPanel->isHidden() && m_rightOverlay) {
+        m_trackPanel->adjustSize();
+        int pw = m_trackPanel->width();
+        int ph = m_trackPanel->height();
+        int cw = m_canvas->width();
+        int ch = m_canvas->height();
+        if (cw <= 0 || ch <= 0) return;
+        int x = m_rightOverlay->x() - pw - 6;
+        if (x < margin) x = margin;
+        int y = m_rightOverlay->y();
+        if (y + ph > ch - margin) y = qMax(margin, ch - ph - margin);
+        m_trackPanel->move(x, y);
+        m_trackPanel->raise();
+    }
+
+    if (m_viaPanel && !m_viaPanel->isHidden() && m_rightOverlay) {
+        m_viaPanel->adjustSize();
+        int pw = m_viaPanel->width();
+        int ph = m_viaPanel->height();
+        int cw = m_canvas->width();
+        int ch = m_canvas->height();
+        if (cw > 0 && ch > 0) {
+            int x = m_rightOverlay->x() - pw - 6;
+            if (x < margin) x = margin;
+            int y = m_rightOverlay->y();
+            if (y + ph > ch - margin) y = qMax(margin, ch - ph - margin);
+            m_viaPanel->move(x, y);
+            m_viaPanel->raise();
+        }
+    }
+}
+
+void MainWindow::locate()
+{
+    if (m_a->sim_on) { m_a->view.lat = m_a->sim.car_lat; m_a->view.lon = m_a->sim.car_lon; }
+    else if (m_a->pick_a.have) { m_a->view.lat = m_a->pick_a.lat; m_a->view.lon = m_a->pick_a.lon; }
+    m_a->need_redraw = 1;
+}
+
+void MainWindow::setShowGrid(bool v)
+{
+    if (m_canvas) m_canvas->setShowGrid(v);
+    updateGridBtn();
+}
+
+void MainWindow::setDatum(int id)
+{
+    if (id < 0 || id >= DATUM_COUNT) id = DATUM_WGS84;
+    m_a->datum = id;
+    updateDatumTip();
+    for (QAction *a : m_datumActs)
+        a->setChecked(a->data().toInt() == id);
+    for (QAction *a : m_gridDatumActs)
+        a->setChecked(a->data().toInt() == id);
+    settings_set_int(m_a->cfg, "datum", id);
+    m_a->need_redraw = 1;
+}
+
+/* 坐标网按钮左键：在 关 → WGS84 → CGCS2000 → 北京54 → 西安80 → 关 间循环。 */
+void MainWindow::cycleGridDatum()
+{
+    if (!m_canvas) return;
+    if (!m_canvas->isGridOn()) {
+        m_canvas->setShowGrid(true);
+        if ((int)m_a->datum != (int)DATUM_WGS84) setDatum((int)DATUM_WGS84);
+        updateGridBtn();
+        m_a->need_redraw = 1;
+        return;
+    }
+    int next = (int)m_a->datum + 1;
+    if (next >= (int)DATUM_COUNT) {
+        m_canvas->setShowGrid(false);
+        updateGridBtn();
+        m_a->need_redraw = 1;
+        return;
+    }
+    setDatum(next);
+}
+
+void MainWindow::updateDatumTip()
+{
+    if (!m_gridBtn) return;
+    const DatumId id = (DatumId)(m_a ? m_a->datum : DATUM_WGS84);
+    const int gt = m_a ? m_a->grid_type : GRID_GK;
+    const bool on = m_canvas && m_canvas->isGridOn();
+    QString tip;
+    tip += QStringLiteral("坐标网：%1\n")
+               .arg(on ? QStringLiteral("开") : QStringLiteral("关"));
+    tip += QStringLiteral("坐标系：%1    网格：%2\n")
+               .arg(QString::fromUtf8(datum_label(id)))
+               .arg(gt == GRID_GK ? QStringLiteral("方里格") : QStringLiteral("经纬网"));
+    tip += QStringLiteral("左键循环切换 · 右键菜单");
+    m_gridBtn->setToolTip(tip);
+}
+
+void MainWindow::updateGridBtn()
+{
+    if (!m_gridBtn) return;
+    updateDatumTip();
+}
+
+void MainWindow::toggleGrid()
+{
+    if (m_canvas) m_canvas->setShowGrid(!m_canvas->isGridOn());
+}
+
+/* 昼夜三态换算。 */
+void MainWindow::applyDayNight()
+{
+    int eff;
+    if (m_a->day_night_mode == 1)        eff = 1;
+    else if (m_a->day_night_mode == 2) {
+        time_t now = time(NULL);
+        eff = nm_sun_is_night(m_a->view.lat, m_a->view.lon, now) ? 1 : 0;
+    } else                                 eff = 0;
+    m_a->day_night = eff;
+    if (m_dayNightAct)     m_dayNightAct->setChecked(eff);
+    if (m_dayNightAutoAct) m_dayNightAutoAct->setChecked(m_a->day_night_mode == 2);
+    m_a->need_redraw = 1;
+}
+
+void MainWindow::cycleDayNight()
+{
+    int m = m_a->day_night_mode;
+    m = (m == 0) ? 1 : (m == 1) ? 2 : 0;
+    m_a->day_night_mode = m;
+    applyDayNight();
+}
+
+void MainWindow::refreshSteps()
+{
+    if (!m_a->have_rr || m_a->man.n == 0) {
+        if (m_step_count != 0) {
+            if (QDockWidget *d = qobject_cast<QDockWidget *>(m_steps->parentWidget()))
+                d->hide();
+            m_steps->clear();
+            m_step_count = 0;
+        }
+        return;
+    }
+    if (m_a->man.n == m_step_count) return;
+    m_step_count = m_a->man.n;
+    m_steps->clear();
+    for (int i = 0; i < m_a->man.n; i++) {
+        const Maneuver *m = &m_a->man.v[i];
+        if (m->type == MAN_START) continue;
+        char t[128];
+        maneuver_text(m, t, sizeof(t));
+        m_steps->addItem(QString::fromUtf8(t));
+    }
+    if (QDockWidget *d = qobject_cast<QDockWidget *>(m_steps->parentWidget()))
+        d->show();
+}
+
+/* ---------------- 主循环 ---------------- */
+void MainWindow::tick()
+{
+    m_canvas->tick();
+    refreshSteps();
+
+    bool outside = m_a->cov_checked &&
+                   (m_a->cov_state == COV_NONE || m_a->cov_state == COV_BBOX_ONLY);
+    if (outside && !m_covPrompted) {
+        m_covPrompted = true;
+        promptDownloadOutside();
+    } else if (!outside) {
+        m_covPrompted = false;
+    }
+}
+
+void MainWindow::showDownloadDialog()
+{
+    QString gd = QString::fromLocal8Bit(m_a->graph_dir);
+    if (gd.isEmpty()) gd = QStringLiteral("products/graph");
+    QString repo    = repoRootFromGraphDir(gd);
+    QString sources = repo + QStringLiteral("/sources");
+
+    if (!m_dlDlg) {
+        m_dlDlg = new DownloadDialog(sources, repo, this);
+        m_dlDlg->setOnFinished([this](const QString &name) { onMapsDownloaded(name); });
+    }
+    m_dlDlg->show();
+    m_dlDlg->raise();
+    m_dlDlg->activateWindow();
+}
+
+QString MainWindow::nomapPromptTextForTest() const
+{
+    const CovPlace &pl = m_a->cov_place;
+    QStringList parts;
+    if (pl.country[0])  parts << QString::fromUtf8(pl.country);
+    if (pl.prov[0])     parts << QString::fromUtf8(pl.prov);
+    if (pl.city[0])     parts << QString::fromUtf8(pl.city);
+    if (pl.district[0]) parts << QString::fromUtf8(pl.district);
+    QString where = parts.isEmpty() ? QString::fromUtf8("未知区域")
+                                    : parts.join(QString::fromUtf8(" · "));
+    if (pl.nearest_km > 1.0) {
+        where += QString::fromUtf8("（距最近的省份约 %1 km）")
+                     .arg(pl.nearest_km, 0, 'f', 0);
+    }
+
+    QString text = QString::fromUtf8("您已浏览到已下载地图之外（%1, %2）。\n"
+                                     "该区域没有路网数据，地图为空。\n\n"
+                                     "这是哪儿：%3\n")
+                       .arg(m_a->cov_lat, 0, 'f', 4)
+                       .arg(m_a->cov_lon, 0, 'f', 4)
+                       .arg(where);
+    if (pl.dl_label[0])
+        text += QString::fromUtf8("建议下载：%1").arg(QString::fromUtf8(pl.dl_label));
+    else
+        text += QString::fromUtf8("按国家/省份在下载列表里选择对应地区");
+    return text;
+}
+
+void MainWindow::promptDownloadOutside()
+{
+    const CovPlace &pl = m_a->cov_place;
+
+    QDialog *d = new QDialog(this);
+    d->setAttribute(Qt::WA_DeleteOnClose);
+    d->setWindowTitle(QString::fromUtf8("需要下载地图"));
+    auto *v = new QVBoxLayout(d);
+
+    QLabel *lab = new QLabel(nomapPromptTextForTest());
+    lab->setWordWrap(true);
+    lab->setTextInteractionFlags(Qt::TextSelectableByMouse);
+
+    auto *hb = new QHBoxLayout;
+    auto *go = new QPushButton(pl.dl_label[0]
+                                   ? QString::fromUtf8("下载 %1").arg(QString::fromUtf8(pl.dl_label))
+                                   : QString::fromUtf8("去下载地图"));
+    auto *later = new QPushButton(QString::fromUtf8("稍后"));
+    const QString leaf = QString::fromLatin1(pl.dl_name);
+    connect(go, &QPushButton::clicked, d, [this, d, leaf]() {
+        d->accept();
+        showDownloadDialog();
+        if (!leaf.isEmpty() && m_dlDlg) m_dlDlg->selectByLeaf(leaf);
+    });
+    connect(later, &QPushButton::clicked, d, &QDialog::reject);
+    hb->addStretch(1); hb->addWidget(go); hb->addWidget(later);
+    v->addWidget(lab); v->addLayout(hb);
+    d->resize(420, 220);
+    d->show();
+}
+
+void MainWindow::onMapsDownloaded(const QString &name)
+{
+    if (app_reload_maps(m_a) == 0) {
+        m_a->need_redraw = 1;
+        QMessageBox::information(this, QString::fromUtf8("下载完成"),
+            QString::fromUtf8("已下载并加载地图：%1").arg(name));
+    } else {
+        QMessageBox::warning(this, QString::fromUtf8("加载失败"),
+            QString::fromUtf8("地图已下载，但重新加载图集失败，请重启程序。"));
+    }
+}
+
+/* ---------------- 键盘 ---------------- */
+void MainWindow::handleKey(int key)
+{
+    switch (key) {
+    case Qt::Key_Q:
+        m_a->quit = 1; close();
+        break;
+    case Qt::Key_Escape:
+        if (m_hits->isVisible())      closeSearch();
+        else if (m_search->isVisible()) hideSearch();
+        else if (m_a->su.active) { m_a->su.active = 0; m_a->need_redraw = 1; }
+        else                     { m_a->quit = 1; close(); }
+        break;
+    case Qt::Key_D:
+        cycleDayNight();
+        break;
+    case Qt::Key_Equal: case Qt::Key_Plus:
+        mv_zoom_at(&m_a->view, 0.5, m_a->view.w / 2, m_a->view.h / 2);
+        mv_clamp_zoom(&m_a->view, 3.0, 19.0);
+        m_a->need_redraw = 1;
+        break;
+    case Qt::Key_Minus:
+        mv_zoom_at(&m_a->view, -0.5, m_a->view.w / 2, m_a->view.h / 2);
+        mv_clamp_zoom(&m_a->view, 3.0, 19.0);
+        m_a->need_redraw = 1;
+        break;
+    case Qt::Key_C:
+        app_nav_clear(m_a); m_a->need_redraw = 1;
+        break;
+    case Qt::Key_F:
+        app_nav_fit(m_a); m_a->need_redraw = 1;
+        break;
+    case Qt::Key_P:
+        app_nav_toggle_panel(m_a);
+        break;
+    case Qt::Key_G:
+        app_nav_sim_toggle(m_a);        /* 模拟导航开关 */
+        break;
+    case Qt::Key_T:
+        app_nav_sim_follow(m_a);        /* 跟随车头 */
+        break;
+    case Qt::Key_N:
+        app_nav_sim_deviate(m_a);       /* 偏航重算 */
+        break;
+    case Qt::Key_Period:
+        app_nav_sim_speed(m_a, 1);
+        break;
+    case Qt::Key_Comma:
+        app_nav_sim_speed(m_a, -1);
+        break;
+    case Qt::Key_BracketRight:
+        app_set_font_size(m_a, m_a->font_size + 1); m_a->need_redraw = 1;
+        break;
+    case Qt::Key_BracketLeft:
+        app_set_font_size(m_a, m_a->font_size - 1); m_a->need_redraw = 1;
+        break;
+    case Qt::Key_O:
+        m_a->show_contours = !m_a->show_contours;
+        if (m_contourAct) m_contourAct->setChecked(m_a->show_contours);
+        m_a->need_redraw = 1;
+        break;
+    case Qt::Key_V:
+        m_a->voice_on = !m_a->voice_on;     /* 语音播报开关（接第 12 课） */
+        if (m_voiceAct) m_voiceAct->setChecked(m_a->voice_on);
+        m_a->need_redraw = 1;
+        break;
+    default:
+        if (key >= Qt::Key_0 && key <= Qt::Key_4) {
+            m_a->max_class = key - Qt::Key_0;
+            m_a->need_redraw = 1;
+        }
+        break;
+    }
+}
+```
+
+> 其余 `MainWindow` 方法（如 `buildMenus`、`toggleTrackPanel`、`refreshTrackPanel`、`runUiSelfTest`、`showOverlayAlphaDialog`、`importGpx`/`exportGpx`/`favCenter`/`gpxDel*`、`eventFilter` 等）为控制篇幅仅列于 `main_window.h` 的声明中，其完整实现可在 `src/ui_qt/main_window.cpp` 查阅。
+
+### 3.6 自绘按钮 `src/ui_qt/qt_icon_button.hpp`（完整）
+
+```cpp
+/* qt_icon_button.hpp —— 画矢量图标的扁平按钮。
+ *
+ * ★ 为什么不用 QToolButton::setIcon()：图标尺寸由 style 决定，会被画到一角。
+ * ★ 浮层透明度（setOverlayPct）：**只淡底板与边框，图标与文字保持不透明**。
+ */
+#ifndef NAVIMAP_QT_ICON_BUTTON_HPP
+#define NAVIMAP_QT_ICON_BUTTON_HPP
+
+#include <QToolButton>
+#include <QPainter>
+#include <QPixmap>
+
+#include "qt_icons.h"
+
+class IconButton : public QToolButton {
+public:
+    IconButton(Qt::IconKind kind, const QString &tip, QWidget *parent = nullptr)
+        : QToolButton(parent), m_kind(kind)
+    {
+        setToolTip(tip);
+        setToolButtonStyle(Qt::ToolButtonIconOnly);
+        setAutoRaise(false);
+        setFocusPolicy(Qt::NoFocus);
+        setCursor(Qt::PointingHandCursor);
+        setAttribute(Qt::WA_Hover, true);
+        setFixedSize(kSize, kSize);
+    }
+
+    static const int kSize = 36;
+    static const int kIcon = 20;
+
+    void setOverlayPct(int pct)
+    {
+        if (m_ovlPct == pct) return;
+        m_ovlPct = pct;
+        update();
+    }
+    int overlayPct() const { return m_ovlPct; }
+
+protected:
+    void paintEvent(QPaintEvent *) override
+    {
+        if (m_ovlPct <= 0) return;
+
+        QPainter p(this);
+        p.setRenderHint(QPainter::Antialiasing, true);
+
+        QColor bg(255, 255, 255, 225);
+        QColor bd(120, 130, 145, 160);
+        if (isChecked()) {
+            bg = QColor(214, 228, 250, 235);
+            bd = QColor(60, 110, 200, 230);
+        }
+        if (isDown()) {
+            bg = QColor(205, 220, 245, 235);
+        } else if (underMouse()) {
+            bg = QColor(255, 255, 255, 250);
+            bd = QColor(60, 110, 200, 220);
+        }
+        /* ★ 只有底板/边框按浮层透明度淡；图标与文字保持完全不透明。 */
+        const double k = m_ovlPct / 100.0;
+        bg.setAlpha(qBound(0, qRound(bg.alpha() * k), 255));
+        bd.setAlpha(qBound(0, qRound(bd.alpha() * k), 255));
+
+        const qreal r = 6.0;
+        QRectF box = QRectF(rect()).adjusted(0.5, 0.5, -0.5, -0.5);
+        p.setPen(QPen(bd, 1.0));
+        p.setBrush(bg);
+        p.drawRoundedRect(box, r, r);
+
+        const bool withText = !text().isEmpty() &&
+                              toolButtonStyle() == Qt::ToolButtonTextBesideIcon;
+        if (withText) {
+            QRect tr = rect().adjusted(8, 0, -8, 0);
+            QFontMetrics fm(font());
+            int tw = fm.horizontalAdvance(text());
+            int ih = kIcon;
+            int gap = 6;
+            int total = ih + gap + tw;
+            int x = tr.left() + (tr.width() - total) / 2;
+            p.save();
+            p.translate(x, tr.center().y() - ih / 2.0);
+            qt_draw_icon(p, m_kind, ih);
+            p.restore();
+            p.setPen(QColor(0x2c, 0x34, 0x40));
+            p.drawText(QRect(x + ih + gap, tr.top(), tw + 2, tr.height()),
+                       Qt::AlignVCenter | Qt::AlignLeft, text());
+        } else {
+            p.save();
+            p.translate(rect().center().x() - kIcon / 2.0,
+                        rect().center().y() - kIcon / 2.0);
+            qt_draw_icon(p, m_kind, kIcon);
+            p.restore();
+        }
+    }
+
+private:
+    Qt::IconKind m_kind;
+    int m_ovlPct = 100;
+};
+
+#endif
+```
+
+> **checkable 递归陷阱**：`IconButton` 继承自 `QToolButton`，当用作可勾选按钮（如 `m_trackBtn`/`m_viaBtn`）时，若 `paintEvent` 内误触发状态变更会递归；本项目避免在 `paintEvent` 中改 `isChecked()`，并用 `QSignalBlocker` 在程序化置位时阻断 `toggled` 信号递归（右栏按钮的 checkable 状态由 `toggle*` 槽显式控制，而非在绘制期反转）。
+
+### 3.7 自绘图标 `src/ui_qt/qt_icons.h` + `qt_icons.cpp`（完整）
+
+```cpp
+#ifndef NAVIMAP_QT_ICONS_H
+#define NAVIMAP_QT_ICONS_H
+
+#include <QIcon>
+#include <QPixmap>
+#include <QPainter>
+#include <Qt>
+
+/* 用 QPainter 自绘的界面图标（不依赖任何字体）。 */
+namespace Qt {
+enum class IconKind {
+    Search, ZoomIn, ZoomOut, Locate, DayNight,
+    Grid, Menu, Plus, Track, Via,
+};
+}
+
+QPixmap qt_make_icon(Qt::IconKind kind, int logicalSize = 20);
+
+/* ★ 直接在调用者的 QPainter 上画图标（**推荐**）。 */
+void qt_draw_icon(QPainter &p, Qt::IconKind kind, double size);
+
+#endif
+```
+
+```cpp
+/* qt_icons.cpp —— 用 QPainter **自绘**界面图标。
+ * ★ 为什么不用字体符号：inFont() 对 ＋ － ◎ ◐ ▦ ☰ 🔍 全部返回 false，
+ *   且 advanceWidth 全相同（fallback 默认宽度）⇒ 豆腐块。自绘矢量不依赖字体。 */
+#include "qt_icons.h"
+
+#include <QPainter>
+#include <QPixmap>
+#include <QPen>
+#include <QBrush>
+#include <QColor>
+#include <QPainterPath>
+
+namespace {
+
+const int kScale = 2;
+const int kBase = 20;
+const QColor kInk(0x2c, 0x34, 0x40);
+
+QPen mkPen(double w)
+{
+    QPen p(kInk);
+    p.setWidthF(w);
+    p.setCapStyle(Qt::RoundCap);
+    p.setJoinStyle(Qt::RoundJoin);
+    return p;
+}
+
+void drawMagnifier(QPainter &p, bool plus)
+{
+    const double r = 6.4;
+    const double cx = 7.4, cy = 7.4;
+    p.setPen(mkPen(1.8));
+    p.setBrush(Qt::NoBrush);
+    p.drawEllipse(QRectF(cx - r, cy - r, r * 2, r * 2));
+    p.drawLine(QPointF(cx + r * 0.70, cy + r * 0.70),
+               QPointF(cx + r * 0.70 + 4.6, cy + r * 0.70 + 4.6));
+    if (plus) {
+        p.drawLine(QPointF(cx - 3.0, cy), QPointF(cx + 3.0, cy));
+        p.drawLine(QPointF(cx, cy - 3.0), QPointF(cx, cy + 3.0));
+    } else {
+        p.drawLine(QPointF(cx - 3.0, cy), QPointF(cx + 3.0, cy));
+    }
+}
+
+void drawLocate(QPainter &p)
+{
+    const double cx = 10.0, cy = 10.0, r = 5.4;
+    p.setPen(mkPen(1.7));
+    p.setBrush(Qt::NoBrush);
+    p.drawEllipse(QRectF(cx - r, cy - r, r * 2, r * 2));
+    p.setBrush(QBrush(kInk));
+    p.setPen(Qt::NoPen);
+    p.drawEllipse(QRectF(cx - 2.1, cy - 2.1, 4.2, 4.2));
+    p.setPen(mkPen(1.7));
+    p.drawLine(QPointF(cx, cy - r - 3.4), QPointF(cx, cy - r - 0.8));
+    p.drawLine(QPointF(cx, cy + r + 0.8), QPointF(cx, cy + r + 3.4));
+    p.drawLine(QPointF(cx - r - 3.4, cy), QPointF(cx - r - 0.8, cy));
+    p.drawLine(QPointF(cx + r + 0.8, cy), QPointF(cx + r + 3.4, cy));
+}
+
+void drawDayNight(QPainter &p)
+{
+    const double cx = 10.0, cy = 10.0, r = 6.6;
+    QPainterPath path;
+    path.moveTo(cx, cy - r);
+    path.arcTo(QRectF(cx - r, cy - r, r * 2, r * 2), 90, 180);
+    path.lineTo(cx, cy);
+    path.closeSubpath();
+    p.fillPath(path, QBrush(kInk));
+    p.setPen(mkPen(1.7));
+    p.setBrush(Qt::NoBrush);
+    p.drawEllipse(QRectF(cx - r, cy - r, r * 2, r * 2));
+    p.drawLine(QPointF(cx, cy - r), QPointF(cx, cy + r));
+}
+
+void drawGrid(QPainter &p)
+{
+    const double x0 = 3.8, y0 = 3.8, s = 12.4, d = s / 3.0;
+    p.setPen(mkPen(1.5));
+    p.setBrush(Qt::NoBrush);
+    p.drawRect(QRectF(x0, y0, s, s));
+    p.drawLine(QPointF(x0 + d, y0), QPointF(x0 + d, y0 + s));
+    p.drawLine(QPointF(x0 + 2 * d, y0), QPointF(x0 + 2 * d, y0 + s));
+    p.drawLine(QPointF(x0, y0 + d), QPointF(x0 + s, y0 + d));
+    p.drawLine(QPointF(x0, y0 + 2 * d), QPointF(x0 + s, y0 + 2 * d));
+}
+
+void drawMenu(QPainter &p)
+{
+    p.setPen(mkPen(1.9));
+    const double x0 = 3.6, x1 = 16.4;
+    p.drawLine(QPointF(x0, 5.6),  QPointF(x1, 5.6));
+    p.drawLine(QPointF(x0, 10.0), QPointF(x1, 10.0));
+    p.drawLine(QPointF(x0, 14.4), QPointF(x1, 14.4));
+}
+
+void drawPlus(QPainter &p)
+{
+    p.setPen(mkPen(2.0));
+    p.drawLine(QPointF(5.0, 10.0), QPointF(15.0, 10.0));
+    p.drawLine(QPointF(10.0, 5.0), QPointF(10.0, 15.0));
+}
+
+void drawTrack(QPainter &p)
+{
+    p.setPen(mkPen(1.8));
+    p.setBrush(Qt::NoBrush);
+    QPainterPath path;
+    path.moveTo(3.4, 15.0);
+    path.lineTo(8.6, 9.2);
+    path.lineTo(12.2, 12.4);
+    path.lineTo(16.6, 4.6);
+    p.drawPath(path);
+    p.setBrush(QBrush(kInk));
+    p.setPen(Qt::NoPen);
+    p.drawEllipse(QRectF(1.6, 13.2, 3.6, 3.6));
+    p.setBrush(Qt::NoBrush);
+    p.setPen(mkPen(1.6));
+    p.drawEllipse(QRectF(14.4, 2.4, 4.4, 4.4));
+}
+
+void drawVia(QPainter &p)
+{
+    const double cx = 10.0, cy = 7.5, r = 4.8;
+    p.setPen(mkPen(1.7));
+    p.setBrush(Qt::NoBrush);
+    p.drawEllipse(QRectF(cx - r, cy - r, r * 2, r * 2));
+    p.setBrush(QBrush(kInk));
+    p.setPen(Qt::NoPen);
+    p.drawEllipse(QRectF(cx - 1.6, cy - 1.6, 3.2, 3.2));
+    p.setPen(mkPen(1.5));
+    p.setBrush(QBrush(kInk));
+    QPainterPath tri;
+    tri.moveTo(cx - 2.2, cy + r - 0.4);
+    tri.lineTo(cx + 2.2, cy + r - 0.4);
+    tri.lineTo(cx, cy + r + 3.4);
+    tri.closeSubpath();
+    p.drawPath(tri);
+}
+
+}  /* namespace */
+
+void qt_draw_icon(QPainter &p, Qt::IconKind kind, double size)
+{
+    const double s = size / kBase;
+    p.save();
+    p.scale(s, s);
+    p.setPen(mkPen(1.8));
+    p.setBrush(Qt::NoBrush);
+
+    switch (kind) {
+    case Qt::IconKind::Search:
+    case Qt::IconKind::ZoomIn:  drawMagnifier(p, true);  break;
+    case Qt::IconKind::ZoomOut: drawMagnifier(p, false); break;
+    case Qt::IconKind::Locate:  drawLocate(p);            break;
+    case Qt::IconKind::DayNight:drawDayNight(p);          break;
+    case Qt::IconKind::Grid:    drawGrid(p);              break;
+    case Qt::IconKind::Menu:    drawMenu(p);              break;
+    case Qt::IconKind::Plus:    drawPlus(p);              break;
+    case Qt::IconKind::Track:   drawTrack(p);             break;
+    case Qt::IconKind::Via:     drawVia(p);               break;
+    }
+    p.restore();
+}
+
+QPixmap qt_make_icon(Qt::IconKind kind, int logicalSize)
+{
+    QPixmap pm(kBase * kScale, kBase * kScale);
+    pm.setDevicePixelRatio(kScale);
+    pm.fill(Qt::transparent);
+
+    QPainter p(&pm);
+    p.setRenderHint(QPainter::Antialiasing, true);
+    p.scale(kScale, kScale);
+    qt_draw_icon(p, kind, kBase);
+    p.end();
+
+    if (logicalSize > 0 && logicalSize != kBase) {
+        QPixmap out = pm.scaled(logicalSize * kScale, logicalSize * kScale,
+                                Qt::KeepAspectRatio, Qt::SmoothTransformation);
+        out.setDevicePixelRatio(kScale);
+        return out;
+    }
+    return pm;
+}
+```
+
+### 3.8 中文字体注册 `src/ui_qt/qt_font.h` + `qt_font.cpp`（完整）
+
+```cpp
+#ifndef NAVIMAP_QT_FONT_H
+#define NAVIMAP_QT_FONT_H
+
+#include <QString>
+
+/* 把 C 侧自带的字体（含 DroidSansFallback = CJK）注册进 Qt 字体库，
+ * 并设置应用默认字体为"中英回退链"。 */
+QString qt_setup_fonts(int pointSize);
+
+#endif
+```
+
+```cpp
+/* qt_font.cpp —— Qt 前端的中文字体接入。
+ * 问题：Qt 控件的文字由 Qt 自己绘制，走 Qt 的字体系统；地图上的文字由 C 侧
+ * stb_truetype 画，两套字体互不相干 ⇒ 没装中文字体的机器上，Qt 控件中文是方框。
+ * 解法：把 C 侧自带的字体注册进 Qt 的字体数据库。
+ */
+#include "qt_font.h"
+
+#include <QApplication>
+#include <QFont>
+#include <QFontDatabase>
+#include <QFontInfo>
+#include <QFontMetrics>
+#include <QString>
+#include <QStringList>
+
+#include <cstdio>
+
+extern "C" {
+#include "render/font.h"
+#include "utils/plat.h"
+}
+
+/* 这个字体**文件**里有没有"中"字形？直接查 cmap，不依赖 Qt 的度量。 */
+static bool file_has_cjk(const char *path)
+{
+    Font *f = font_open(path, 14);
+    if (!f) return false;
+    int face = -1, gi = -1, w = 0, h = 0, nz = 0;
+    bool ok = false;
+    if (font_probe_glyph(f, 0x4E2D /* 中 */, &face, &gi, &w, &h, &nz)) {
+        ok = (gi != 0) && (nz > 0);
+    }
+    font_close(f);
+    return ok;
+}
+
+QString qt_setup_fonts(int pointSize)
+{
+    size_t n = 0;
+    const char *const *cands = nm_font_candidates(&n);
+
+    QStringList cjkFamilies;
+    QStringList allFamilies;
+    for (size_t i = 0; i < n; i++) {
+        if (!cands[i]) continue;
+        int id = QFontDatabase::addApplicationFont(QString::fromUtf8(cands[i]));
+        if (id < 0) continue;
+        QStringList fams = QFontDatabase::applicationFontFamilies(id);
+        bool cjk = file_has_cjk(cands[i]);
+        for (const QString &fam : fams) {
+            if (!allFamilies.contains(fam)) allFamilies.append(fam);
+            if (cjk && !cjkFamilies.contains(fam)) cjkFamilies.append(fam);
+            fprintf(stderr, "[qt-font]   文件 %-30s → 族 %-24s 含中文: %s\n",
+                    cands[i], fam.toUtf8().constData(), cjk ? "是" : "否");
+        }
+    }
+
+    const char *kSysCjk[] = {
+        "Microsoft YaHei", "SimSun", "SimHei", "KaiTi", "FangSong",
+        "Noto Sans CJK SC", "Noto Sans CJK TC", "Source Han Sans SC",
+        "WenQuanYi Micro Hei", "Droid Sans Fallback", "PingFang SC",
+    };
+    QStringList sysFams = QFontDatabase().families();
+    for (const char *name : kSysCjk) {
+        QString fam = QString::fromUtf8(name);
+        if (!sysFams.contains(fam)) continue;
+        if (!allFamilies.contains(fam)) allFamilies.append(fam);
+        if (!cjkFamilies.contains(fam)) cjkFamilies.append(fam);
+    }
+
+    if (cjkFamilies.isEmpty()) {
+        fprintf(stderr,
+                "[qt-font] 警告：没有可用中文字体，Qt 控件的中文会显示为方框"
+                "（地图上的文字不受影响：那是 C 侧 stb_truetype 画的）\n");
+        return QString();
+    }
+
+    QStringList chain = cjkFamilies;
+    for (const QString &fam : allFamilies) {
+        if (!chain.contains(fam)) chain.append(fam);
+    }
+    QFont app_font = QApplication::font();
+#if QT_VERSION >= QT_VERSION_CHECK(6, 0, 0)
+    app_font.setFamilies(chain);
+#else
+    app_font.setFamily(chain.first());
+#endif
+    app_font.setPointSize(pointSize > 0 ? pointSize : app_font.pointSize());
+    QApplication::setFont(app_font);
+
+    fprintf(stderr, "[qt-font] 中文字体: %s（候选 %d 个文件，可用中文字族 %d）\n",
+            cjkFamilies.first().toUtf8().constData(), (int)n, (int)cjkFamilies.size());
+    return cjkFamilies.first();
+}
+```
+
+### 3.9 下载对话框 `src/ui_qt/download_dialog.h`（完整）与 `download_dialog.cpp` 关键方法（完整）
+
+```cpp
+#pragma once
+#include <QDialog>
+#include <QVector>
+#include <QProcess>
+#include <functional>
+
+class QTreeWidget;
+class QTreeWidgetItem;
+class QLabel;
+class QLineEdit;
+class QProgressBar;
+class QPushButton;
+class QTextEdit;
+class QCheckBox;
+class QNetworkAccessManager;
+class QNetworkReply;
+class QProcess;
+class QFile;
+
+/* 一个可下载区域（Geofabrik）。叶子（kids 空）才有真实下载路径。 */
+struct GeoRegion {
+    QString name;
+    QString path;
+    QVector<GeoRegion> kids;
+};
+
+class DownloadDialog : public QDialog {
+public:
+    DownloadDialog(const QString &sourcesDir, const QString &repoRoot,
+                   QWidget *parent = nullptr);
+
+    bool selectByLeaf(const QString &leaf);
+    QString currentLeafForTest() const;
+    bool isLeafDownloaded(const QString &leaf) const;
+
+    void setOnFinished(std::function<void(const QString &name)> cb)
+    { m_onFinished = std::move(cb); }
+
+private:
+    bool regionDownloaded(const QString &path) const;
+    void refreshStatus();
+    QPair<int,int> refreshItem(QTreeWidgetItem *it);
+
+    void onSelChanged();
+    void startDownload();
+    void beginDownload();
+    void onHeadFinished(QNetworkReply *r);
+    void onReplyFinished(QNetworkReply *r);
+    void onDownloadProgress(qint64 got, qint64 total);
+    void onReadyRead();
+    void copyUrl();
+    void onConvertFinished(int code, QProcess::ExitStatus st);
+    void onConvertOutput();
+
+private:
+    void           fillTree(QTreeWidgetItem *parent, const QVector<GeoRegion> &rs);
+    QVector<GeoRegion> buildRegions() const;
+    QString        currentPath() const;
+    QString        currentUrl()  const;
+    QString        currentName() const;
+    void           runContoursGeneration();
+
+    QTreeWidget   *m_tree  = nullptr;
+    QLabel        *m_info  = nullptr;
+    QLineEdit     *m_url   = nullptr;
+    QProgressBar  *m_prog  = nullptr;
+    QTextEdit     *m_log   = nullptr;
+    QPushButton   *m_dl    = nullptr;
+    QPushButton   *m_copy  = nullptr;
+    QCheckBox          *m_contourCb = nullptr;
+    QPushButton   *m_close = nullptr;
+
+    QNetworkAccessManager *m_nam   = nullptr;
+    QNetworkReply         *m_reply = nullptr;
+    QFile                 *m_file  = nullptr;
+    QProcess              *m_proc  = nullptr;
+
+    QString m_sources;
+    QString m_repo;
+    QString m_target;
+    QString m_dlName;
+    std::function<void(const QString &name)> m_onFinished;
+};
+```
+
+```cpp
+DownloadDialog::DownloadDialog(const QString &sourcesDir, const QString &repoRoot,
+                               QWidget *parent)
+    : QDialog(parent), m_sources(sourcesDir), m_repo(repoRoot)
+{
+    setWindowTitle(QString::fromUtf8("下载地图（全球可下载区域 · Geofabrik）"));
+    resize(840, 580);
+
+    m_tree = new QTreeWidget;
+    m_tree->setHeaderLabel(QString::fromUtf8("可下载区域（✓已下载 ·未下载）"));
+    fillTree(m_tree->invisibleRootItem(), buildRegions());
+    refreshStatus();
+    m_tree->expandToDepth(0);
+
+    m_info = new QLabel(QString::fromUtf8("选择左侧一个地区，查看下载链接并下载。"));
+    m_url  = new QLineEdit; m_url->setReadOnly(true);
+    m_prog = new QProgressBar; m_prog->setRange(0, 100); m_prog->setValue(0);
+    m_log  = new QTextEdit; m_log->setReadOnly(true);
+    m_dl   = new QPushButton(QString::fromUtf8("下载并转换")); m_dl->setEnabled(false);
+    m_copy = new QPushButton(QString::fromUtf8("复制下载链接")); m_copy->setEnabled(false);
+    m_close= new QPushButton(QString::fromUtf8("关闭"));
+    m_contourCb = new QCheckBox(QString::fromUtf8("同时生成 SRTM 等高线"));
+
+    connect(m_tree, &QTreeWidget::itemSelectionChanged, this, &DownloadDialog::onSelChanged);
+    connect(m_dl,    &QPushButton::clicked, this, &DownloadDialog::startDownload);
+    connect(m_copy,  &QPushButton::clicked, this, &DownloadDialog::copyUrl);
+    connect(m_close, &QPushButton::clicked, this, &QDialog::accept);
+
+    m_nam = new QNetworkAccessManager(this);
+
+    auto *right = new QWidget;
+    auto *rv = new QVBoxLayout(right);
+    rv->addWidget(m_info);
+    rv->addWidget(m_url);
+    rv->addWidget(m_prog);
+    rv->addWidget(m_log, 1);
+    rv->addWidget(m_contourCb);
+    rv->addSpacing(6);
+    auto *hb = new QHBoxLayout;
+    hb->addWidget(m_dl); hb->addWidget(m_copy); hb->addStretch(1); hb->addWidget(m_close);
+    rv->addLayout(hb);
+
+    auto *hl = new QHBoxLayout(this);
+    hl->addWidget(m_tree, 1);
+    hl->addWidget(right, 1);
+}
+
+/* 按叶子名预选：递归找 path 最后一段 == leaf 的节点。 */
+bool DownloadDialog::selectByLeaf(const QString &leaf)
+{
+    if (leaf.isEmpty() || !m_tree) return false;
+
+    std::function<QTreeWidgetItem *(QTreeWidgetItem *)> walk =
+        [&](QTreeWidgetItem *parent) -> QTreeWidgetItem * {
+        for (int i = 0; i < parent->childCount(); i++) {
+            QTreeWidgetItem *it = parent->child(i);
+            QString path = it->data(0, ROLE_PATH).toString();
+            if (!path.isEmpty() && path.section('/', -1) == leaf) return it;
+            if (QTreeWidgetItem *sub = walk(it)) return sub;
+        }
+        return nullptr;
+    };
+
+    QTreeWidgetItem *hit = walk(m_tree->invisibleRootItem());
+    if (!hit) return false;
+
+    for (QTreeWidgetItem *p = hit->parent(); p; p = p->parent()) p->setExpanded(true);
+    m_tree->setCurrentItem(hit);
+    m_tree->scrollToItem(hit);
+    return true;
+}
+```
+
+> 说明：`buildRegions`（中国 34 省级 + 亚洲各国，约 `download_dialog.cpp:100`–`317`）、`fillTree`/`refreshStatus`/`startDownload`/`onConvertFinished` 等下载与转换流程方法，为控制篇幅仅列于头文件声明中，其完整实现可在 `src/ui_qt/download_dialog.cpp` 查阅。`DownloadDialog` 刻意不用 `Q_OBJECT`/`moc`，以 `std::function` 回调代替信号槽（见 `setOnFinished`）。
+
+## 四、与其他功能之间的联系
+
+- **上游（消费）**：第 9 课 `app_render_to_buf`（C 核心一行不动）、`mv_*` 投影/`mv_zoom_at`/`mv_clamp_zoom`/`mv_unproject`；第 12 课 `app_nav_poll`/`app_nav_sim_tick`/`app_nav_click`/`app_nav_clear`/`app_nav_fit`/`app_nav_sim_*`/`nav_voice_frame`（V 键经 `handleKey` 置 `app.voice_on`，接第 12 课 `voice_wire`）；第 11/12 课 `maneuver`/`RouteResult`/`Maneuver`（用于 `refreshSteps` 指令条）；`app_search_query`/`SearchHit`（搜索框与结果列表）。
+- **边界原则**：Qt 前端**不链 SDL**（`m_px` 自 `new uint32_t[]`，C 侧零 SDL）；叠加层只用 `QPainter`。`qt_ui=1` 时第 9 课 `paint_frame` 跳过 C 侧 chrome/搜索框/面板，由 Qt 真控件承担。
+- **字体两系统**：地图文字走 C 侧 `stb_truetype`（`render/font.c`），控件文字走 Qt；`qt_font.cpp` 把 C 侧 CJK 字体注册进 Qt，避免控件中文变豆腐块。
+- **下游 · 第 14 课**：被 `regress.sh` 的 `--shot-offscreen` 像素审计与 `offscreen_shot_main` 验收；`core_no_sdl` 锁死"Qt 不链 SDL"（`tools/core_no_sdl.c`）。
+
+## 五、演示、练习与验收
+
+- **演示**：`./build_rel/navmap_qt --graph=products/graph/beijing`（GUI 里缩放/平移/搜索/模拟导航/下载，肉眼确认交互）；`./build_rel/navmap_qt --shot=out.png`（无人值守出一张含 chrome 的截图）；`./build_rel/navmap_qt --ui-test`（无头 UI 自检，断言"搜索按钮→点击→输入框出现→Esc 收起"这条链）。
+- **练习**：
+  - 在 `map_canvas.cpp` 的 `paintEvent` 里加一行 `QPainter` 叠加（如角落画 FPS 文本），确认不影响 C 核心（C 渲染入口仍是 `app_render_to_buf`）。
+  - 在 `qt_icons.cpp` 里加一个自绘矢量图标（如 `drawStar`），在 `IconKind` 中登记并在右栏加一个 `IconButton`，确认不依赖任何字体符号。
+  - 在 `qt_font.cpp` 增加一种系统 CJK 字体候选，重新运行确认 `qt_setup_fonts` 把它纳入回退链。
+- **验收**：能说清
+  1. Qt 前端改了什么、C 核心为什么完全没动（`MapCanvas::renderNow` → `app_render_to_buf` → 包成 `QImage`）；
+  2. `QImage::Format_RGB32` 的坑（RGBA8888→黑屏、RGBX8888→红蓝互换）；
+  3. 浮层只淡底板、文字保持清晰的语义（`IconButton::paintEvent` 的 `bg.setAlpha(qRound(bg.alpha()*k))`）；
+  4. 字体符号不可用 ⇒ 图标必须自绘矢量路径（`qt_icons.cpp` 的 `draw*` 函数 + `qt_draw_icon`）；
+  5. `qt_font.cpp` 把 C 侧 CJK 字体注册进 Qt 的原因。
