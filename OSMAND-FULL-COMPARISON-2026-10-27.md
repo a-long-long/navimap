@@ -39,7 +39,7 @@
 | 合计 | **331 文件 / 64,400 行** | **145 文件 / 42,416 行** |
 | 最大文件 | `NavApp.java` **1,704**（旧报告 4,933） | `main_window.cpp` **1,723** / `plat.c` 1,634 / `graph_build.c` 1,544 |
 | 第三方依赖 | `lib/` **57 jar / 71 MB** + 官方引擎（`OsmAnd-java` 等，226 条 classpath） | Qt5（4 lib / 18 MB）+ sqlite3 / zlib / protobuf-c |
-| 发布体积 | `build/nav-dist` **374 MB**（内置 JRE） | `navmap_qt` **5.9 MB** + 运行期依赖 **62 MB**（33 个 .so） |
+| 发布体积 | `build/nav-dist` **374 MB**（内置 JRE） | `skedaddle` **5.9 MB** + 运行期依赖 **62 MB**（33 个 .so） |
 
 ### 1.2 门禁
 
@@ -49,7 +49,7 @@
 | 本轮实跑结果 | **`javac rc=0`，但有 4 个探针红**（见 §7.1） | 77 通过 / 3 失败，零警告 |
 | 静态检查 | `check.py` / `platform-scan.py` / `arch-scan.py`（包依赖方向）/ `method-length.py 59`（方法 ≤59 行铁律）/ `unused-import --strict` | 编译**零警告当失败**（`-Werror`，`--build` 把新警告当失败） |
 | 视觉回归 | `ab-pixel.py` 像素 A/B **零容忍** | `scripts/bmpdiff.py 旧 新` + 浮层透明度比值判据 |
-| 额外强度 | 每刀拆包四门槛 + 符号迁移扫描 + 全量复跑（战役期间实战抓出 3 类真问题） | 像素级"与 SDL 软渲染器逐字节等价"、`core_no_sdl` 架构边界负向对照 |
+| 额外强度 | 每刀拆包四门槛 + 符号迁移扫描 + 全量复跑（战役期间实战抓出 3 类真问题） | 像素级"与 SDL 软渲染器逐字节等价"、`skedaddle_core_no_sdl` 架构边界负向对照 |
 
 > ★ nav-desktop 的门禁复杂度已明显超过 navimap（81 项 + 6 类静态扫描 vs 80 项 + 零警告）。但它为此付出的代价是**门禁本身要维护**——`EVAL-SHRINK-CAMPAIGN` 里记着"验证体系自身有 2 处 harness bug"，本轮又实测到 4 个红项（§7.1）。**两边都不是全绿**：navimap 的 3 项红是本机缺 `lanes.bin`/`disp.idx`；nav-desktop 的 4 项红性质见 §7.1。
 >
@@ -68,7 +68,7 @@
 | OBF（官方格式） | ✅ | ❌ | navimap 仍不认 OBF，**最大的生态差距** |
 | `.osm.pbf` | 🟡 仅用于转换 | ✅ 原生 | |
 | 新地图自动识别 | ✅ 扫目录 | ✅ `manifest.txt` 指纹（`src_bytes`/`src_mtime`/`binfmt_version`） | navimap 判据更严 |
-| 离线转图 | ✅ 菜单内置官方 `IndexCreator` | ✅ `sync_maps.sh` + `pbf_info` 预检 | |
+| 离线转图 | ✅ 菜单内置官方 `IndexCreator` | ✅ `sync_maps.sh` + `skedaddle_pbf_info` 预检 | |
 | 在线下载地图 | ✅ 官方 `list.php` 1048 项 | ★ **✅ Qt 下载对话框**（Geofabrik 全球列表 + 分省下载） | **旧报告为 ❌，已补齐** |
 | 下载前查重/新鲜度 | 🟡 区域管理里覆盖 | ★ ✅ **`HEAD` 比对 `Last-Modified`/`Content-Length`，有更新才弹窗询问** | navimap 这一条比对方更细 |
 | 无图区提示 | ✅ 反查国家/省市区 + 下载按钮 | ★ ✅ **已对齐**：反查国家/省/市/区（省靠 bbox + 省会表推断，市/区靠地名库），弹窗按钮直接**预选**对应 Geofabrik 地区 | 旧报告为"只提示文字"；2026-10-27 补齐（`coverage_locate` + `label_nearest_admin` + `selectByLeaf`） |
@@ -86,7 +86,7 @@
 | 路名限流 | ✅ 同路最多 3 次 | ✅ LOD 分级（`kind<=12`） | |
 | 瓦片缓存 | ✅ 256 px + LRU + 异步渲染 | ❌ 每帧全量重画 | 见 §4「交互不卡的真相」 |
 | 在线瓦片 | ✅ XYZ / MBTiles / WMS + 父级兜底 | ❌ | |
-| 地形 / 等高线 | ✅ AWS terrarium 瓦片 + marching squares + Horn | 🟡 **代码全通、无数据**：`gen_contours` + `paint_contours` + O 键 + 设置项都在，但本机无 DEM 且 `beijing.osm.pbf` 的 `contour=0` | ★ 旧报告为 ❌；本轮已把"SRTM 自动下载"接上（`download_srtm.py`），但仍无实跑数据 |
+| 地形 / 等高线 | ✅ AWS terrarium 瓦片 + marching squares + Horn | 🟡 **代码全通、无数据**：`skedaddle_gen_contours` + `paint_contours` + O 键 + 设置项都在，但本机无 DEM 且 `beijing.osm.pbf` 的 `contour=0` | ★ 旧报告为 ❌；本轮已把"SRTM 自动下载"接上（`download_srtm.py`），但仍无实跑数据 |
 | 3D 视图 | ✅ 透视投影 + 仿射贴图 + Horn 光照 + 逐字贴地 + 深度图遮挡 | ❌ | |
 | 导出图片 | ✅ 1× 所见即所得 / 2~3× 矢量重渲 | 🟡 离屏 BMP（开发工具，非产品功能） | |
 
@@ -123,7 +123,7 @@
 |---|---|---|
 | 状态机 | ✅ 投影 / 距下一转向 / 剩余 / 偏航 / 到达 / 限速 | ✅ `navsim`（纯计算层，GUI 与 CLI 共用） |
 | **语音播报** | ✅ Windows SAPI 常驻 / POSIX `spd-say`→`espeak-ng`→…→静音 | ★ **✅ 已补**：`route/voice.c` **897 行**逐条移植官方 `VoiceRouter`（两级提前量 `PREPARE=speed×115s`/`TURN_IN=speed×22s`/`TURN_NOW≈6.7s`、相邻路口 150 m 合并、同文本 15 s 冷却、到达 200 m），`plat.c` 的 `nm_tts_speak` 用**同一套后端链** | **旧报告最大缺口，已闭合** |
-| 车道指示 | ✅ 官方 `TurnType.getLanes()` | ✅ `lanes.bin` + `lane_names.bin`（本机 tianjin 未生成 ⇒ `lane_selftest` FAIL） |
+| 车道指示 | ✅ 官方 `TurnType.getLanes()` | ✅ `lanes.bin` + `lane_names.bin`（本机 tianjin 未生成 ⇒ `skedaddle_lane_selftest` FAIL） |
 | 沿线告警 | ✅ **13 类**（`AlarmType.java`） | 🟡 **7 类**（测速/限速/收费站/铁路道口/停车让行/人行横道/隧道+危桥） | 差 6 类 |
 | 转向箭头 | ✅ 自绘矢量 | ✅ 底部指令条大字 |
 | 自动缩放 / 指北针 | ✅ 车速分档 + 路口拉近 + 指北针 | ✅ **指北针**（`drawCompass`，rot=0 隐藏）；自动拉近到 z15 |
@@ -150,14 +150,14 @@
 
 | 旧报告（9-30）结论 | 本轮（10-27）实测 | 依据 |
 |---|---|---|
-| ❌ 无语音播报 | **✅ 有**（897 行 `voice.c` + TTS 后端链 + `voice_e2e` 门禁） | `src/route/voice.c`、`src/ui/voice_wire.c`、`src/utils/plat.c:1127` |
-| ❌ 无 GPX | **✅ 有**（导入/导出/渲染，`gpx_selftest`/`gpx_render`/`gpx_persist` 门禁） | `src/map/gpx.c` |
+| ❌ 无语音播报 | **✅ 有**（897 行 `voice.c` + TTS 后端链 + `skedaddle_voice_e2e` 门禁） | `src/route/voice.c`、`src/ui/voice_wire.c`、`src/utils/plat.c:1127` |
+| ❌ 无 GPX | **✅ 有**（导入/导出/渲染，`skedaddle_gpx_selftest`/`gpx_render`/`gpx_persist` 门禁） | `src/map/gpx.c` |
 | ❌ 无收藏 | **✅ 有**（面板 + `tracks.db`） | `src/map/gpx.c:86-92`、`ui_qt/main_window.cpp` |
 | ❌ 无轨迹记录 | **✅ 有**（`gpx_store_add_track` + `trackdraw.c`） | `src/render/trackdraw.c` |
-| ❌ 无坐标系/网格 | **✅ 有**（4 基准 + GK3/GK6/UTM 网格） | `src/utils/datum.c`、`datum_selftest` |
+| ❌ 无坐标系/网格 | **✅ 有**（4 基准 + GK3/GK6/UTM 网格） | `src/utils/datum.c`、`skedaddle_datum_selftest` |
 | ❌ **完全没有持久化** | **✅ 有**（10 项 schema，退出写回） | `src/settings/settings.c` |
 | ❌ 单一方案 | **✅ 4 条方案**（最快/最短/避收费/避非铺装） | `src/route/route.h:79-90` |
-| ❌ 无车道 | **✅ 有**（`lanes.bin` + `lane_selftest`） | `src/map/mapset.h:60-62` |
+| ❌ 无车道 | **✅ 有**（`lanes.bin` + `skedaddle_lane_selftest`） | `src/map/mapset.h:60-62` |
 | ❌ 无昼夜 | **✅ 有** | `settings.c` `day_night` |
 | ❌ 无地图在线下载 | **✅ 有**（Qt 对话框 + HEAD 新鲜度比对） | `src/ui_qt/download_dialog.cpp` |
 | ❌ 无等高线/地形 | 🟡 代码全通、**无数据** | `tools/gen_contours.c`、`paint.c:937` |
@@ -179,10 +179,10 @@
 **同尺寸同中心**：1280×800，中心 39.13 / 117.20（天津）。
 
 **渲染取第二帧**（第一帧含懒初始化）。两边都**不用瓦片缓存、不限流**：
-- navimap = `navmap_qt --shot-offscreen` 打印的 `(第2帧 X)`，一帧 = 查询 + 整屏渲染；
+- navimap = `skedaddle --shot-offscreen` 打印的 `(第2帧 X)`，一帧 = 查询 + 整屏渲染；
 - nav-desktop = `RenderFrameBench` 的 `FRAME2_TOTAL`（= `FRAME2_QUERY` + `FRAME2_RENDER`）。
 
-**算路取多轮最小**：navimap = `route_cli --repeat=3` 的 repeat 2/3 最小值；nav-desktop = `RouteBench` 的末次 `compute`。
+**算路取多轮最小**：navimap = `skedaddle_route_cli --repeat=3` 的 repeat 2/3 最小值；nav-desktop = `RouteBench` 的末次 `compute`。
 
 **★ 负载必须记录**（本轮全程 **load 8.9 → 12.0**，8 核；环境自身（IDE）常占 ~120% CPU）。所以：
 - 多轮取最小，不取平均；
@@ -303,7 +303,7 @@ z13 r1 load=10.38 nm=29 nd=668/120/788 r2 load=10.59 nm=29 nd=513/99/612  r3 loa
 
 **★ 但"比基线快"这句话不能这么说——这是口径差异，不是优化。**
 
-基线那组（`116/56/42/31`）出自 `2026-10-22.md`，原文写着"**`map_shot`** 第二帧，每档 4 轮取最小"。而 `map_shot`（SDL 壳）已随 #88 删除，现在是 `navmap_qt --shot-offscreen`（纯 C 内存光栅，不建窗口、不上传纹理）。**两者是同名指标的不同执行路径。**
+基线那组（`116/56/42/31`）出自 `2026-10-22.md`，原文写着"**`map_shot`** 第二帧，每档 4 轮取最小"。而 `map_shot`（SDL 壳）已随 #88 删除，现在是 `skedaddle --shot-offscreen`（纯 C 内存光栅，不建窗口、不上传纹理）。**两者是同名指标的不同执行路径。**
 
 三条证据说明这不是"少画了"：
 
@@ -331,7 +331,7 @@ z13 r1 load=10.38 nm=29 nd=668/120/788 r2 load=10.59 nm=29 nd=513/99/612  r3 loa
 
 | 现象 | 根因（每条都追到数据/算法/语言/布局某一层） |
 |---|---|
-| navimap 算路快 45~89×（无 ALT） | ① **数据预先抽好**：`graph_extract` 离线压成扁平 CSR（28 B/节点、18 B/边），运行时只读顺序数据；nav-desktop 查询时经 `BinaryMapIndexReader` 现解 OBF、构造对象。② **算法**：navimap 是双向 A\*，对方是朴素 A\*（`visited=50,379` vs `展开=10,414`，搜索面差 4.8×）。③ **语言/布局**：C 扁平数组 vs Java 对象图。★ 注意：这三者里 **只有 ③ 是"语言"**，① 和 ② 都是可移植的架构选择。 |
+| navimap 算路快 45~89×（无 ALT） | ① **数据预先抽好**：`skedaddle_graph_extract` 离线压成扁平 CSR（28 B/节点、18 B/边），运行时只读顺序数据；nav-desktop 查询时经 `BinaryMapIndexReader` 现解 OBF、构造对象。② **算法**：navimap 是双向 A\*，对方是朴素 A\*（`visited=50,379` vs `展开=10,414`，搜索面差 4.8×）。③ **语言/布局**：C 扁平数组 vs Java 对象图。★ 注意：这三者里 **只有 ③ 是"语言"**，① 和 ② 都是可移植的架构选择。 |
 | navimap 渲染快 6.6~21.1× | ① **样式简单**：固定 4 层 vs 134 条规则属性的完整引擎。② **自写光栅化**：`raster.c` 逐像素写内存，绕开 SDL/Qt 每次绘制调用的固定开销。③ **无瓦片/无异步**：每帧全量重画，没有任务调度开销。④ **无 GC**：nav-desktop 的 query/render 抖动 3.4× 主要是 JVM GC，navimap 的耗时三轮不变。 |
 | nav-desktop 交互"不卡" | 靠 **256 px 瓦片 + LRU + 异步渲染**：冷帧 200~570 ms，但平移/缩放命中缓存后近乎免费。**navimap 没有这层，所以它必须把单帧本身压到 30 ms** —— 两个项目在这里做的是不同的赌注。 |
 | navimap 内存省（算路 8.1×） | 算路只 mmap 触发所需的 `nodes.bin`/`edges.bin` 页；navimap 渲染单省 159 MB 里大头是 **Qt5 + 字形缓存**（不是地图）。 |
@@ -432,8 +432,8 @@ z13 r1 load=10.38 nm=29 nd=668/120/788 r2 load=10.59 nm=29 nd=513/99/612  r3 loa
 ### 7.3 navimap 的问题
 
 1. **部署卖点过期，而且过期的是"上一版对比报告"**：`836 KB` 这个数字**不在 navimap 的 README、也不在项目记忆里**——它只出现在 `nav-desktop/NAVIMAP-COMPARISON.md:41`（9-30 那版对比，拍的是 SDL 时期）。所以严格说这不是 navimap 文档的错，是**那份对比报告没更新**（本报告已取代它）。现状：**5.9 MB 主程序 + 62 MB Qt5 依赖**。★ 这条我第一版写错了归因，已订正——**引用数字前要确认它到底写在哪**。
-2. **`lm.bin` 缺失是静默降级**：单省图上它只打印一行"已忽略，退回直线启发式"，退出码仍是 0。做基准测试时**极易在无加速状态下测出"navimap 变慢了"的假结论**（本轮就差点踩到）。建议 `route_cli` 在 `--repeat` 模式下把"地标表未加载"标成显著警告或直接非零码。
-3. **`lane_selftest` / `disp_tile_selftest` / `disp_runtime_selftest` 本机长期红**：`lanes.bin` 未生成、`disp.idx` 缺失。与本机只装了 8 省数据有关，但**红项长期存在会让人对门禁失去敏感**（nav-desktop 也记过同样的"红项疲劳"问题）。
+2. **`lm.bin` 缺失是静默降级**：单省图上它只打印一行"已忽略，退回直线启发式"，退出码仍是 0。做基准测试时**极易在无加速状态下测出"navimap 变慢了"的假结论**（本轮就差点踩到）。建议 `skedaddle_route_cli` 在 `--repeat` 模式下把"地标表未加载"标成显著警告或直接非零码。
+3. **`skedaddle_lane_selftest` / `skedaddle_disp_tile_selftest` / `skedaddle_disp_runtime_selftest` 本机长期红**：`lanes.bin` 未生成、`disp.idx` 缺失。与本机只装了 8 省数据有关，但**红项长期存在会让人对门禁失去敏感**（nav-desktop 也记过同样的"红项疲劳"问题）。
 4. **渲染基线的统计口径已失效，但基线没跟着换**：项目记忆写 `z9 116 / z11 56 / z13 42 / z15 31`，那是 `map_shot`（SDL 外壳）口径、2026-10-22 记的；`map_shot` 已删，现在唯一可信源是 `--shot-offscreen`，同视口 4 轮实测 **113 / 51 / 35 / 16**。差 −3/−5/−7/−15 ms 是口径差不是优化（详见 §3.5）。**危险在于：谁再拿新数字跟旧基线比，就会得出"快了 2 倍"的假结论。** 本报告已把项目记忆的基线换成新口径。
 
 ### 7.4 两侧共通
@@ -451,19 +451,19 @@ z13 r1 load=10.38 nm=29 nd=668/120/788 r2 load=10.59 nm=29 nd=513/99/612  r3 loa
 cd /home/along/navimap
 
 # 渲染（单省天津，第二帧；--shot-offscreen 是纯 C 离屏通道，不需显示环境）
-./build/navmap_qt --shot-offscreen --graph=products/graph/tianjin \
+./build/skedaddle --shot-offscreen --graph=products/graph/tianjin \
     --w=1280 --h=800 --lat=39.13 --lon=117.20 --zoom=12 --out=/tmp/x.bmp
 
 # 渲染（8 省）
-./build/navmap_qt --shot-offscreen --graph=products/graph \
+./build/skedaddle --shot-offscreen --graph=products/graph \
     --w=1280 --h=800 --lat=39.90 --lon=116.40 --zoom=9 --out=/tmp/x.bmp
 
 # 算路（第 2/3 次最小值）
-./build/route_cli --graph=products/graph/tianjin \
+./build/skedaddle_route_cli --graph=products/graph/tianjin \
     --from=39.1350,117.2100 --to=39.0740,117.0560 --repeat=3
 
 # 全量门禁（本轮 77 通过 / 3 失败，零警告；80 项）
-# ★ 跑它的时候**别同时编译**：navmap_qt 被重写成中间态 ⇒ 12 项 r_* 全变
+# ★ 跑它的时候**别同时编译**：skedaddle 被重写成中间态 ⇒ 12 项 r_* 全变
 #   rc=126「权限不够」，看着像大面积回归，其实是自己撞的。
 ./scripts/regress.sh --build
 

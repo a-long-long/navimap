@@ -1,6 +1,6 @@
-/* graph_check —— 对 graph_extract 的产物做结构自检。
+/* skedaddle_graph_check —— 对 skedaddle_graph_extract 的产物做结构自检。
  *
- * 用法：./graph_check <目录>
+ * 用法：./skedaddle_graph_check <目录>
  *
  * 为什么单独一个工具：图一旦上规模，肉眼不可能发现问题；而这些不变量
  * （文件大小自洽、CSR 连续、边下标不越界、经纬度在 bbox 内）一旦破了，

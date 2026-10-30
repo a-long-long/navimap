@@ -1,4 +1,4 @@
-/* gpx_selftest —— GPX 解析/写出/持久化自测（判据 GPX-OK）。
+/* skedaddle_gpx_selftest —— GPX 解析/写出/持久化自测（判据 GPX-OK）。
  *
  * 覆盖：
  *   1) 解析一份"脏"GPX：注释 / CDATA / BOM / CRLF / XML 实体 / 缺属性 /
@@ -8,7 +8,7 @@
  *   4) sqlite 存取往返 + 同名轨迹替换（不翻倍）+ fav 增删；
  *   5) 负向对照：把解析器的 lon 当 lat（注入）⇒ 第 1 条坐标判据 FAIL。
  *
- * 用法：gpx_selftest（自含，不依赖任何外部文件；sqlite 用临时目录）
+ * 用法：skedaddle_gpx_selftest（自含，不依赖任何外部文件；sqlite 用临时目录）
  */
 #include <stdio.h>
 #include <stdlib.h>
@@ -75,7 +75,7 @@ static int trk_eq(const GpxTrack *a, const GpxTrack *b)
 int main(void)
 {
     setvbuf(stdout, NULL, _IONBF, 0);
-    printf("== gpx_selftest ==\n");
+    printf("== skedaddle_gpx_selftest ==\n");
 
     /* ---------- 1) 解析脏 GPX ---------- */
     GpxStore s;

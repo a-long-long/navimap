@@ -64,10 +64,10 @@ run() {                       # run <名字> <必须出现的标记> <命令...>
 
 shot() {                      # shot <名字> <省目录|graph> <lat> <lon> <zoom>
     local name=$1 g=$2 la=$3 lo=$4 z=$5
-    # #87：离屏判据从 map_shot 迁到 navmap_qt --shot-offscreen（与 map_shot 同源、
+    # #87：离屏判据从 map_shot 迁到 skedaddle --shot-offscreen（与 map_shot 同源、
     # 审计逐字节一致的单可信源）。--shot-offscreen 在 Qt 初始化前就走纯 C 离屏通道，
     # 不建窗口、不链 SDL、不依赖显示环境（QT_QPA_PLATFORM / SDL_VIDEODRIVER 都不用）。
-    run "$name" "ASSERT-OK" "$BUILD/navmap_qt" --shot-offscreen --graph="$g" \
+    run "$name" "ASSERT-OK" "$BUILD/skedaddle" --shot-offscreen --graph="$g" \
         --lat="$la" --lon="$lo" --zoom="$z" --w=1280 --h=800 \
         --out="$SHOTS/$name.bmp"
 }
@@ -89,7 +89,7 @@ shot() {                      # shot <名字> <省目录|graph> <lat> <lon> <zoo
 area_lod_tier() {             # area_lod_tier <名字> <zoom> <dotted_lo> <dotted_hi> <drawn>
     local name=$1 z=$2 lo=$3 hi=$4 want_drawn=$5
     local log="$SHOTS/$name.log"
-    "$BUILD/navmap_qt" --shot-offscreen --graph="$GRAPH" \
+    "$BUILD/skedaddle" --shot-offscreen --graph="$GRAPH" \
         --lat=39.90 --lon=116.40 --zoom="$z" --w=1280 --h=800 \
         --out="$SHOTS/$name.bmp" >"$log" 2>&1
     local rc=$?
@@ -148,15 +148,15 @@ area_lod_tier area_lod_z11 11 19500  22500  36568
 area_lod_tier area_lod_z13 13 21000  24000  37661
 
 echo "=== 路网 / 导航 / 限制 / 索引"
-run route_cross "ROUTE-OK"  "$BUILD/route_cli"  --graph="$GRAPH" --from=39.90,116.40 --to=34.75,113.62
-run navsim_bj   "NAVSIM-OK" "$BUILD/navsim_cli" --graph="$GRAPH" --from=39.90,116.40 --to=39.95,116.45
-run navsim_tj   "NAVSIM-OK" "$BUILD/navsim_cli" --graph="$GRAPH" --from=39.13,117.20 --to=39.18,117.26
-run navsim_xa   "NAVSIM-OK" "$BUILD/navsim_cli" --graph="$GRAPH" --from=34.34,108.94 --to=34.38,109.02
+run route_cross "ROUTE-OK"  "$BUILD/skedaddle_route_cli"  --graph="$GRAPH" --from=39.90,116.40 --to=34.75,113.62
+run navsim_bj   "NAVSIM-OK" "$BUILD/skedaddle_navsim_cli" --graph="$GRAPH" --from=39.90,116.40 --to=39.95,116.45
+run navsim_tj   "NAVSIM-OK" "$BUILD/skedaddle_navsim_cli" --graph="$GRAPH" --from=39.13,117.20 --to=39.18,117.26
+run navsim_xa   "NAVSIM-OK" "$BUILD/skedaddle_navsim_cli" --graph="$GRAPH" --from=34.34,108.94 --to=34.38,109.02
 # 转向限制的定向 A/B 对照。必须用全图集（$GRAPH）：
 #   1. only_*（381 条）在 2026-09-23 之前根本没接进路由，光"路径自检通过"
 #      证明不了它在拦东西——判据要双向：关限制时能走出被禁转向，开限制时必须走不出来。
 #   2. 副本省（beijing/tianjin ⊂ hebei）的限制在运行时是不展开的死数据，
-#      restr_ab 会跳过它们并打印条数；已核对过 hebei 的限制集合在坐标层面完整
+#      skedaddle_restr_ab 会跳过它们并打印条数；已核对过 hebei 的限制集合在坐标层面完整
 #      覆盖了这两省的所有限制路口，所以跳过不等于漏检。
 run_neg() {                   # run_neg <名字> <期望出现的失败标记> <命令...>
     # 与 run 相反：**命令必须失败**（返回非 0 且出现标记）。
@@ -175,17 +175,17 @@ run_neg() {                   # run_neg <名字> <期望出现的失败标记> <
     fi
 }
 
-run restr_ab    "RESTR-AB-OK" "$BUILD/restr_ab" --graph="$GRAPH" --probe=40 --only=60
+run skedaddle_restr_ab    "RESTR-AB-OK" "$BUILD/skedaddle_restr_ab" --graph="$GRAPH" --probe=40 --only=60
 # ↑ 的负向对照：只把"会合点处的限制检查"关掉，其余限制全开。
 #   这一条**必须失败**——它是整套限制判据有效性的前提。实测：
 #   关掉后 via=way 20 条里 19 条、only_* 30 组里 30 组会重新走出被禁转向。
-run_neg restr_ab_noseam "RESTR-AB-FAIL" "$BUILD/restr_ab" --graph="$GRAPH" \
+run_neg restr_ab_noseam "RESTR-AB-FAIL" "$BUILD/skedaddle_restr_ab" --graph="$GRAPH" \
         --probe=20 --only=30 --no-seam-restr
 # ---- 反向索引落盘 rev.bin：三条判据（PLAN.md §35）----
 # 1) 逐元素一致：落盘结果 == 内存构建。写盘 / 读盘 / 内存构建三条路共用
 #    同一份 rev_build_mem()，所以这条断言能同时抓住写坏和读坏
 #    （各写一份构建代码的话，比的是两份 bug，谁错都一样）。
-run rev_verify "REV-VERIFY-OK" "$BUILD/revbuild_cli" --graph="$GRAPH" --verify
+run rev_verify "REV-VERIFY-OK" "$BUILD/skedaddle_revbuild_cli" --graph="$GRAPH" --verify
 
 # 2) 回退路径必须活着：临时图集只链数据、不链 rev.bin（符号链接，零复制），
 #    路由必须照常算出**同样**的里程。"没有缓存就自己建"这条自愈路径平时
@@ -218,9 +218,9 @@ printf '\xff' | dd of="$REVT/bad/liaoning/rev.bin" bs=1 seek=100 conv=notrunc 2>
 
 LN_FROM=41.8057,123.4315
 LN_TO=38.9140,121.6147
-run rev_cached "ROUTE-OK" "$BUILD/route_cli" --graph="$REVT/ok"   --from=$LN_FROM --to=$LN_TO
-run rev_norev  "ROUTE-OK" "$BUILD/route_cli" --graph="$REVT/none" --from=$LN_FROM --to=$LN_TO
-run rev_bad_strict "建反向索引" env NAVIMAP_REV_STRICT=1 "$BUILD/route_cli" \
+run rev_cached "ROUTE-OK" "$BUILD/skedaddle_route_cli" --graph="$REVT/ok"   --from=$LN_FROM --to=$LN_TO
+run rev_norev  "ROUTE-OK" "$BUILD/skedaddle_route_cli" --graph="$REVT/none" --from=$LN_FROM --to=$LN_TO
+run rev_bad_strict "建反向索引" env NAVIMAP_REV_STRICT=1 "$BUILD/skedaddle_route_cli" \
         --graph="$REVT/bad" --from=$LN_FROM --to=$LN_TO
 
 # 有缓存 / 没缓存 必须给出**同一条**路线（里程逐位相同）
@@ -239,46 +239,46 @@ fi
 #   ① 正向：该成功的必须成功（含 spawn 自己并原样带回退出码）；
 #   ② 负向：该失败的必须失败（不存在路径 / 空 PATH / 起不来的进程）。
 # 两侧坏掉任何一侧都会红——不是"永远绿"的门禁。
-run plat_selftest     "ASSERT-OK" "$BUILD/plat_selftest"
-run plat_selftest_neg "ASSERT-OK" "$BUILD/plat_selftest" --negative
+run skedaddle_plat_selftest     "ASSERT-OK" "$BUILD/skedaddle_plat_selftest"
+run plat_selftest_neg "ASSERT-OK" "$BUILD/skedaddle_plat_selftest" --negative
 
 # ---- 设置持久化（完整设置系统）----
-run settings_selftest "SETTINGS-OK" "$BUILD/settings_selftest"
+run skedaddle_settings_selftest "SETTINGS-OK" "$BUILD/skedaddle_settings_selftest"
 
 # ---- 语音播报（离线 TTS）----
-run tts_selftest "TTS-OK" "$BUILD/tts_selftest"
+run skedaddle_tts_selftest "TTS-OK" "$BUILD/skedaddle_tts_selftest"
 
 # ---- 语音播报策略（抄写 OsmAnd 官方：分级提前量 / 中文话术 / 节奏 / 沿路告警）----
 # 纯逻辑、无头可跑；期望值全部来自官方源码（AnnounceTimeDistances / nav-desktop
 # VoiceRouter / Alarm / AlarmType / Units / Alarms）。
-run voice_selftest "VOICE-OK" "$BUILD/voice_selftest"
+run skedaddle_voice_selftest "VOICE-OK" "$BUILD/skedaddle_voice_selftest"
 
 # ---- 语音播报**端到端**（走生产接线 nav_voice_frame，验证"窗口真的播了"）----
 # 用 NAVIMAP_TTS_DRYRUN 截下 nm_tts_speak 交出去的话来断言；单函数自测抓不到接线 bug。
-run voice_e2e "VOICE-E2E-OK" "$BUILD/voice_e2e"
+run skedaddle_voice_e2e "VOICE-E2E-OK" "$BUILD/skedaddle_voice_e2e"
 
 # ---- 多方案对比（阶段 12）----
-run alts_selftest "ALTS-OK" "$BUILD/alts_selftest"
+run skedaddle_alts_selftest "ALTS-OK" "$BUILD/skedaddle_alts_selftest"
 
 # ---- 车道指示（turn:lanes）----
 # 数据链路：beijing 图含 lanes.bin，mapset 能按 (省,边) 取出合法车道串。
-run lane_selftest "LANE-OK" "$BUILD/lane_selftest" --graph="$GRAPH/beijing"
+run skedaddle_lane_selftest "LANE-OK" "$BUILD/skedaddle_lane_selftest" --graph="$GRAPH/beijing"
 
 # ---- PBF 显示层后台异步解码（不阻塞主线程 + 进度回调 + 解码完成）----
-run dmap_selftest "DMAP-OK" "$BUILD/dmap_selftest" "$GRAPH" "$ROOT/sources"
+run skedaddle_dmap_selftest "DMAP-OK" "$BUILD/skedaddle_dmap_selftest" "$GRAPH" "$ROOT/sources"
 
 # ---- 显示层分 tile（抽取期切好，运行时按需加载；覆盖性：整省要素无丢失）----
-run disp_tile_selftest "DISP-TILE-OK" "$BUILD/disp_tile_selftest" --graph="$GRAPH/beijing"
-run disp_runtime_selftest "DISP-RUNTIME-OK" "$BUILD/disp_runtime_selftest" --graph="$GRAPH/beijing"
-run gpx_selftest "GPX-OK" "$BUILD/gpx_selftest"
+run skedaddle_disp_tile_selftest "DISP-TILE-OK" "$BUILD/skedaddle_disp_tile_selftest" --graph="$GRAPH/beijing"
+run skedaddle_disp_runtime_selftest "DISP-RUNTIME-OK" "$BUILD/skedaddle_disp_runtime_selftest" --graph="$GRAPH/beijing"
+run skedaddle_gpx_selftest "GPX-OK" "$BUILD/skedaddle_gpx_selftest"
 
 # ---- 坐标系（大地基准）：WGS84/CGCS2000/北京54/西安80 枚举/恒等/往返/偏移自测 ----
-run datum_selftest "DATUM-OK" "$BUILD/datum_selftest"
+run skedaddle_datum_selftest "DATUM-OK" "$BUILD/skedaddle_datum_selftest"
 
 # ---- 去 SDL 化的三条门禁（方案2）----
 #
-# 背景：navimap_core 已做到"零 SDL"，Qt 前端（navmap_qt）一行 SDL 都不链，
-# SDL 只存在于两个**去 SDL 化对照体**（blend_equiv / clip_equiv，它们必须链
+# 背景：navimap_core 已做到"零 SDL"，Qt 前端（skedaddle）一行 SDL 都不链，
+# SDL 只存在于两个**去 SDL 化对照体**（skedaddle_blend_equiv / skedaddle_clip_equiv，它们必须链
 # SDL 才能跟 SDL 软渲染器逐像素对拍）。这条边界一旦被悄悄放宽，
 # 编译照样过、运行照样正常，只是 Qt 前端又背上了 SDL2.dll 依赖 —— 直到某天
 # 在没装 SDL 的机器上构建才炸。所以必须把边界**钉成可断言的判据**。
@@ -287,22 +287,22 @@ run datum_selftest "DATUM-OK" "$BUILD/datum_selftest"
 #    自写 raster_px_rgba 与 SDL 的混色公式差 1 级（SDL 是两项分别除 255 再相加，
 #    我们原先是一次除），13.9% 的色值对不上 ⇒ 画面上"同一块面板深浅略不同"。
 #    肉眼看不出，但逐像素比对会报差异 —— 这正是它该被门禁住的原因。
-run blend_equiv "BLEND-EQUIV-OK" "$BUILD/blend_equiv"
+run skedaddle_blend_equiv "BLEND-EQUIV-OK" "$BUILD/skedaddle_blend_equiv"
 
 # ② 线段裁剪与 SDL_IntersectRectAndLine 等价：
 #    手写 Cohen-Sutherland 与 SDL 的实现在 34.3% 的越界线段上差 1 像素，
 #    症状是"画布边缘的路多/少一像素"。已按 SDL 的 SDL_rect_impl.h 逐字重写。
-run clip_equiv "CLIP-EQUIV-OK" "$BUILD/clip_equiv"
+run skedaddle_clip_equiv "CLIP-EQUIV-OK" "$BUILD/skedaddle_clip_equiv"
 
 # ③ 架构边界：核心与 Qt 前端零 SDL 符号；对照体**必须**链 SDL（负向对照，
 #    证明检查器不是"永远绿"的空壳）。
-#   产物名要补后缀：Windows 上是 navmap_qt.exe，Linux 上是 navmap_qt。
-if [ -x "$BUILD/core_no_sdl" ]; then
+#   产物名要补后缀：Windows 上是 skedaddle.exe，Linux 上是 skedaddle。
+if [ -x "$BUILD/skedaddle_core_no_sdl" ]; then
     exefile() { if [ -x "$1.exe" ]; then echo "$1.exe"; else echo "$1"; fi; }
-    run core_no_sdl "CORE-NO-SDL-OK" "$BUILD/core_no_sdl" \
-        "$(exefile "$BUILD/navmap_qt")" "$BUILD/libnavimap_core.a"
-    run core_no_sdl_sdl "CORE-NO-SDL-OK" "$BUILD/core_no_sdl" --expect-sdl \
-        "$(exefile "$BUILD/blend_equiv")"
+    run skedaddle_core_no_sdl "CORE-NO-SDL-OK" "$BUILD/skedaddle_core_no_sdl" \
+        "$(exefile "$BUILD/skedaddle")" "$BUILD/libnavimap_core.a"
+    run core_no_sdl_sdl "CORE-NO-SDL-OK" "$BUILD/skedaddle_core_no_sdl" --expect-sdl \
+        "$(exefile "$BUILD/skedaddle_blend_equiv")"
 fi
 
 # ④ 分层方向门禁（PLAN.md §53 R3）：模块依赖方向必须保持 DAG。
@@ -336,13 +336,13 @@ fi
 #
 # 判据是查字体文件**本身**的 cmap（stb_truetype 的 FindGlyphIndex）
 # 且要求光栅化后非零像素 > 0 —— 只看 index 会漏掉"有字形但画不出"的情况。
-run font_cjk "FONT-CJK-OK" "$BUILD/font_cjk_check"
+run font_cjk "FONT-CJK-OK" "$BUILD/skedaddle_font_cjk_check"
 
 # ★ 负向对照：--negative 断言**检测逻辑本身**正反两侧都对 ——
 #   无中文字体必须被判成"无中文"，有中文字体必须被判成"有中文"。
 #   （不要用"把字体藏起来"那种对照：藏起自带字体后系统字体还在，
 #     判据照样通过 ⇒ 那种对照是假的，测不出检查器有没有在干活。）
-run font_cjk_neg "FONT-CJK-OK" "$BUILD/font_cjk_check" --negative
+run font_cjk_neg "FONT-CJK-OK" "$BUILD/skedaddle_font_cjk_check" --negative
 
 # ---- Qt 前端的 UI 交互自检 ----
 #
@@ -356,7 +356,7 @@ run font_cjk_neg "FONT-CJK-OK" "$BUILD/font_cjk_check" --negative
 #
 # ★ 负向对照已实测：把 eventFilter 里的 hideSearch() 去掉 ⇒ 立刻报 2 项 FAIL。
 #
-# ★ Windows(MSYS2) 上跑 navmap_qt.exe 需要 Qt 的 bin 进 PATH（否则加载 DLL 失败，
+# ★ Windows(MSYS2) 上跑 skedaddle.exe 需要 Qt 的 bin 进 PATH（否则加载 DLL 失败，
 #   表现成"命令不存在"）。**编译期**反过来：PATH 里不能有 Qt bin（cc1plus 会加载
 #   到不匹配的 libstdc++ 静默死掉，见 scripts/cc_retry.sh）——所以这里只在
 #   **运行** Qt 前端时临时加，构建照旧走 build_win.sh。
@@ -368,7 +368,7 @@ qt_run() {
         env QT_QPA_PLATFORM=offscreen "$@"
     fi
 }
-if [ -x "$BUILD/navmap_qt" ] || [ -x "$BUILD/navmap_qt.exe" ]; then
+if [ -x "$BUILD/skedaddle" ] || [ -x "$BUILD/skedaddle.exe" ]; then
     exefile2() { if [ -x "$1.exe" ]; then echo "$1.exe"; else echo "$1"; fi; }
     # ★ ui-test 必须**用独立配置目录**跑：它断言"浮层默认透明度 75%"，
     #   读的是真实设置文件。而设置文件会被程序退出时写回（app_persist_settings），
@@ -382,56 +382,56 @@ if [ -x "$BUILD/navmap_qt" ] || [ -x "$BUILD/navmap_qt.exe" ]; then
     printf 'day_night=0\nshow_panel=1\nshow_poi=1\nshow_labels=1\nvoice_on=1\nmode=0\nfont_size=14\nmax_class=4\nview_lat=39.94\nview_lon=116.405\nview_zoom=13\ndatum=0\ngrid_type=1\nalpha_search=75\nalpha_rcol=75\n' > "$CFG_UIT/navimap/settings.ini"
     run qt_ui_test "QT-UI-OK" qt_run \
         env APPDATA="$CFG_UIT/appdata" XDG_CONFIG_HOME="$CFG_UIT/xdg" \
-        "$(exefile2 "$BUILD/navmap_qt")" --ui-test --w=900 --h=600
+        "$(exefile2 "$BUILD/skedaddle")" --ui-test --w=900 --h=600
 fi
 
 # ---- 优先队列：每次 pop 必须是当前最小值（PLAN.md §37）----
 # 堆坏了不会崩，只会让 A* 悄悄弹出非最小节点、路线变长。所以要有专门判据：
 # 20 万次随机操作，每次 pop 与**独立参考实现**对拍 + 多重集比对 + 堆不变式。
-run heap_order "HEAP-SELFTEST-OK" "$BUILD/heap_selftest"
+run heap_order "HEAP-SELFTEST-OK" "$BUILD/skedaddle_heap_selftest"
 
 # 双向判据的另一半：故意写坏的实现（不上浮 / 取最后一个元素）**必须**被抓出来。
 # 分辨力验过：把"下沉漏掉最后一个子节点"或"父下标算错"注入 pqueue.h，
 # 都会被这条判据报出 4~6 万处违规 —— 也就是改叉数这类改动是有人盯着的。
-run heap_guard "HEAP-SELFTEST-DIFF-OK" "$BUILD/heap_selftest" --expect-fail
+run heap_guard "HEAP-SELFTEST-DIFF-OK" "$BUILD/skedaddle_heap_selftest" --expect-fail
 
 # 堆的**稳态微基准**（PLAN.md §43）：把 pq_pop 放大到 100% 才测得准 —— 它在
 # 全链路里只占 6.8%（京→郑 72 ms），改它的收益会被 ±50 ms 的运行间噪声吃掉。
 # 判据是**双实现在同一进程里对照**（逐层交换 vs 空穴法，两者跑同一份初始堆、
 #    同一串伪随机数），外加 FNV-1a 摘要：换实现后两者必须**逐位相同** ——
 #    这能排除"变快了是因为语义改错了"。
-run heap_bench "HEAP-BENCH" "$BUILD/heap_selftest" --bench=6019,2000000,3
+run heap_bench "HEAP-BENCH" "$BUILD/skedaddle_heap_selftest" --bench=6019,2000000,3
 
 # ---- 瓦片下标：查表版 vs 精确版 逐点等价（PLAN.md §36）----
 # ① 全图 5228 万个真实节点逐点比，外加定向构造的 49 万个"正好落在瓦片边界上"
 #    的点（按瓦片单位扰动）。nm_tile_of 取错瓦片 ⇒ 缝合成员查错 ⇒ 路线错，
 #    而误差只有万分之几个点会触发，**抽样测不出来**。
-run tile_eq "TILE-SELFTEST-OK" "$BUILD/tile_selftest" --graph="$GRAPH"
+run tile_eq "TILE-SELFTEST-OK" "$BUILD/skedaddle_tile_selftest" --graph="$GRAPH"
 
 # ② 双向判据的另一半：不带边界回退的 raw 版**必须**有差异，否则说明那条回退
 #    分支是死代码（或者查表精度被改了）。两条互斥，任一条变了都会有一边报警。
 #    实测：raw 版在北京就有 1167 个真实节点取错瓦片 ⇒ 回退不是摆设。
-run tile_guard_needed "TILE-SELFTEST-DIFF-OK" "$BUILD/tile_selftest" --graph="$GRAPH" --expect-diff
+run tile_guard_needed "TILE-SELFTEST-DIFF-OK" "$BUILD/skedaddle_tile_selftest" --graph="$GRAPH" --expect-diff
 
-run tile_xcheck "不一致的坐标 : 0" "$BUILD/tile_xcheck"
-run coverage    "覆盖=有路网"  "$BUILD/coverage_cli"
+run skedaddle_tile_xcheck "不一致的坐标 : 0" "$BUILD/skedaddle_tile_xcheck"
+run coverage    "覆盖=有路网"  "$BUILD/skedaddle_coverage_cli"
 
 # 无图区提示的"反查 + 一键下载"整链（2026-10-27）：
 # 把"这里没有地图数据"改成"这是哪儿（国家/省/市/区）+ 该下哪一块 + 预选到那一项"，
 # 其中两处会**静默失效**：反查结果没传到弹窗、selectByLeaf 找不到叶子。
 # 两者都不报错、界面照样打开，只是按钮点下去停在树根 ⇒ 必须做成退出码。
 # 用 (30,110)（重庆方向、未下载）当样本：它不在 8 省任何 bbox 内，必然走反查分支。
-if [ -x "$BUILD/navmap_qt" ] || [ -x "$BUILD/navmap_qt.exe" ]; then
+if [ -x "$BUILD/skedaddle" ] || [ -x "$BUILD/skedaddle.exe" ]; then
     run nomap_prompt "nomap_select" qt_run \
-        "$(exefile2 "$BUILD/navmap_qt")" --graph="$GRAPH" \
+        "$(exefile2 "$BUILD/skedaddle")" --graph="$GRAPH" \
         --lat=30.0 --lon=110.0 --zoom=10 --w=1280 --h=800 \
         --shot=/tmp/navimap_regress/nomap.png --shot-nomap
 fi
-run search      "查询 中关村"  "$BUILD/search_cli"
+run search      "查询 中关村"  "$BUILD/skedaddle_search_cli"
 # 地名库自检：每条 place 都得能反查出 bigram，kind 不许超出 PLK_ROAD。
-# 以前缺这条判据的代价是实打实踩到的：places_build 刚加上路名那一刻，库里
+# 以前缺这条判据的代价是实打实踩到的：skedaddle_places_build 刚加上路名那一刻，库里
 # 5.7 万条被自检判为非法，而当时 21 项里没有一项会报警（地图照画、路照通）。
-run places_selftest "PLACES-OK" "$BUILD/places_build" --db="$ROOT/products/places_auto.db" --selftest
+run places_selftest "PLACES-OK" "$BUILD/skedaddle_places_build" --db="$ROOT/products/places_auto.db" --selftest
 
 # 跨省总里程做区间自检：路由语义改坏（比如双向 A* 提前终止）会让它明显跑偏，
 # 但只判 OK 标记看不出来——之前双向 A* 的最优性问题就是靠里程差发现的。
@@ -465,7 +465,7 @@ fi
 #     与下面 lm_nlm 那一项互为交叉验证 —— 单项可能被人一起改掉，两项一起改难。
 #   ★ 它**挡不住"表没加载"**：表掉了会退回无表 1.4→1.8 = 44 万，照样过。
 #     所以下面另有 lm_loaded / lm_nlm 两项专门盯这个。
-run route_hard "ROUTE-OK" "$BUILD/route_cli" --graph="$GRAPH" \
+run route_hard "ROUTE-OK" "$BUILD/skedaddle_route_cli" --graph="$GRAPH" \
     --from=42.03,122.38 --to=35.12,106.68 --repeat=3
 if [ -f "$SHOTS/route_hard.log" ]; then
     exp=$(sed -n 's/^搜索 *展开 \([0-9]*\) 节点，耗时 [0-9]* ms/\1/p' \
@@ -512,7 +512,7 @@ fi
 #   同类失败的还有西安/南阳/太原 → 大连。**这些是覆盖范围内的真实 O-D，不是数据问题。**
 #   只判 ROUTE-OK 就够（判据要的是"能出结果"），**不要卡耗时**——这条本来就 15 s，
 #   而且 §47.4 已经证明耗时会被机器负载放大一个数量级。
-run route_far_dalian "ROUTE-OK" "$BUILD/route_cli" --graph="$GRAPH" \
+run route_far_dalian "ROUTE-OK" "$BUILD/skedaddle_route_cli" --graph="$GRAPH" \
     --from=34.75,113.62 --to=38.91,121.61
 
 # ★★ 地标下界的"不许恶化"判据（PLAN.md §52.8）
@@ -533,7 +533,7 @@ run route_far_dalian "ROUTE-OK" "$BUILD/route_cli" --graph="$GRAPH" \
 #     换默认的 hi 重跑 ⇒ 根本不是 w=1.0（§49"兜底只能有一个入口"的延伸）。
 LM_ADMISSIBLE_SLACK=1
 _lm_exact() {  # $1 = 1 开表 / 0 无表；stdout = 预计分钟
-    NAVIMAP_LM="$1" "$BUILD/route_cli" --graph="$GRAPH" \
+    NAVIMAP_LM="$1" "$BUILD/skedaddle_route_cli" --graph="$GRAPH" \
         --from=37.87,112.55 --to=38.04,114.51 --repeat=1 \
         --exact --heur-w=1.0 --heur-w-hi=1.0 2>/dev/null |
     sed -n 's/^预计 *\([0-9]*\) 分.*/\1/p' | head -1
@@ -553,14 +553,14 @@ else
 fi
 
 # ★★ 主程序（window.c）自己的算路路径（PLAN.md §51.9）
-#   之前 navsim_* 用的是独立工具 navsim_cli，**根本没走到 window.c**；
-#   这里用 navmap_qt --shot-offscreen --from/--to 走 `app_nav_plan_sync`
+#   之前 navsim_* 用的是独立工具 skedaddle_navsim_cli，**根本没走到 window.c**；
+#   这里用 skedaddle --shot-offscreen --from/--to 走 `app_nav_plan_sync`
 #   （离屏通道设 a.qt_ui=0，主程序算路/渲染一条龙与旧 map_shot 逐字节一致），
 #   一次盖住：① 吸附 → ② 算路 → ③ 转向指令 → ④ 路线真的画到画面上（route_pixels）。
 #   ★ 起终点特意选 **保定→石家庄**：修复前它吸附到 hebei #6204583（悬在与主干
 #     断开的小连通块里）⇒ 双向都"不连通"，是 §51.1 那个 bug 的原生样本。
 #     判据"里程在 120~160 km 内"能同时挡住"算不出来"和"吸附错了点"。
-run app_route "ASSERT-OK" "$BUILD/navmap_qt" --shot-offscreen --graph="$GRAPH" \
+run app_route "ASSERT-OK" "$BUILD/skedaddle" --shot-offscreen --graph="$GRAPH" \
     --from=38.87,115.46 --to=38.04,114.51 --fit-route --w=800 --h=600 \
     --out="$SHOTS/app_route.bmp"
 if [ -f "$SHOTS/app_route.log" ]; then
@@ -582,7 +582,7 @@ if [ -f "$SHOTS/app_route.log" ]; then
     fi
 fi
 
-# ---- GPX 轨迹 / 收藏：navmap_qt --shot-offscreen --gpx（离屏像素判据）----
+# ---- GPX 轨迹 / 收藏：skedaddle --shot-offscreen --gpx（离屏像素判据）----
 # 与 Qt 前端那条 UI 断言分工：Qt 侧钉"导入 → 面板条目跟着 store 变"，
 # 这里钉"轨迹/收藏**真的画到画面上**"（像素判据），走共享审计模块、不依赖 Qt/offscreen。
 # ★ 负向对照已实证：把 paint_tracks / paint_favorites 改成直接 return 0 ⇒
@@ -605,7 +605,7 @@ cat > "$GPX_FILE" <<'GEOF'
 </gpx>
 GEOF
 # 离屏通道不建窗口、不链 SDL，任何环境都能跑（无需 QT_QPA_PLATFORM / SDL_VIDEODRIVER）。
-run gpx_render "ASSERT-OK" "$BUILD/navmap_qt" --shot-offscreen --graph="$GRAPH" \
+run gpx_render "ASSERT-OK" "$BUILD/skedaddle" --shot-offscreen --graph="$GRAPH" \
     --gpx="$GPX_FILE" \
     --lat=39.95 --lon=116.40 --zoom=13 --w=1280 --h=800 \
     --out="$SHOTS/gpx_case.bmp"
@@ -626,12 +626,12 @@ if [ -f "$SHOTS/gpx_render.log" ]; then
     fi
 fi
 
-# ---- GPX 贴合道路：route_cli --gpx-snap（#114）----
+# ---- GPX 贴合道路：skedaddle_route_cli --gpx-snap（#114）----
 # 把同一条 GPX 轨迹（GPX_FILE）抽稀成途经点、吸附到路网沿道路串联，
 # 输出一条沿道路的折线并跑 route_check 自检。判据只认 ROUTE-OK（"能出结果 + 路径自检过"），
 # 不卡绕行系数（道路绕远是预期行为）。该 GPX 在 7 省图（GRAPH）下必能贴合。
 # Qt 侧那条"轨迹行含「贴合」按钮 + 调用优雅返回"断言分工：这里钉**命令行端真的贴合成功**。
-run gpx_snap "ROUTE-OK" "$BUILD/route_cli" --graph="$GRAPH" --gpx-snap="$GPX_FILE"
+run gpx_snap "ROUTE-OK" "$BUILD/skedaddle_route_cli" --graph="$GRAPH" --gpx-snap="$GPX_FILE"
 
 # ---- 浮层透明度：默认 75%，且**每个浮层各自独立** ----
 # 判据不是"两张图不一样"（那样设成 20% 也会过），而是**与 alpha 成正比的精确
@@ -656,11 +656,11 @@ run gpx_snap "ROUTE-OK" "$BUILD/route_cli" --graph="$GRAPH" --gpx-snap="$GPX_FIL
 #   ③ 把 chrome.c 的 rtext 改回乘系数（文字跟着一起淡）
 #      ⇒ "前景（文字/图标）没有保持清晰" FAIL。
 ovl_shot() {   # $1=key $2=pct $3=输出
-    # ★ navmap_qt --shot-offscreen 的输出由 run() 自己重定向进 $log；这里**不要**
+    # ★ skedaddle --shot-offscreen 的输出由 run() 自己重定向进 $log；这里**不要**
     #   再对 run 调用挂重定向 —— 那会把 run() 的 OK/FAIL 结果行一起吞掉。
     # ★ 离屏通道设 a.qt_ui=0，chrome 由 C 核心画进缓冲（与旧 map_shot 逐字节一致），
     #   所以浮层矩形坐标仍是 C 侧布局：标题栏 0,0,800,30；右栏四按钮 750,88,42,184。
-    run "ovl_$1_$2" "ASSERT-OK" "$BUILD/navmap_qt" --shot-offscreen --graph="$GRAPH" \
+    run "ovl_$1_$2" "ASSERT-OK" "$BUILD/skedaddle" --shot-offscreen --graph="$GRAPH" \
         --lat=39.94 --lon=116.405 --zoom=13 \
         --w=800 --h=600 --ovl-alpha="$1=$2" --out="$3"
 }
@@ -697,8 +697,8 @@ fi
 # 面板/输入框用 QSS 的 rgba 背景（main_window.cpp 的 trackPanelStyle）。
 # 判据与 C 侧同一份脚本、同一个数学关系 ⇒ 两个前端口径一致。
 # offscreen 下这条也要成立（实测混合比 0.7500）。
-if [ -x "$BUILD/navmap_qt.exe" ] || [ -x "$BUILD/navmap_qt" ]; then
-    QEXE=$(if [ -x "$BUILD/navmap_qt.exe" ]; then echo "$BUILD/navmap_qt.exe"; else echo "$BUILD/navmap_qt"; fi)
+if [ -x "$BUILD/skedaddle.exe" ] || [ -x "$BUILD/skedaddle" ]; then
+    QEXE=$(if [ -x "$BUILD/skedaddle.exe" ]; then echo "$BUILD/skedaddle.exe"; else echo "$BUILD/skedaddle"; fi)
     CFGQ="$SHOTS/ovl_qt_cfg"
     /bin/rm -rf "$CFGQ" 2>/dev/null
     mkdir -p "$CFGQ/navimap"
@@ -765,10 +765,10 @@ fi
 # ★ 负向对照：把 gpx_db_default_path 里的 nm_mkdir_p 那行注掉 ⇒ 目录不建、
 #   sqlite 打不开 ⇒ 这条 FAIL（实测过一次）。
 # 跨平台：Windows 看 APPDATA，其余看 XDG_CONFIG_HOME；两个都设，哪个生效都能验。
-if [ -x "$BUILD/navmap_qt.exe" ] || [ -x "$BUILD/navmap_qt" ]; then
+if [ -x "$BUILD/skedaddle.exe" ] || [ -x "$BUILD/skedaddle" ]; then
     CFG="$SHOTS/gpx_cfg_fresh"
     /bin/rm -rf "$CFG" 2>/dev/null
-    QEXE=$(if [ -x "$BUILD/navmap_qt.exe" ]; then echo "$BUILD/navmap_qt.exe"; else echo "$BUILD/navmap_qt"; fi)
+    QEXE=$(if [ -x "$BUILD/skedaddle.exe" ]; then echo "$BUILD/skedaddle.exe"; else echo "$BUILD/skedaddle"; fi)
     qt_run env APPDATA="$CFG/appdata" XDG_CONFIG_HOME="$CFG/xdg" \
         "$QEXE" --graph="$GRAPH/beijing" --gpx="$GPX_FILE" \
         --shot="$SHOTS/gpx_cfg.bmp" > "$SHOTS/gpx_persist.log" 2>&1
@@ -786,13 +786,13 @@ fi
 
 # ★ 地标距离（一对多 Dijkstra）的验收（PLAN.md §48.5）：
 #   判据是**数值区间**，不是"能跑完"。北京地标到郑州的代价实测 23136.8 秒
-#   （= 385.6 分），与 route_cli 的最优解（386 分，打印取整到整分）一致。
+#   （= 385.6 分），与 skedaddle_route_cli 的最优解（386 分，打印取整到整分）一致。
 #   区间取 22500~23800 秒（±3%）：
 #     - 上界挡住"少做了转向限制 / 没做缝合"以外的**变大**类退化；
 #     - 下界挡住"跨省缝合把距离算短了"这类**变小**的错误。
 #   ★★ 负向对照已做：把跨省缝合那段临时改成不执行，5 个跨省查询**全部
 #      UNREACHABLE** ⇒ 这条判据真能失败，缝合代码确实是承重的。
-run lmdist "LM-DIST-OK" "$BUILD/lmdist_cli" --graph="$GRAPH" \
+run lmdist "LM-DIST-OK" "$BUILD/skedaddle_lmdist_cli" --graph="$GRAPH" \
     --from=39.90,116.40 --q=34.75,113.62 --q=36.07,120.38 --q=38.91,121.61
 if [ -f "$SHOTS/lmdist.log" ]; then
     v=$(sed -n 's/^Q 34\.75000,113\.62000 .* \([0-9.]*\) 秒/\1/p' \

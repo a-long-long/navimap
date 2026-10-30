@@ -283,11 +283,11 @@ void nm_tile_of(double lat, double lon, int *tx, int *ty)
 - **上游 · 第 1 课**：`mv_project`/`mv_unproject`/`mv_fit_bbox` 依赖 `nm_mercator`/`nm_mercator_y_fast`/`nm_mercator_inv`；`nm_tile_of` 三版本同样以 `nm_mercator` 为"尺子"。
 - **下游 · 第 7/8 课渲染管线**：`render/paint.c` 在每 pass 开头 `mv_proj_begin`，循环内用 `mv_proj`（`paint.c:265,462,805,927,1038`）；`ui/window.c` 的 `app_update_coverage`/`paint_frame` 用 `mv_proj_begin`/`mv_proj` 统一驱动。
 - **下游 · 第 10 课跨省缝合**：L5 用同样 Z14 切 tile，`nm_tile_of` 在 `coverage.c`/`mapset_detail_prov` 定 tile；`route/sew.c` 经 `mapset_query_tile` 取跨省边，`sew_cb` 用 `coord_key_e7(node lat/lon)`（见 L5 `coordkey.h`）把不同省的同一坐标合成一个图节点，实现 `sew` 缝合。
-- **自检 · 第 13 课架构门禁**：`tile_selftest` 对全图 5228 万真实节点逐点比 `nm_tile_of` vs 精确版，并以 `--expect-diff` 证明 `nm_tile_of_raw` 必须有差异（否则回退是死代码）。
+- **自检 · 第 13 课架构门禁**：`skedaddle_tile_selftest` 对全图 5228 万真实节点逐点比 `nm_tile_of` vs 精确版，并以 `--expect-diff` 证明 `nm_tile_of_raw` 必须有差异（否则回退是死代码）。
 
 ## 五、演示、练习与验收
 
-- **演示**：`./build_rel/tile_selftest`（查表版 vs 精确版 逐点等价）；`./build_rel/tile_xcheck`（跨省接边验证）。
-- **练习**：给定两个经纬度，手算 Z14 瓦片坐标，再用 `nm_tile_of` 验证（`TILE_EDGE_EPS` 边界带内会触发精确回退）；观察 `tile_selftest` 对 5228 万节点的逐点比对输出。
+- **演示**：`./build_rel/skedaddle_tile_selftest`（查表版 vs 精确版 逐点等价）；`./build_rel/skedaddle_tile_xcheck`（跨省接边验证）。
+- **练习**：给定两个经纬度，手算 Z14 瓦片坐标，再用 `nm_tile_of` 验证（`TILE_EDGE_EPS` 边界带内会触发精确回退）；观察 `skedaddle_tile_selftest` 对 5228 万节点的逐点比对输出。
 - **投影链路验证**：在 `mv_project`（`map_view.c:38`）与 `mv_proj`（`map_view.h:59`）分别打桩，对同一组经纬度比较输出，确认二者逐位一致；再在 `mv_proj_begin` 后修改 `view.zoom` 再调 `mv_proj` 应看出差异（证明快照只对本帧有效）。
 - **验收**：能写出"经纬度 → 屏幕像素"调用链，并说明投影缓存（惰性失效键）与瓦片键边界回退（`TILE_EDGE_EPS` > 最坏插值误差）各自为什么必要。

@@ -1,12 +1,12 @@
-/* font_selftest — 验收内置 Noto 字体集是否真的能加载并出字形。
- * 沿用 plat_selftest 的"契约可断言"风格：不靠肉眼，靠像素与宽度证据。
+/* skedaddle_font_selftest — 验收内置 Noto 字体集是否真的能加载并出字形。
+ * 沿用 skedaddle_plat_selftest 的"契约可断言"风格：不靠肉眼，靠像素与宽度证据。
  *
  * ★ 不依赖 SDL：自持一块 32bpp 像素缓冲 + raster_bind_mem，把字形画进去，
  *   再数非零像素。字体渲染是 stb_truetype + 自写合成（见 render/font.c），
  *   与窗口系统无关——这正是"核心零 SDL"的前提：连字体自检都不该拉 SDL 进来。
  *
  * 构建：链 navimap_core（已零 SDL 依赖）。
- * 运行：./font_selftest（字体目录按 NAVMAP_FONT_DIR 或 exe 相对 fonts/ 解析）。 */
+ * 运行：./skedaddle_font_selftest（字体目录按 NAVMAP_FONT_DIR 或 exe 相对 fonts/ 解析）。 */
 #include "render/font.h"
 #include "render/raster.h"
 #include "utils/plat.h"
@@ -23,7 +23,7 @@ int main(void)
     /* 1) 候选链：确认内置 Noto 排在系统字体之前 */
     size_t n = 0;
     const char *const *c = nm_font_candidates(&n);
-    printf("[font_selftest] 候选字体 %zu 个（前若干个应为内置 Noto）：\n", n);
+    printf("[skedaddle_font_selftest] 候选字体 %zu 个（前若干个应为内置 Noto）：\n", n);
     for (size_t i = 0; i < n && i < 12; i++)
         printf("    [%zu] %s\n", i, c[i]);
 
@@ -40,7 +40,7 @@ int main(void)
     const char *cjk   = "世界地图一二三";
     int wl = font_text_w(f, latin);
     int wc = font_text_w(f, cjk);
-    printf("[font_selftest] 宽度 latin=%d cjk=%d\n", wl, wc);
+    printf("[skedaddle_font_selftest] 宽度 latin=%d cjk=%d\n", wl, wc);
     if (wl <= 0) { fprintf(stderr, "拉丁宽度异常\n"); fail = 1; }
     if (wc <= 0) { fprintf(stderr, "中文宽度异常\n"); fail = 1; }
 
@@ -63,7 +63,7 @@ int main(void)
     int nonz = 0;
     for (int i = 0; i < FT_W * FT_H; i++)
         if (px[i] & 0x00ffffff) nonz++;   /* 任一 RGB 分量非零即算画到 */
-    printf("[font_selftest] 混排串 \"%s\" 画出非零像素 %d\n", mix, nonz);
+    printf("[skedaddle_font_selftest] 混排串 \"%s\" 画出非零像素 %d\n", mix, nonz);
     if (nonz == 0) {
         fprintf(stderr, "未画出任何字形：Noto 字体可能未生效或候选链解析失败\n");
         fail = 1;

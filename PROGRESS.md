@@ -74,7 +74,7 @@
 | **路由引擎**   | 双向加权 A*、ALT 地标下界、跨省缝合、接缝补查             | `src/route/route.c`（**928 行**，原 1856；抽 6 子模块入 `libnavmap_route.a`） |
 | **转向限制**   | 允许集 `only_*` / 必经 `via=way` / 单点禁转     | 全量 3 387 条                                                         |
 | **反向索引**   | 落盘 `rev.bin`（8 省 355 MB），坏了自动重建        | `src/route/revidx.c`                                               |
-| **地标表**    | 30 地标下界表，460×767 格，21.2 MB             | `src/route/lmtable.c` + `lmbuild_cli`                              |
+| **地标表**    | 30 地标下界表，460×767 格，21.2 MB             | `src/route/lmtable.c` + `skedaddle_lmbuild_cli`                              |
 | **渲染管线**   | 面 → 路 → 线 → 标注分阶段；自写像素光栅               | `src/render/paint.c`（931 行）+ `raster.{h,c}`，模块库 `navmap_render`    |
 | **中文标注**   | 字形缓存（stb_truetype）、字体可选、字号运行期可调        | `src/render/font.c` + `labels.c`                                   |
 | **搜索**     | 地名/POI 分类加权 + bigram 匹配                | `src/search/search.c`                                              |
@@ -113,7 +113,7 @@
 
 聚合层（对外门面，方案2 架构边界）
   navimap_core   src/core_anchor.c（仅锚点符号）
-     → PUBLIC 链入 上述全部模块库；24 个 exe / navmap_sdl / navmap_qt 只链它
+     → PUBLIC 链入 上述全部模块库；24 个 exe / navmap_sdl / skedaddle 只链它
 ```
 
 ### 阶段判据与落地
@@ -126,8 +126,8 @@
 
 ### 配套门禁（防止回归）
 
-- `core_no_sdl`：断言 `navmap_core` 不传递 SDL 依赖（负向对照已实证能 FAIL）。
-- `blend_equiv` / `clip_equiv`：自写光栅与 SDL 软渲染器逐像素等价（3 个真 bug 已据此修出）。
+- `skedaddle_core_no_sdl`：断言 `navmap_core` 不传递 SDL 依赖（负向对照已实证能 FAIL）。
+- `skedaddle_blend_equiv` / `skedaddle_clip_equiv`：自写光栅与 SDL 软渲染器逐像素等价（3 个真 bug 已据此修出）。
 - `font_cjk` / `font_cjk_neg`：判"字体能否画中文"查字体文件 cmap，而非 Qt 度量（offscreen 下度量全假）。
 - `qt_ui_test`：Qt 前端控件交互自检（搜索按钮展开/收起、坐标显示随鼠标更新、无顶栏工具条等）。
 
@@ -143,19 +143,19 @@
 
 **验收/自检类**（把 GUI 无法无头验证的逻辑做成可断言的 CLI）：
 
-- `map_shot` 渲染截图 + 像素级断言 ｜ `route_cli` 算路基准 ｜ `navsim_cli` 导航模拟
-- `restr_ab` 转向限制**双向判定 + 负向对照** ｜ `heap_selftest` 四叉堆对拍（含 `--expect-fail`）
-- `tile_selftest` 瓦片索引**全图 5 200 万节点逐点**对拍 ｜ `tile_xcheck` 跨省坐标一致性
-- `graph_check` / `graph_extract` 图结构校验 ｜ `revbuild_cli` 反向索引落盘校验
-- `coverage_cli` 覆盖度 ｜ `search_cli` 搜索 ｜ `places_build --selftest` POI 分类自检
-- `plat_selftest` **平台抽象层契约**正/负双向验收
-- `core_no_sdl` **架构边界门禁**：`navmap_core` 不得传递 SDL
-- `blend_equiv` / `clip_equiv` 自写光栅 ↔ SDL 逐像素等价 ｜ `font_cjk_check` CJK 字形能力
+- `map_shot` 渲染截图 + 像素级断言 ｜ `skedaddle_route_cli` 算路基准 ｜ `skedaddle_navsim_cli` 导航模拟
+- `skedaddle_restr_ab` 转向限制**双向判定 + 负向对照** ｜ `skedaddle_heap_selftest` 四叉堆对拍（含 `--expect-fail`）
+- `skedaddle_tile_selftest` 瓦片索引**全图 5 200 万节点逐点**对拍 ｜ `skedaddle_tile_xcheck` 跨省坐标一致性
+- `skedaddle_graph_check` / `skedaddle_graph_extract` 图结构校验 ｜ `skedaddle_revbuild_cli` 反向索引落盘校验
+- `skedaddle_coverage_cli` 覆盖度 ｜ `skedaddle_search_cli` 搜索 ｜ `skedaddle_places_build --selftest` POI 分类自检
+- `skedaddle_plat_selftest` **平台抽象层契约**正/负双向验收
+- `skedaddle_core_no_sdl` **架构边界门禁**：`navmap_core` 不得传递 SDL
+- `skedaddle_blend_equiv` / `skedaddle_clip_equiv` 自写光栅 ↔ SDL 逐像素等价 ｜ `skedaddle_font_cjk_check` CJK 字形能力
 - `qt_ui_test` Qt 前端 UI 交互自检（**40 项**，含 GPX 导入/面板几何/坐标系悬停提示/浮层透明度）
-- `tts_selftest` **离线语音播报**自检（TTS-OK）｜ `alts_selftest` **多方案对比**自检（ALTS-OK）｜ `lane_selftest` **车道指示**数据链路自检（LANE-OK）
-- `gpx_selftest` **GPX 解析/往返/边界/持久化**自检（GPX-OK，45 条断言，含收藏查重与孤儿点删除）
+- `skedaddle_tts_selftest` **离线语音播报**自检（TTS-OK）｜ `skedaddle_alts_selftest` **多方案对比**自检（ALTS-OK）｜ `skedaddle_lane_selftest` **车道指示**数据链路自检（LANE-OK）
+- `skedaddle_gpx_selftest` **GPX 解析/往返/边界/持久化**自检（GPX-OK，45 条断言，含收藏查重与孤儿点删除）
 
-**构建类**：`places_build` 地名库 ｜ `lmbuild_cli` 地标表 ｜ `pbf_info` ｜ `tag_stats` ｜ `restr_probe`
+**构建类**：`skedaddle_places_build` 地名库 ｜ `skedaddle_lmbuild_cli` 地标表 ｜ `skedaddle_pbf_info` ｜ `skedaddle_tag_stats` ｜ `skedaddle_restr_probe`
   
 **样板去重**：8 个 CLI 的公共参数解析/图加载收敛到 `tools/tool_common.{h,c}`（`a8f3441`）。
 
@@ -242,7 +242,7 @@
   
 `_CRT_SECURE_NO_WARNINGS`；protobuf-c 查找去掉 `NO_DEFAULT_PATH` 改为 HINTS 优先 + 默认路径兜底。
   
-**平台差异只许出现在 `plat.{h,c}`**（业务代码零 `#ifdef _WIN32`），由 `plat_selftest` 正反
+**平台差异只许出现在 `plat.{h,c}`**（业务代码零 `#ifdef _WIN32`），由 `skedaddle_plat_selftest` 正反
   
 双向门禁钉死（负向对照已实测能 FAIL）。
 
@@ -274,7 +274,7 @@
 
 ---
 
-## 九、Qt 前端 navmap_qt（2026-10-23）
+## 九、Qt 前端 skedaddle（2026-10-23）
 
 SDL 自绘 chrome 在 Wayland 下呈现异常，界面层迁移 Qt：**Qt 只管窗口/部件/交互，地图渲染核心一行不动**。
 
@@ -283,7 +283,7 @@ SDL 自绘 chrome 在 Wayland 下呈现异常，界面层迁移 Qt：**Qt 只管
       
     → paintEvent blit；拖拽/滚轮/旋转/点选全部经 C 核心 API）。
 - `App.qt_ui=1`：`paint_frame` 跳过 SDL 自绘 chrome/搜索框/面板/指令条（Qt 控件承担），地图、结果图钉、夜间蒙版保留。
-- CMake 自动探测 **Qt Widgets（Qt6）**，找到才编 `navmap_qt`，没装 Qt 的环境不受影响。
+- CMake 自动探测 **Qt Widgets（Qt6）**，找到才编 `skedaddle`，没装 Qt 的环境不受影响。
 - 验证：零警告编译；offscreen `--shot` 截图核对（菜单栏/搜索框/页签/右栏四钮/比例尺全齐，地图颜色正确）；
     
   SIGTERM 退出验证通过（入口先 `SDL_SetHint(NO_SIGNAL_HANDLERS)` + `SDL_INIT_NOPARACHUTE`）。
@@ -302,8 +302,8 @@ SDL 自绘 chrome 在 Wayland 下呈现异常，界面层迁移 Qt：**Qt 只管
 | 2026-10-22    | **PBF vs OBF 评估** | PBF 446 M vs nmbin 4.2 G，显示相关仅 ~19 M/省、94% 是路由图 ⇒ **保留 nmbin，不引入 OBF** |
 | 2026-10-22    | **全面代码审查**        | 通读 24 运行时源 + 18 工具 + 45/45 回归 + 50 路 ASan/UBSan ⇒ **无待修 bug**          |
 | 2026-10-22    | **建立版本管理**        | 首次纳入 git，推送到 GitHub `a-long-long/navimap`                              |
-| 2026-10-23    | **跨平台清理**         | 平台差异全收 `plat.{h,c}`；`plat_selftest` 正反门禁（见第七节）                         |
-| 2026-10-23    | **界面 + Qt 前端**    | 11 类 chrome 对齐 nav-desktop；`navmap_qt` 落地（见第八/九节）                      |
+| 2026-10-23    | **跨平台清理**         | 平台差异全收 `plat.{h,c}`；`skedaddle_plat_selftest` 正反门禁（见第七节）                         |
+| 2026-10-23    | **界面 + Qt 前端**    | 11 类 chrome 对齐 nav-desktop；`skedaddle` 落地（见第八/九节）                      |
 | 2026-10-23→24 | **模块化阶段 1/2/3**   | 12 库 + `route.c` 1856→928（见第四节），配套 5 道架构门禁                             |
 
 ---
@@ -314,9 +314,9 @@ SDL 自绘 chrome 在 Wayland 下呈现异常，界面层迁移 Qt：**Qt 只管
 
 | 功能        | 实现要点                                                                                              | 关键实据                                                              |
 | --------- | ------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------- |
-| **语音播报**  | 离线 TTS（跨平台、行进中按 maneuver 触发）；不依赖网络，纯本地合成                                                | `src/audio/tts.*` + `tts_selftest`（TTS-OK）                              |
-| **多方案对比** | `RouteResultSet`（K=4：最快/最短/避收费/避非铺装），复用 `router_plan` + 临时切换 `r->opt`；四方案共用同一对连通端点保证可比 | `src/route/route.c` `router_route_alts` + chrome 对比面板 + `alts_selftest`（ALTS-OK） |
-| **车道指示**  | 附加 side-file `lanes.bin`（每条边 u32 车道串 id，CSR 序）+ `lane_names.bin`（字符串池）；`turn:lanes` 解析区分正/反向；nav banner 上方画车道格并高亮可走车道 | `src/map/graph_build.c` `write_lanes` + `mapset_edge_lanes` + `src/render/navdraw.c` `paint_lane_arrows` + `lane_selftest`（LANE-OK） |
+| **语音播报**  | 离线 TTS（跨平台、行进中按 maneuver 触发）；不依赖网络，纯本地合成                                                | `src/audio/tts.*` + `skedaddle_tts_selftest`（TTS-OK）                              |
+| **多方案对比** | `RouteResultSet`（K=4：最快/最短/避收费/避非铺装），复用 `router_plan` + 临时切换 `r->opt`；四方案共用同一对连通端点保证可比 | `src/route/route.c` `router_route_alts` + chrome 对比面板 + `skedaddle_alts_selftest`（ALTS-OK） |
+| **车道指示**  | 附加 side-file `lanes.bin`（每条边 u32 车道串 id，CSR 序）+ `lane_names.bin`（字符串池）；`turn:lanes` 解析区分正/反向；nav banner 上方画车道格并高亮可走车道 | `src/map/graph_build.c` `write_lanes` + `mapset_edge_lanes` + `src/render/navdraw.c` `paint_lane_arrows` + `skedaddle_lane_selftest`（LANE-OK） |
 
 **车道指示设计约束**（避免破坏其余 7 省旧图）：
 - 不动 `NM_EDGE_BYTES`（18）；车道数据走**附加 side-file**，旧省无该文件时 `has_lanes=0` 自动降级（只重建 beijing）。
@@ -324,7 +324,7 @@ SDL 自绘 chrome 在 Wayland 下呈现异常，界面层迁移 Qt：**Qt 只管
 - 渲染：nav banner 上方一排车道格，按 `turn_dir`（0=直行 / -1=左转含掉头 / +1=右转）高亮可走车道，画左/右/直/掉头箭头。
 
 **实测**（beijing 抽取，41 MB 裁剪 PBF）：
-- 含 `turn:lanes` 的 way **245** 条 → 去重车道串 **72** 条 → 落盘 **807** 条边带车道串（`lane_selftest` 全合法、坏串 0）。
+- 含 `turn:lanes` 的 way **245** 条 → 去重车道串 **72** 条 → 落盘 **807** 条边带车道串（`skedaddle_lane_selftest` 全合法、坏串 0）。
 - 截图验证（`map_shot --sim --sim-sec=200`）：靠左转向时底部指令条上方出现 6 格车道行，前 2 格（left）高亮蓝、其余灰，箭头清晰。
 
 ---
@@ -336,15 +336,15 @@ SDL 自绘 chrome 在 Wayland 下呈现异常，界面层迁移 Qt：**Qt 只管
   全数据基线（Linux，8 省 PBF + `places_auto.db` + `lm.bin` 齐全）**59 通过 / 0 失败**。
 - **本机（Windows，仅有 beijing 一省数据）实测 77 项 = 53 通过 / 24 失败**
   （2026-10-25 浮层透明度改「只淡底板」后复测）。24 项失败**全部**是环境缺失，与代码无关：
-  7 省 PBF 无源 ⇒ 跨省算路 / 反向索引 / `navsim_tj` / `navsim_xa` / `tile_xcheck`（天津瓦片）；
+  7 省 PBF 无源 ⇒ 跨省算路 / 反向索引 / `navsim_tj` / `navsim_xa` / `skedaddle_tile_xcheck`（天津瓦片）；
   `products/places_auto.db` 未建 ⇒ `search` / `places_selftest`；
   `lm.bin` 未建 ⇒ `lm_loaded` / `lm_nlm` / `lm_admissible` / `lmdist*`；
   `core_no_sdl_sdl` 找不到 `build/navimap`（无 `.exe` 后缀）给 `objdump` 提取依赖。
   ⇒ **见到 24 项失败且名单与上面一致，即视为无回归**（通过数会随新增用例增长）。
-  `gpx_selftest`（GPX-OK）/ `gpx_render` / `gpx_trk_px` / `gpx_fav_px` /
+  `skedaddle_gpx_selftest`（GPX-OK）/ `gpx_render` / `gpx_trk_px` / `gpx_fav_px` /
   `qt_ui_test`（QT-UI-OK，**40 项**）/ `ovl_alpha` / `ovl_alpha_rcol` /
   `qt_ovl_alpha` / `qt_ovl_text` 均在新通过之列。
-  - 2026-10-25 顺手修掉一项**假红**：`dmap_selftest` 打印完 `DMAP-OK` 就 `return`，
+  - 2026-10-25 顺手修掉一项**假红**：`skedaddle_dmap_selftest` 打印完 `DMAP-OK` 就 `return`，
     而 `MapSet ms` 是 main 的栈变量、后台 worker 仍在解码 ⇒ 退出期回调命中已销毁
     的栈，`rc=139` 却因判据只 grep 标记行而显示"通过"。补 `mapset_free(&ms)`
     （置 `dmap_quit` 并等 worker 停）后 rc=0（连跑 3 次稳定）。
@@ -412,13 +412,13 @@ source env.sh                  # 修正 PKG_CONFIG_PATH / LD_LIBRARY_PATH
 
 **验收**：
 
-- `datum_selftest`（**DATUM-OK**）：枚举/名字映射、WGS84 恒等、往返可逆（**必须把 h 原样带回**，
+- `skedaddle_datum_selftest`（**DATUM-OK**）：枚举/名字映射、WGS84 恒等、往返可逆（**必须把 h 原样带回**，
   否则测的是"丢了高程"而不是"不可逆"）。
   ★ 西安80 的判据是**国测局公布区间**（东 76~119 / 北 −9~43），六点逐点打印 + 全中；
   北京54 只卡量级（10~500 m）并**如实打印**它与官方口径的偏差（局部参数，不假装 nationwide）。
   三条负向对照：XA80 平移清零 → 六点东向掉到 0.0 → 越界 FAIL（**已实证**）；
   两个参心基准参数抄混 → "位移显著不同"FAIL；给 WGS84 加平移 → "WGS84≈0"FAIL。
-- `navmap_qt --ui-test`（**QT-UI-OK**，16 → 20 → **33 项**）：坐标系段新增
+- `skedaddle --ui-test`（**QT-UI-OK**，16 → 20 → **33 项**）：坐标系段新增
   「切北京54 读数变且带基准前缀」「切西安80 带前缀」「切回 WGS84 原样恢复」；
   2026-10-25 去掉右栏下拉框后，改成「坐标网按钮悬停提示带当前基准标签与来源说明」
   「切到北京54：提示里的当前坐标系随之更新」（提示必须当场取样——写在切回之后会假红）。
@@ -474,7 +474,7 @@ dL = −(1/(N·cosB))(Δx·sinL − Δy·cosL)        W=√(1−e²sin²B), N=a/
 
 把参数从模块读出来（`datum_translation` / `datum_ellipsoid`，不抄常数 ⇒ 以后调参不会误报），
 用国标公式独立复算再与本模块的严格 ECEF 实现比对：**9 点最大差 0.0013 m**。
-两条独立路径一致 ⇒ 平移符号、椭球、正/反算都没搞反。已固化成 `datum_selftest` 第 7 条
+两条独立路径一致 ⇒ 平移符号、椭球、正/反算都没搞反。已固化成 `skedaddle_datum_selftest` 第 7 条
 （容差 0.05 m），**负向对照已实证**：去掉"加平移"那一步 → 差 114.2752 m → FAIL。
 
 ### 三个扩展入口：接口已做实并可验证（2026-10-25）
@@ -494,7 +494,7 @@ dL = −(1/(N·cosB))(Δx·sinL − Δy·cosL)        W=√(1−e²sin²B), N=a/
   double 下平移解会被污染到毫米以上）+ 高斯消元部分选主元；n<3 返回 −1、奇异返回 −2。
 - 全部是**进程内**设置，不落盘；`datum_reset_params()` / `datum_grid_clear()` 恢复出厂。
 
-`datum_selftest` 增设第 8~11 组判据（现共 41 条断言），**四组负向对照均已实证能失败**：
+`skedaddle_datum_selftest` 增设第 8~11 组判据（现共 41 条断言），**四组负向对照均已实证能失败**：
 
 | 注入的错误 | 被哪条判据抓住 |
 |---|---|
@@ -532,14 +532,14 @@ CLI 端到端：`--datum=xa80 --datum-grid=demo.txt`（北 +100 / 东 +200）⇒
 | 前端 | 入口 |
 |---|---|
 | SDL `navmap` | `--gpx=<file>`（可重复，最多 8 个）/ `--export-gpx=<path>`；**Ctrl+D** 收藏视口中心 |
-| Qt `navmap_qt` | 同名 CLI ＋ 右侧**轨迹面板**（QLabel 行布局：色块 / 名字 / 点数 / 删除按钮，双击定位）＋ `--shot-track` 无人值守截图 |
+| Qt `skedaddle` | 同名 CLI ＋ 右侧**轨迹面板**（QLabel 行布局：色块 / 名字 / 点数 / 删除按钮，双击定位）＋ `--shot-track` 无人值守截图 |
 | `map_shot` | `--gpx=` **只进内存不落库**，渲染后打 `gpx_trk_px` / `gpx_fav_px` 像素计数 |
 
 > ★ Ctrl+D 必须放在普通 `d`（昼夜切换）**之前**判断，否则永远被昼夜分支吃掉。
 
 **判据与负向对照（全部实证能失败）**
 
-- `gpx_selftest`（**45 条断言**，GPX-OK）｜ `gpx_persist`（配置目录不存在时自建 tracks.db）：解析往返、DB 存取、**孤儿点删除**、
+- `skedaddle_gpx_selftest`（**45 条断言**，GPX-OK）｜ `gpx_persist`（配置目录不存在时自建 tracks.db）：解析往返、DB 存取、**孤儿点删除**、
   `gpx_db_find_fav` 按 (name,lat,lon) 查重（两侧边界 5e-8 / 1e-4）。
 - `map_shot --gpx`：`gpx_trk_px` / `gpx_fav_px` **与"可见条数"挂钩**（裁剪口径与实现逐字一致），
   不是简单 >0 —— 否则视口外轨迹画没画都判绿。
@@ -707,7 +707,7 @@ CLI 端到端：`--datum=xa80 --datum-grid=demo.txt`（北 +100 / 东 +200）⇒
 
 - 全量回归 **77 项 = 53 通过 / 24 失败**，24 项失败与上一节记录的环境缺失名单**完全一致**
   （未新增任何失败）；强制重编零警告。
-- `navmap_qt --ui-test` **33 → 40 项**：新增浮层清单完整 / 默认 75% / 右栏底板 75% /
+- `skedaddle --ui-test` **33 → 40 项**：新增浮层清单完整 / 默认 75% / 右栏底板 75% /
   搜索底板 75% / 改搜索变 40% / 右栏不受影响 / 搜索设 0% 归 0。
 - 交付截图（仓库根 `shots/ovl/`，`*.png` 已被 .gitignore 排除、不入库）：
   `ovl_sdl_panel.png`（SDL 浮层透明度子面板，**底板半透明、文字清晰**）、
@@ -759,8 +759,8 @@ CLI 端到端：`--datum=xa80 --datum-grid=demo.txt`（北 +100 / 东 +200）⇒
 
 ### 判据
 
-- `voice_selftest`（`VOICE-OK`）：策略层单函数（提前量 / 话术 / 层级 / 冷却 / 实例去重）。
-- `voice_e2e`（`VOICE-E2E-OK`）：**走生产路径**
+- `skedaddle_voice_selftest`（`VOICE-OK`）：策略层单函数（提前量 / 话术 / 层级 / 冷却 / 实例去重）。
+- `skedaddle_voice_e2e`（`VOICE-E2E-OK`）：**走生产路径**
   `navsim_advance → navsim_next_maneuver → voice_wire.c 的 nav_voice_frame → nm_tts_speak`，
   用 `NAVIMAP_TTS_DRYRUN` 把「窗口真正交出去的话」同步截下来断言。
   A 类 9 例（转向层级 / 告警实例 / 路口合并 / 限速 / 隧道 / 到达只播一次 /
@@ -788,11 +788,11 @@ CLI 端到端：`--datum=xa80 --datum-grid=demo.txt`（北 +100 / 东 +200）⇒
 
 ### 状态
 
-- `voice_selftest` ✅ `VOICE-OK`；`voice_e2e` ✅ `VOICE-E2E-OK`
+- `skedaddle_voice_selftest` ✅ `VOICE-OK`；`skedaddle_voice_e2e` ✅ `VOICE-E2E-OK`
   （A7 实测收尾语播出：`t=72.5s 您已到达目的地附近，导航结束`）。
-- 编译：`voice_selftest` / `voice_e2e` / `navmap_ui`（`window.c` + `voice_wire.c`）
+- 编译：`skedaddle_voice_selftest` / `skedaddle_voice_e2e` / `navmap_ui`（`window.c` + `voice_wire.c`）
   **零警告**通过；全量 `cmake --build build` 未跑完（收尾叫停）。
-- `scripts/regress.sh` 已加入 `voice_e2e` 一项。
+- `scripts/regress.sh` 已加入 `skedaddle_voice_e2e` 一项。
 
 ---
 
@@ -801,21 +801,21 @@ CLI 端到端：`--datum=xa80 --datum-grid=demo.txt`（北 +100 / 东 +200）⇒
 > ✅ **PBF 后台解码优化（已完成，2026-10-25）**：解码本就在后台线程异步进行
 > （`dmap_worker`，`3f6fb3a`），本次补齐 **进度提示**——`pbfmap_decode` 加字节级进度
 > 回调，渲染端在解码中的省份画"省名 解码中… NN%"占位药丸（`paint_dmap_overlay`），
-> 后台线程预热（`mapset_enable_pbf_display` 即起 worker）。`dmap_selftest` 验证
+> 后台线程预热（`mapset_enable_pbf_display` 即起 worker）。`skedaddle_dmap_selftest` 验证
 > set_view 不阻塞主线程（max 0.0 ms）、进度爬升 0→100%、解码完成；
-> `pbfmap_check` 仍 IDENTICAL。
+> `skedaddle_pbfmap_check` 仍 IDENTICAL。
 > 另：`--dmap-demo=<省>:<pct>` 可强制某省进入"解码中"占位态，用于截图验证。
 
 > 🔶 **显示层分 tile（已完成，2026-10-25）**：把整省显示层（areas/lines/polyrefs）
 > 在**抽取期**一次性切成规则网格（北京 0.1° 网格 → 270 tile），每条 tile 拥有独立
 > polyrefs 段（`write_disp_tiles`），写 `disp.idx` 清单；旧省无 `disp/` 自动回退整省。
-> - Phase 1（抽取期切 tile）：`disp_tile_selftest`（DISP-TILE-OK）证明整省要素**零丢失**
+> - Phase 1（抽取期切 tile）：`skedaddle_disp_tile_selftest`（DISP-TILE-OK）证明整省要素**零丢失**
 >   （面 199640 / 线 104691 全覆盖，跨 tile 重复属边界保护）。
 > - Phase 2（运行期按视口按需加载）：`mapset.c` 的 `src_load_disp_tiles` 每帧按视口+边距
 >   算相交 tile 集合，逐 tile 打开→复制→关闭（同时最多 3 个 mmap，绕开 Windows 映射句柄
 >   上限；曾一次性开 270 个在 ~168 个后耗尽句柄），拼接进 `s->areas/lines/polyrefs`
 >   （ref_off 重基到整段 dpoly）。`disp_sig` 命中则跳过重建，稳定态 set_view 0.14ms；
->   视口移出 → `src_unload` 释放拼接缓冲（屏外 tile 不加载）。`disp_runtime_selftest`
+>   视口移出 → `src_unload` 释放拼接缓冲（屏外 tile 不加载）。`skedaddle_disp_runtime_selftest`
 >   （DISP-RUNTIME-OK）证明等价：视口内要素**零丢失**、节点序列逐节点相等、负向对照通过。
 > - Phase 3 已被 Phase 2 吸收：拼接进单省缓冲后 `paint_areas/paint_lines` **零改动**。
 > 目标达成：运行时只加载视口内那条，不再"为屏外一条边解整省"。
@@ -827,7 +827,7 @@ CLI 端到端：`--datum=xa80 --datum-grid=demo.txt`（北 +100 / 东 +200）⇒
    **遗留 3 项**（下次接）：
    ① `window.c` 的"先播报后置位"顺序没有判据覆盖 ⇒ 要把置位顺序搬进 `voice_wire.c`；
    ② `scripts/voice_neg.sh` 的 9 项注入未实跑；
-   ③ 全量回归（基线 77 项 = 53 通过 / 24 失败）与 `navmap_qt --ui-test`（40 项）未重跑。
+   ③ 全量回归（基线 77 项 = 53 通过 / 24 失败）与 `skedaddle --ui-test`（40 项）未重跑。
 2. ~~**GPX 轨迹导入导出 / 收藏夹**~~——✅ **已完成（2026-10-25，见第十一·六节）**：
    GPX 1.1 解析 + SQLite `tracks.db` 持久化 + 三前端 CLI/面板接线 + 45 条自测断言
    + 4 组负向对照实证。

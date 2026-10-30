@@ -18,7 +18,7 @@
  * POSIX 分支覆盖 Linux/macOS；Windows 分支覆盖 MSVC 与 MinGW。
  * ★ 平台差异 100% 收口在本抽象层：业务代码只调 nm_* 接口、零 #ifdef _WIN32，
  *   同一套源文件由编译器按 _WIN32 在编译期选分支，本地/远端无分叉。
- *   Windows 分支已在 MSYS2/UCRT64(MinGW) 实机编译验证（plat_selftest 全过）；
+ *   Windows 分支已在 MSYS2/UCRT64(MinGW) 实机编译验证（skedaddle_plat_selftest 全过）；
  *   POSIX 侧仍由 tools/plat_selftest.c 保证"接口契约"可断言。
  * ------------------------------------------------------------------------- */
 #include <stddef.h>
@@ -68,7 +68,7 @@ void  nm_unmap_file(void *addr, size_t len);
 
 /* 目录枚举。返回的条目名属于 NmDir，下次 nm_dir_next 前有效；
  * "." 与 ".." 已跳过。顺序由文件系统决定，需要可复现就自己排序
- * （mapset_load / places_build 都先收集再 qsort）。 */
+ * （mapset_load / skedaddle_places_build 都先收集再 qsort）。 */
 typedef struct NmDir NmDir;
 NmDir      *nm_dir_open(const char *path);
 const char *nm_dir_next(NmDir *d);

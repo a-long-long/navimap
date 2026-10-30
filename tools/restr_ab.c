@@ -1,4 +1,4 @@
-/* restr_ab —— 转向限制的定向 A/B 对照验收。
+/* skedaddle_restr_ab —— 转向限制的定向 A/B 对照验收。
  *
  * 存在理由：限制只在极少数路口生效。随机路线几乎不可能恰好撞上——via=way
  * 那批实测「12 条随机路线、2000 多段，一次都没触发」，only_* 这批（8 省 381 处）
@@ -15,7 +15,7 @@
  *   via=way 两段（kind=2）：P0 --e_from--> A --e_via--> B --e_to--> C 被禁
  *   only_*（kind=1）      ：从 from 进路口后，只允许走允许集里的那几支
  *
- * 用法：./restr_ab [--graph=dir] [--probe=N] [--only=N] [--random=N]
+ * 用法：./skedaddle_restr_ab [--graph=dir] [--probe=N] [--only=N] [--random=N]
  *   --probe=N  定向取前 N 条 via=way 限制（默认 40）
  *   --only=N   定向取前 N 组 only_* 限制（默认 40）
  *   --random=N   补充：随机 N 对起终点做里程对照
@@ -334,7 +334,7 @@ int main(int argc, char **argv)
     RouteOpts off = { .mode_time = 1, .bidir = 1, .no_restr2 = 1, .no_restr1 = 1,
                        .heur_w = 1.0, .heur_w_hi = 1.0 };                             /* 限制全关 */
     /* 负向对照：把"会合点处的限制检查"关掉，其余限制全开。
-       正常跑 restr_ab 必须报 OK；加了 --no-seam-restr 必须报 FAIL——
+       正常跑 skedaddle_restr_ab 必须报 OK；加了 --no-seam-restr 必须报 FAIL——
        这条"能失败"是整套判据有效性的前提，缺了它就只剩单向自证。 */
     if (noseam) on.no_seam_restr = 1;
     Router *ra = router_create(&ms, &on);

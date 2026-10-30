@@ -189,7 +189,7 @@ int restr_blocked2_rev(Router *r, uint32_t prov, uint32_t via_node,
    停住没走 e_f——所以只能在这里补查。不合法的相遇点不接受，继续搜。 */
 int seam_blocked(Router *r, uint64_t k)
 {
-    /* no_seam_restr 只给 restr_ab 做负向对照用：证明"判据能失败"，见 PLAN.md §33 */
+    /* no_seam_restr 只给 skedaddle_restr_ab 做负向对照用：证明"判据能失败"，见 PLAN.md §33 */
     if (r->opt.no_seam_restr) return 0;
     StEnt *f = st_find(&r->st[DIR_FWD], k);
     StEnt *b = st_find(&r->st[DIR_BWD], k);

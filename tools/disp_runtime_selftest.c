@@ -1,4 +1,4 @@
-/* disp_runtime_selftest —— 显示层分 tile 的运行时等价性自测（Phase 2 验收）。
+/* skedaddle_disp_runtime_selftest —— 显示层分 tile 的运行时等价性自测（Phase 2 验收）。
  *
  * 判据（行为等价 + 负向对照）：
  *  1. 等价：对某个视口调用 mapset_set_view 后，按需拼接进 s->areas/lines/
@@ -10,7 +10,7 @@
  *  3. 负向对照：视口移到与该省完全不相交的区域后，该省被卸载且屏外 tile 不被加载
  *     （loaded==0；若仍挂着显示层则判失败）。
  *
- * 用法：disp_runtime_selftest --graph=<省目录> */
+ * 用法：skedaddle_disp_runtime_selftest --graph=<省目录> */
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>

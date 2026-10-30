@@ -1,4 +1,4 @@
-/* settings_selftest —— 设置持久化模块的断言式自测（regress 用）。
+/* skedaddle_settings_selftest —— 设置持久化模块的断言式自测（regress 用）。
  *
  * 判据：全过打印 SETTINGS-OK 且退出码 0；任一断言失败打印 ASSERT-FAIL 且退出码 1。
  * 覆盖：默认值 / 存读往返 / reset_all / NAVIMAP_SETTINGS 路径覆盖 / 损坏文件不崩。
@@ -103,7 +103,7 @@ static void test_corrupt(void)
 
 int main(void)
 {
-    snprintf(g_tmp, sizeof(g_tmp), "%s/settings_selftest.ini", nm_temp_dir());
+    snprintf(g_tmp, sizeof(g_tmp), "%s/skedaddle_settings_selftest.ini", nm_temp_dir());
 
     Settings *s = settings_create();
     if (!s) { printf("ASSERT-FAIL 无法创建 Settings\n"); return 1; }

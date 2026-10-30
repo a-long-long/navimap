@@ -35,7 +35,7 @@
 | 地图格式 | **OBF**（官方，五套索引） | **NMBIN**（自研，只吃 `.osm.pbf`） |
 | 与官方代码 | 官方仓库一行未改，调纯 Java API | 只抄思路、全自写、注明出处 |
 | 门禁 | 81 项 + 129 探针 + 6 类静态扫描 | 80 项 + 编译零警告当失败 |
-| 发布体积 | `build/nav-dist` **374 MB**（内置 JRE） | `navmap_qt` 5.9 MB + 62 MB Qt 依赖 = **68 MB** |
+| 发布体积 | `build/nav-dist` **374 MB**（内置 JRE） | `skedaddle` 5.9 MB + 62 MB Qt 依赖 = **68 MB** |
 
 ---
 
@@ -100,7 +100,7 @@
 |---|---|---|---|
 | 状态机 | 有（投影/距转向/剩余/偏航/到达/限速） | 有（`navsim` 纯计算层，CLI+GUI 共用） | |
 | 语音播报 | 有（Windows SAPI 常驻 / POSIX 后端链） | 有（`route/voice.c` 897 行，移植官方 `VoiceRouter` + TTS 后端链） | navimap 已补上 |
-| 车道指示 | 有 | 部分（`lanes.bin` + `lane_names.bin`；本机 tianjin 未生成 → `lane_selftest` FAIL） | |
+| 车道指示 | 有 | 部分（`lanes.bin` + `lane_names.bin`；本机 tianjin 未生成 → `skedaddle_lane_selftest` FAIL） | |
 | 沿线告警 | 有（13 类） | 部分（7 类：测速/限速/收费站/铁路道口/停车让行/人行横道/隧道+危桥） | 差 6 类 |
 | 转向箭头 | 有（自绘矢量） | 有（底部指令条大字） | |
 | 自动缩放/指北针 | 有（车速分档 + 路口拉近 + 指北针） | 有（指北针 + 自动拉近 z15） | |

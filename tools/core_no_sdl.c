@@ -1,7 +1,7 @@
-/* core_no_sdl —— 断言某个目标里**没有** SDL 符号（方案2 的架构门禁）。
+/* skedaddle_core_no_sdl —— 断言某个目标里**没有** SDL 符号（方案2 的架构门禁）。
  *
  * 为什么要有它：
- *   Qt 前端（navmap_qt）必须**一行 SDL 都不链**。但"Qt 不链 SDL"很容易在
+ *   Qt 前端（skedaddle）必须**一行 SDL 都不链**。但"Qt 不链 SDL"很容易在
  *   某次改动里悄悄失效：core 里多加一个 #include <SDL.h> 或一个 SDL 调用，
  *   编译照样过、Qt 照样能跑（只是间接多依赖了 SDL2.dll），直到某天有人在没装
  *   SDL 的机器上构建 Qt 前端才炸。静态链接下更隐蔽：core.a 里引了 SDL 符号，
@@ -23,8 +23,8 @@
  *   静默漏检 —— 这正是"永远绿的门禁"最常见的成因。
  *
  * 用法：
- *   core_no_sdl <文件...>              期望：这些目标里没有 SDL 符号
- *   core_no_sdl --expect-sdl <文件...> 期望：这些目标里**必须有** SDL 符号
+ *   skedaddle_core_no_sdl <文件...>              期望：这些目标里没有 SDL 符号
+ *   skedaddle_core_no_sdl --expect-sdl <文件...> 期望：这些目标里**必须有** SDL 符号
  */
 #include <stdio.h>
 #include <string.h>
@@ -178,7 +178,7 @@ int main(int argc, char **argv)
     }
     if (argc <= first_arg) {
         fprintf(stderr,
-                "用法: core_no_sdl [--expect-sdl] <文件...>\n"
+                "用法: skedaddle_core_no_sdl [--expect-sdl] <文件...>\n"
                 "  默认断言这些目标里没有 SDL 符号；--expect-sdl 断言必须有。\n");
         return 2;
     }

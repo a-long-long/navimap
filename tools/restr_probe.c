@@ -1,4 +1,4 @@
-/* restr_probe —— via=way 转向限制的形态探针。
+/* skedaddle_restr_probe —— via=way 转向限制的形态探针。
  *
  * 存在理由：graph_build 直接跳过所有 via=way 的限制（北京 182 条 / 约 28%），
  * 但要决定"怎么展开"得先知道数据长什么样——via way 有多长、两端能否定位到
@@ -9,7 +9,7 @@
  *   第 2 遍：扫 ways，把涉及到的 way 的节点引用抓下来（只要这几百条）
  * 然后统计：via way 长度分布、from∩via 与 via∩to 的公共节点个数。
  *
- * 用法：./restr_probe data/beijing.osm.pbf [--dump=N]
+ * 用法：./skedaddle_restr_probe data/beijing.osm.pbf [--dump=N]
  */
 #include <stdio.h>
 #include <stdlib.h>
@@ -79,7 +79,7 @@ int main(int argc, char **argv)
         if (strncmp(argv[i], "--dump=", 7) == 0) dump = atoi(argv[i] + 7);
         else if (argv[i][0] != '-') path = argv[i];
     }
-    if (!path) { fprintf(stderr, "用法: restr_probe <file.osm.pbf> [--dump=N]\n"); return 2; }
+    if (!path) { fprintf(stderr, "用法: skedaddle_restr_probe <file.osm.pbf> [--dump=N]\n"); return 2; }
 
     /* ---------- 第 1 遍：relations ---------- */
     Restr *rs = NULL; size_t nr = 0, capr = 0;

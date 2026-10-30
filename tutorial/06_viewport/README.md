@@ -20,7 +20,7 @@ gcc -std=c11 -O2 -o tut main.c && ./tut
    缓存键 `c_lat/c_lon/c_zoom/c_rot/...` 就是干这个的。
 2. **瓦片键三版本**：真实项目里 `nm_tile_of`（查表+边界回退）/`nm_tile_of_raw`（纯查表）/
    `nm_tile_of_exact`（sin+log 参考）三者逐点比对——因为 `lround` 会掩盖 ULP 差异，
-   所以 `tile_selftest` 对 5228 万真实节点**逐点**验证而非抽样。
+   所以 `skedaddle_tile_selftest` 对 5228 万真实节点**逐点**验证而非抽样。
 3. **跨省接边**：用坐标直接做瓦片键，北京→天津不需要"本省→全局"映射表（第 10 课路由也用同一思路）。
 
 **生产最终形态**：`src/map/map_view.c`（`mv_project`/`mv_unproj`/`mv_fit_bbox`、投影缓存），

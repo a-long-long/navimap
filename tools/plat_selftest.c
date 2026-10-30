@@ -1,4 +1,4 @@
-/* plat_selftest —— 平台抽象层（utils/plat.h）的全接口自验收。
+/* skedaddle_plat_selftest —— 平台抽象层（utils/plat.h）的全接口自验收。
  *
  * 为什么值得单独立一个门禁：平台层的失效模式全是"编译期全绿、换平台才炸"
  * （路径分隔符、临时目录、字体路径、进程派生、目录枚举）。这台机器只有
@@ -12,9 +12,9 @@
  *                 哪一侧坏掉都会红——这不是"永远绿"的门禁。
  *
  * 用法：
- *   ./plat_selftest            正向
- *   ./plat_selftest --negative  负向对照
- *   ./plat_selftest --child-exit=N   内部用：给 spawn 测试当子进程
+ *   ./skedaddle_plat_selftest            正向
+ *   ./skedaddle_plat_selftest --negative  负向对照
+ *   ./skedaddle_plat_selftest --child-exit=N   内部用：给 spawn 测试当子进程
  */
 #include <stdio.h>
 #include <stdlib.h>
@@ -363,7 +363,7 @@ int main(int argc, char **argv)
         return 1;
     }
 
-    printf(" plat_selftest  %s  工作目录 %s\n", g_neg ? "负向对照" : "正向", b);
+    printf(" skedaddle_plat_selftest  %s  工作目录 %s\n", g_neg ? "负向对照" : "正向", b);
     if (g_neg) run_negative(b);
     else       run_positive(b);
 

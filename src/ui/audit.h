@@ -1,7 +1,7 @@
 /* audit.h —— 离屏像素审计（共享模块）
  *
  * 把"像素计数 + 断言 + 日志打印"从离屏通道里抽出来，让
- * navmap_qt --shot-offscreen（C 核心地图缓冲）与 regress.sh 的离屏判据
+ * skedaddle --shot-offscreen（C 核心地图缓冲）与 regress.sh 的离屏判据
  * 共用同一份逻辑，保证像素判据逐位一致（保 74/4 回归基线不出偏差）。
  *
  * ★ 计数一律按**字节**比色：C 核心缓冲是 RGB 字节序（p[2]=R, p[1]=G, p[0]=B，

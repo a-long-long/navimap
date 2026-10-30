@@ -131,7 +131,7 @@ typedef struct {
  *   这不是 w 能救的（要压住它得 w≈1.82，而 1.5 就已经让别的路线 +2.6%），
  *   要动就得换启发式本身。
  *
- * ★ 验收/对拍工具（restr_ab、--exact）必须用 1.0，否则里程差异不再只反映
+ * ★ 验收/对拍工具（skedaddle_restr_ab、--exact）必须用 1.0，否则里程差异不再只反映
  *   被测因素（转向限制）本身的代价。改这个常量会改变**所有**路线的计算结果
  *   —— 它是产品行为，不是纯性能旋钮。 */
 #define ROUTE_HEUR_W_DEFAULT 1.4
@@ -181,7 +181,7 @@ typedef struct {
     /* 自适应：第 1 遍用 heur_w、展开封顶 adapt_try；撞顶就换 heur_w_hi 重跑。
      * 兜底值见 ROUTE_HEUR_W_HARD / ROUTE_ADAPT_TRY（指名初始化漏写时填）。
      * ★ 想关掉加速、只保留"撞顶再搜一遍"：把 heur_w_hi 设成与 heur_w 相同
-     *   （restr_ab 的对拍就这么干 —— 它必须两边同 w，里程差才只反映转向限制）。 */
+     *   （skedaddle_restr_ab 的对拍就这么干 —— 它必须两边同 w，里程差才只反映转向限制）。 */
     double   heur_w_hi;
     uint64_t adapt_try;
 } RouteOpts;

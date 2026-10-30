@@ -1,10 +1,10 @@
-/* tag_stats —— 统计 PBF 里 way 的标签构成，回答"到底丢了什么"
+/* skedaddle_tag_stats —— 统计 PBF 里 way 的标签构成，回答"到底丢了什么"
  *
- * 用途：graph_extract 只保留可通行机动车道路，其余 way 一律丢弃。
+ * 用途：skedaddle_graph_extract 只保留可通行机动车道路，其余 way 一律丢弃。
  *       这个工具把"丢弃的那部分"按 key 和 highway 取值分门别类数出来，
  *       避免"地图信息不全"变成一笔糊涂账。
  *
- * 用法：tag_stats <file.osm.pbf> [--top=N]
+ * 用法：skedaddle_tag_stats <file.osm.pbf> [--top=N]
  */
 #include <stdio.h>
 #include <stdlib.h>
@@ -45,7 +45,7 @@ int main(int argc, char **argv)
         if (strncmp(argv[i], "--top=", 6) == 0) top = atoi(argv[i] + 6);
         else path = argv[i];
     }
-    if (!path) { fprintf(stderr, "用法: tag_stats <file.osm.pbf> [--top=N]\n"); return 2; }
+    if (!path) { fprintf(stderr, "用法: skedaddle_tag_stats <file.osm.pbf> [--top=N]\n"); return 2; }
 
     PbfStream *s = pbf_stream_open(path);
     if (!s) { fprintf(stderr, "打不开 %s\n", path); return 1; }

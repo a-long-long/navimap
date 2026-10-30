@@ -57,7 +57,7 @@ typedef struct {
 
 /* 应用状态（窗口/画布/主循环全归前端自持）。
  * ★ C 核心**零 SDL、零窗口系统依赖**：本结构只放跨前端共享的地图/搜索/设置
- *   状态。窗口尺寸与事件循环由 navmap_qt 自己管（Qt 抽象，不碰 X11/GTK）。
+ *   状态。窗口尺寸与事件循环由 skedaddle 自己管（Qt 抽象，不碰 X11/GTK）。
  */
 typedef struct {
     /* 画布与纹理归前端自持：Qt 前端用自己的 malloc 缓冲（C 核心零 SDL），
@@ -213,7 +213,7 @@ typedef struct {
  *             （纯图形，无文字标注）；否则为 .ttf/.ttc 路径。
  * font_size：<=0 时用默认字号 14。
  * ab：启动自愈选项（源 pbf 在、产物没了就现场重建）。NULL = 开启并自动探测
- *     sources/ 与 graph_extract；只想关掉就传 &{ .enable = 0 }。 */
+ *     sources/ 与 skedaddle_graph_extract；只想关掉就传 &{ .enable = 0 }。 */
 int  app_init(App *a, const char *graph_dir, int w, int h,
               const char *font_path, int font_size, const AutoBuildOpt *ab);
 
@@ -248,7 +248,7 @@ void app_focus_point(const App *a, double *lat, double *lon);
 
 /* 收尾（释放资源 + 落盘设置）。Qt 前端在退出前调它（qt_main.cpp）。
    注：原 SDL 窗口版的主循环 app_run 随 window_sdl.c 于 #88 一并移除，
-   交互主循环现在只在 navmap_qt 里；C 核心这边不再有任何主循环。 */
+   交互主循环现在只在 skedaddle 里；C 核心这边不再有任何主循环。 */
 void app_shutdown(App *a);
 
 /* 设置持久化：app_apply_settings 把配置(cfg)→App 字段；app_persist_settings

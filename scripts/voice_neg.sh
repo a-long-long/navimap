@@ -2,7 +2,7 @@
 # 语音播报负向对照：注入 bug ⇒ 必须被抓到（判据不能是"假绿"）
 #
 # 用法：./scripts/voice_neg.sh
-# 逐个注入 bug，重建，跑 voice_selftest + voice_e2e，
+# 逐个注入 bug，重建，跑 skedaddle_voice_selftest + skedaddle_voice_e2e，
 # 两者**至少有一个**必须失败（fail-closed）。
 #
 # ★ 为什么必须做：判据写成"!= 0"这种形状时，逻辑写反也能通过
@@ -30,10 +30,10 @@ restore() {
 
 # 跑一次：返回 0 = 两个自测都过（说明注入没被抓到 = FAIL）
 run_case() {
-    cmake --build "$BUILD" --target voice_selftest voice_e2e >/dev/null 2>&1
+    cmake --build "$BUILD" --target skedaddle_voice_selftest skedaddle_voice_e2e >/dev/null 2>&1
     local r1=0 r2=0
-    ./build/voice_selftest.exe >/dev/null 2>&1 || r1=1
-    ./build/voice_e2e.exe    >/dev/null 2>&1 || r2=1
+    ./build/skedaddle_voice_selftest.exe >/dev/null 2>&1 || r1=1
+    ./build/skedaddle_voice_e2e.exe    >/dev/null 2>&1 || r2=1
     echo "$((r1 | r2))"
 }
 
@@ -151,6 +151,6 @@ inject "常规门控删除到达例外" "$WIRE" \
 
 echo "=== 结果：通过 $pass / 失败 $fail ==="
 restore
-cmake --build "$BUILD" --target voice_selftest voice_e2e >/dev/null 2>&1
+cmake --build "$BUILD" --target skedaddle_voice_selftest skedaddle_voice_e2e >/dev/null 2>&1
 if [ "$fail" -ne 0 ]; then exit 1; fi
 exit 0

@@ -13,7 +13,7 @@
 
 - 数据：8 省图 `products/graph`（beijing/hebei/henan/liaoning/shaanxi/shandong/shanxi/tianjin）
 - 视口：北京中心 39.90/116.40，1280×800，Web Mercator
-- 帧时间：`navmap_qt --shot-offscreen` 的**第 2 帧**（稳态），每档 3 轮取最小
+- 帧时间：`skedaddle --shot-offscreen` 的**第 2 帧**（稳态），每档 3 轮取最小
 - 差异判据：`scripts/bmpdiff.py` + 自写方向分析（净损失面积）
   - **净损失面积** = 变成背景色的像素 − 从背景色变出的像素
   - 净损失 > 0 ⇒ 单向"要素色 → 背景色" ⇒ **丢要素**（否决项）
@@ -101,15 +101,15 @@ source env.sh
 export QT_QPA_PLATFORM=offscreen QT_QPA_PLATFORM_PLUGIN_PATH=/usr/lib/aarch64-linux-gnu/qt5/plugins
 
 # 基线帧时间
-./build_rel/navmap_qt --shot-offscreen --graph=products/graph --lat=39.90 --lon=116.40 \
+./build_rel/skedaddle --shot-offscreen --graph=products/graph --lat=39.90 --lon=116.40 \
     --zoom=9 --w=1280 --h=800
 
 # 某档位（AREA_DOT_PX 是编译期常量，改后重编）
 sed -i 's/#define AREA_DOT_PX [0-9]*/#define AREA_DOT_PX 4/' src/render/paint.h
-cmake --build build_rel --target navmap_qt -j$(nproc)
+cmake --build build_rel --target skedaddle -j$(nproc)
 
 # 像素差异 + 方向
-./build_rel/navmap_qt --shot-offscreen --graph=products/graph --lat=39.90 --lon=116.40 \
+./build_rel/skedaddle --shot-offscreen --graph=products/graph --lat=39.90 --lon=116.40 \
     --zoom=9 --w=1280 --h=800 --out=/tmp/new.bmp
 python3 scripts/bmpdiff.py /tmp/base.bmp /tmp/new.bmp
 ```

@@ -135,7 +135,7 @@ void paint_background(Raster *rs, int w, int h);
 
 /* 画路网。max_class = 0..4，超过这个等级的路不画（LOD）。
  * 5-7（步行道/铁路/水系线）走 paint_lines，不在这里。
- * tiles/edgelist 是空间索引（graph_extract 生成），非 NULL 时按 tile
+ * tiles/edgelist 是空间索引（skedaddle_graph_extract 生成），非 NULL 时按 tile
  * 只遍历视口覆盖的部分；任一为 NULL 回退全量扫描（旧目录兼容）。
  * np 是该省路名池（供顺带收集路名标签；可为 NULL，只是不收集）。
  *
@@ -144,8 +144,8 @@ void paint_background(Raster *rs, int w, int h);
  * （8 省 z9 一帧 55 万条里只有 3 万条落在多省格子里，其余 95% 的探表是白付的，
  * 实测门控后省 70 ms）。传 NULL/0 则退回"一律去重"的旧行为。 */
 /* ★ rs 是"直接写像素"的目标（见 raster.h）—— 现在整条绘制管线都走它，
- * 不再依赖 SDL_Renderer（核心层已彻底零 SDL；SDL 只在 blend_equiv /
- * clip_equiv 两个门禁对照体里合法出现）。
+ * 不再依赖 SDL_Renderer（核心层已彻底零 SDL；SDL 只在 skedaddle_blend_equiv /
+ * skedaddle_clip_equiv 两个门禁对照体里合法出现）。
  * rs 为 NULL 时这几个函数什么都不画（调用方必须先 raster_bind_mem 成功）。 */
 void paint_roadpix_begin(void);
 void paint_roads(Raster *rs, const MapView *v,

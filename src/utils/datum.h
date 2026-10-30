@@ -59,7 +59,7 @@ void datum_to_wgs84(DatumId id, double lat, double lon, double h,
                     double *out_lat, double *out_lon, double *out_h);
 
 /* 只读访问参数表（便于自测/UI 显示，不必把常数抄一份到别处）。
- * ★ datum_selftest 的「国标公式等价性」判据就靠它们：参数从**模块里读出来**，
+ * ★ skedaddle_datum_selftest 的「国标公式等价性」判据就靠它们：参数从**模块里读出来**，
  *   再由测试用另一条独立公式复算 ⇒ 以后改参数不会误报，只有算法错才 FAIL。 */
 void datum_translation(DatumId id, double *dx, double *dy, double *dz);  /* 米 */
 void datum_ellipsoid(DatumId id, double *a, double *f);                  /* 米 / 扁率 */
@@ -125,7 +125,7 @@ typedef struct {
  * ★ 实践提醒：3 点刚好解、但无冗余 ⇒ 残差恒为 0，看不出数据质量；
  *   建议 ≥5 个分布均匀的点，用 out_rms 判断（米级说明参数可信，十米级说明
  *   该区域不适合单一 Helmert —— BJ54 尤其如此，它是分区平差的、不是刚体）。
- * ★ 解出来后调用 datum_set_seven_param 装回去即生效；自测 datum_selftest
+ * ★ 解出来后调用 datum_set_seven_param 装回去即生效；自测 skedaddle_datum_selftest
  *   用"模块自己正算生成的合成点"验证解算能还原出厂参数。 */
 int datum_solve_seven_param(DatumId id, const DatumTie *ties, int n,
                             DatumSevenParam *out, double *out_rms);

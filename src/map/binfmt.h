@@ -175,7 +175,7 @@ uint64_t nm_get_u64(const uint8_t *p);
  * 但语义不同：osm_id 槽存"高程（米，u64）"，ref_off/ref_cnt 指向
  * contours_polyrefs.bin（u32 序列），每个下标再指向 contours_pts.bin 的顶点。
  * class 字段区分"计曲线（每 index 一条加粗/加深）"与"首曲线"。
- * 不进 OSM 导入管线，由 gen_contours 直接产出 navimap 专属二进制。 */
+ * 不进 OSM 导入管线，由 skedaddle_gen_contours 直接产出 navimap 专属二进制。 */
 #define NM_CONTOUR_BYTES 24
 #define CF_ELEV      0    /* u64  高程（米）— 复用 lines 的 LF_OSM_ID 槽 */
 #define CF_REF_OFF   8    /* u32 */

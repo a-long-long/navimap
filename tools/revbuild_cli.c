@@ -1,9 +1,9 @@
-/* revbuild_cli —— 反向入边索引 rev.bin 的生成与自验收
+/* skedaddle_revbuild_cli —— 反向入边索引 rev.bin 的生成与自验收
  *
  * 用法:
- *   revbuild_cli --graph=<dir>                生成/补齐每个省的 rev.bin
- *   revbuild_cli --graph=<dir> --verify       落盘结果与内存构建逐元素对比
- *   revbuild_cli --graph=<dir> --verify --only=hebei
+ *   skedaddle_revbuild_cli --graph=<dir>                生成/补齐每个省的 rev.bin
+ *   skedaddle_revbuild_cli --graph=<dir> --verify       落盘结果与内存构建逐元素对比
+ *   skedaddle_revbuild_cli --graph=<dir> --verify --only=hebei
  *
  * ★ --verify 是这条优化唯一的正确性判据：写盘、读盘、内存构建三条路都走同一份
  *   rev_build_mem()，所以"落盘 == 内存构建"这个断言能同时抓住写坏和读坏
@@ -11,7 +11,7 @@
  *   判据必须是双向的：验证过"相同"，还要能证明它"能失败"——把某个省的
  *   rev.bin 删掉或改坏，--verify 必须报 FAIL（regress.sh 里的 rev_neg 就是干这个）。
  *
- * 产物可由 sync_maps.sh 确定性重建（graph_extract 每转完一个省就写 rev.bin），
+ * 产物可由 sync_maps.sh 确定性重建（skedaddle_graph_extract 每转完一个省就写 rev.bin），
  * 本工具只是给"已经存在、抽取时还没这个功能"的图补一份。
  */
 #include <stdio.h>
@@ -41,7 +41,7 @@ int main(int argc, char **argv)
         else { fprintf(stderr, "未知参数 %s\n", a); return 1; }
     }
     if (!graph) {
-        fprintf(stderr, "用法: revbuild_cli --graph=<dir> [--verify] [--only=省名]\n");
+        fprintf(stderr, "用法: skedaddle_revbuild_cli --graph=<dir> [--verify] [--only=省名]\n");
         return 1;
     }
 

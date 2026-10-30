@@ -1,4 +1,4 @@
-/* font_probe —— 诊断"中文变方框（tofu）"到底卡在哪一环。
+/* skedaddle_font_probe —— 诊断"中文变方框（tofu）"到底卡在哪一环。
  *
  * 现象：Qt/SDL 截图里中文全是方框。
  * 要把这件事拆成两问，分别用数据回答（别猜）：
@@ -8,7 +8,7 @@
  *      （=0 ⇒ 没有任何面含这个字形 ⇒ 字体文件不对）
  *      glyph index 非 0 但位图非零像素为 0 ⇒ 有字形但光栅化出空图 ⇒ scale 问题
  *
- * 用法: font_probe [码点...]   不带码点则测一串常用汉字
+ * 用法: skedaddle_font_probe [码点...]   不带码点则测一串常用汉字
  */
 #include "render/font.h"
 

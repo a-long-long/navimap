@@ -1,11 +1,11 @@
-/* lmdist_cli —— 地标距离的一对多 Dijkstra（PLAN.md §48）
+/* skedaddle_lmdist_cli —— 地标距离的一对多 Dijkstra（PLAN.md §48）
  *
  * 给 A* 做地标下界用的第一块砖：从**一个**地标节点跑到全图，输出任意经纬度
  * 处的最小代价。这一版不做网格聚合、不落盘，只用来**验证 Dijkstra 本身对不对**
- * （拿 route_cli 的路线距离逐条对拍，见 scripts 里的 lmdist_check）。
+ * （拿 skedaddle_route_cli 的路线距离逐条对拍，见 scripts 里的 lmdist_check）。
  *
  * 用法：
- *   ./lmdist_cli --graph=products/graph --from=39.90,116.40 \
+ *   ./skedaddle_lmdist_cli --graph=products/graph --from=39.90,116.40 \
  *                --q=36.65,117.02 --q=38.91,121.61 ...
  *   [--mode=time|dist]       代价口径（默认 time，与 router 一致 ⇒ 单位是秒）
  *   [--stats]                打印出堆/入堆数与峰值内存（验收用）
@@ -72,7 +72,7 @@ int main(int argc, char **argv)
         else { fprintf(stderr, "未知参数 %s\n", a); return 2; }
     }
     if (!from_s || nq == 0) {
-        fprintf(stderr, "用法: lmdist_cli --graph=<dir> --from=lat,lon --q=lat,lon [--q=...]\n");
+        fprintf(stderr, "用法: skedaddle_lmdist_cli --graph=<dir> --from=lat,lon --q=lat,lon [--q=...]\n");
         return 2;
     }
     double flat, flon;

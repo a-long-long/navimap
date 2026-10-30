@@ -8,7 +8,7 @@
  *
  * 为什么需要它：src/ 里从来没有 system/popen/exec，程序是纯加载。实测把
  * products/graph/tianjin 删掉后，离屏通道只打印一句"既不是省目录也没有
- * nodes.bin"就空跑，graph_check 直接 ASSERT-FAIL —— 没有任何自愈能力。
+ * nodes.bin"就空跑，skedaddle_graph_check 直接 ASSERT-FAIL —— 没有任何自愈能力。
  * 而转换本身是确定性的（删掉重建后 nodes.bin 的 md5 与删前完全一致），
  * 所以"检测到缺失就重转"是安全的，不存在"重建出不一样的东西"的风险。
  *
@@ -20,7 +20,7 @@
  *   4. manifest 里的 binfmt_version 与当前二进制格式版本不符
  *   5. manifest 里的 src_bytes / src_mtime 与源 pbf 实际值不符（源被换过了）
  *
- * 安全性：只起项目自带的 graph_extract 子进程（同目录 → build/ → PATH 依次探测），
+ * 安全性：只起项目自带的 skedaddle_graph_extract 子进程（同目录 → build/ → PATH 依次探测），
  * 参数固定、不经 shell，省名先过白名单（不允许 '/' 和 '.'/'..'），
  * 所以不存在命令注入或路径逃逸。进程派生/等待走平台层 nm_spawn_wait
  * （POSIX fork+execv，Windows CreateProcess）。清理旧产物用平台层的
@@ -30,7 +30,7 @@
 typedef struct {
     int         enable;    /* 1 = 检测到就重建（默认）；0 = 只诊断不动手 */
     const char *src_dir;   /* 源 pbf 目录。NULL = 自动探测（graph_dir 往上找 sources/） */
-    const char *tool;      /* graph_extract 路径。NULL = 自动探测 */
+    const char *tool;      /* skedaddle_graph_extract 路径。NULL = 自动探测 */
 } AutoBuildOpt;
 
 typedef struct {

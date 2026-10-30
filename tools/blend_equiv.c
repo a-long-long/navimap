@@ -1,4 +1,4 @@
-/* blend_equiv — 验证自写光栅的 alpha 混色与 SDL 软渲染器逐像素等价。
+/* skedaddle_blend_equiv — 验证自写光栅的 alpha 混色与 SDL 软渲染器逐像素等价。
  *
  * 为什么要它：raster.h 写着"与 SDL 软渲染器逐像素等价是硬要求"，但之前只
  * 验证了线段裁剪（4000 随机线段 + 1500 随机折线 0 差异），**没验证 alpha

@@ -2,7 +2,7 @@
  *
  * 把"像素计数 + 断言 + 日志打印"从离屏通道里抽出来，落到对 RGB 字节序缓冲
  * （C 核心地图缓冲 / QImage::Format_RGB32 同源）的判定上，让
- * navmap_qt --shot-offscreen 与 regress.sh 的离屏判据共用同一份逻辑。
+ * skedaddle --shot-offscreen 与 regress.sh 的离屏判据共用同一份逻辑。
  *
  * ★ 计数一律按**字节**比色：p[2]=R, p[1]=G, p[0]=B，alpha 字节忽略。
  *   这样无论缓冲的 alpha 字节是 0x00 还是 0xFF，只要 R/G/B 三字节相同，

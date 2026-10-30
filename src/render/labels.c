@@ -205,7 +205,7 @@ static void grid_for_font(Font *font)
 
 typedef enum { SH_DISC, SH_TRI, SH_DIAMOND } PoiShape;
 
-/* kind 语义见 places_build.c：数值小 = 行政级别高。按类别给颜色与形状。 */
+/* kind 语义见 skedaddle_places_build.c：数值小 = 行政级别高。按类别给颜色与形状。 */
 static void poi_style(int kind, uint8_t *r, uint8_t *g, uint8_t *b, PoiShape *sh)
 {
     if      (kind <= 2) { *r = 214; *g = 48;  *b = 48;  *sh = SH_DISC; }   /* 首都/直辖市 红 */

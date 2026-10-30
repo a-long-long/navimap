@@ -81,21 +81,21 @@ Windows 注意：入口 `main()` 直接用（CMake 定义 `SDL_MAIN_HANDLED`，�
 平台层契约由 `tools/plat_selftest.c` **正反双向**钉住（回归门禁第 46/47 项）：
 正向断言"该成功的必须成功"（含 spawn 自身并原样带回退出码），负向断言"该失败的
 必须失败"（不存在路径 / 空 PATH / 起不来的进程）。本机只有 POSIX 能真跑，Windows
-分支按同一契约编写——新增平台分支时先在 plat_selftest 里补契约，再动业务代码。
+分支按同一契约编写——新增平台分支时先在 skedaddle_plat_selftest 里补契约，再动业务代码。
 
 ## Qt 前端（可选）
 
 SDL 版窗口是无边框自绘（chrome / 搜索框 / 面板都是画在 framebuffer 上的假控件），
-平台差异大、输入法与无障碍支持弱。`navmap_qt` 用 **Qt 做真控件**（QMainWindow 菜单栏 /
+平台差异大、输入法与无障碍支持弱。`skedaddle` 用 **Qt 做真控件**（QMainWindow 菜单栏 /
 QLineEdit 搜索 / QDockWidget 步骤面板 / QToolBar 右栏按钮），地图仍走现有 C 光栅化器：
 `app_render_to_surface()` 画进 `SDL_Surface` → 包成 `QImage(Format_RGB32)` → `paintEvent` blit。
 **渲染 / 算路 / 搜索核心一行不改**；`App.qt_ui=1` 让 `paint_frame` 跳过 SDL 自绘 chrome。
 
 ```bash
 cmake -B build -DCMAKE_PREFIX_PATH=<Qt5 前缀>   # 找得到 Qt5Widgets 即可
-cmake --build build --target navmap_qt -j8
-./build/navmap_qt --graph=products/graph/beijing        # 参数与 navimap 一致
-QT_QPA_PLATFORM=offscreen ./build/navmap_qt --shot=x.png # 无人值守出图
+cmake --build build --target skedaddle -j8
+./build/skedaddle --graph=products/graph/beijing        # 参数与 navimap 一致
+QT_QPA_PLATFORM=offscreen ./build/skedaddle --shot=x.png # 无人值守出图
 ```
 
 要点（踩过的坑）：
@@ -132,7 +132,7 @@ QT_QPA_PLATFORM=offscreen ./build/navmap_qt --shot=x.png # 无人值守出图
 ./build/navimap --graph=products/graph --pbf-display=sources:3
 ```
 
-解码结果与落盘文件**8 省逐字节相同**（`build/pbfmap_check` 可验证），渲染端零改动。
+解码结果与落盘文件**8 省逐字节相同**（`build/skedaddle_pbfmap_check` 可验证），渲染端零改动。
 代价是首次进省要同步解码（天津 0.6 s / 北京 1.6 s / 河北 4.4 s），适合后台预热。
 
 ⚠️ 省磁盘的收益有限：nmbin 的 4.2 G 里 **94% 是路由图**（A\* 需要全图），那部分省不掉。
@@ -171,10 +171,10 @@ proto/       OSM 官方 osmformat.proto（字段编号一致，删掉了导航�
 
 ## 命令行工具
 
-`map_shot`（渲染截图，含像素级断言）、`route_cli`（算路基准测试）、`navsim_cli`
-（导航模拟）、`restr_ab`（转向限制双向判定 + 负向对照）、`heap_selftest`（堆对拍）、
-`tile_selftest`（瓦片索引全图对拍）、`graph_check` / `graph_extract`（图结构校验）、
-`places_build`（地名库构建）、`lmbuild_cli`（地标表构建）等。
+`map_shot`（渲染截图，含像素级断言）、`skedaddle_route_cli`（算路基准测试）、`skedaddle_navsim_cli`
+（导航模拟）、`skedaddle_restr_ab`（转向限制双向判定 + 负向对照）、`skedaddle_heap_selftest`（堆对拍）、
+`skedaddle_tile_selftest`（瓦片索引全图对拍）、`skedaddle_graph_check` / `skedaddle_graph_extract`（图结构校验）、
+`skedaddle_places_build`（地名库构建）、`skedaddle_lmbuild_cli`（地标表构建）等。
 
 ---
 

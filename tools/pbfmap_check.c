@@ -1,6 +1,6 @@
 /* 校验工具：PBF 按需解码出的显示层 vs nmbin 落盘的显示层，逐字节比对。
  *
- * 用法: pbfmap_check <province_dir> <xxx.osm.pbf>
+ * 用法: skedaddle_pbfmap_check <province_dir> <xxx.osm.pbf>
  *   province_dir 里应有 nodes.bin / areas.bin / lines.bin / polyrefs.bin
  *
  * 这是"只留 PBF"方案的核心门禁：解码结果必须与落盘结果一致，

@@ -75,7 +75,7 @@ static void voice_decide(Man *ms, int n, char *out[], int *no){
 /* nm_tts_speak：发声（桩——真实工程走 plat.c，跨平台 TTS） */
 static void nm_tts_speak(const char *text){ printf("  🔊 %s\n", text); }
 
-/* voice_wire：★ 唯一接线点（生产端与 voice_e2e 自测共用） */
+/* voice_wire：★ 唯一接线点（生产端与 skedaddle_voice_e2e 自测共用） */
 static void voice_wire(Man *ms, int n){
     char *utt[16]; int no;
     voice_decide(ms, n, utt, &no);

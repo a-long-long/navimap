@@ -1,4 +1,4 @@
-/* lmbuild_cli —— 地标下界表的构建器（PLAN.md §48 / §49）
+/* skedaddle_lmbuild_cli —— 地标下界表的构建器（PLAN.md §48 / §49）
  *
  * 跑 N 次 lm_dijkstra（**距离模式**，单位米），把全图 5228 万个 (省,节点) 的
  * d(L→x) 按经纬度落进网格，每格只存 **最小值**（uint16，100 m 单位），写进
@@ -15,7 +15,7 @@
  *   t 侧那 100 m 已经算在 penalty_m 里。
  *
  * 用法：
- *   ./lmbuild_cli --graph=products/graph [--out=products/graph/lm.bin]
+ *   ./skedaddle_lmbuild_cli --graph=products/graph [--out=products/graph/lm.bin]
  *                 [--cell=3000]       格边长（米，纬度方向）
  *                 [--penalty=N]       罚项（米），默认 = 格对角 + 100
  *                 [--lm=lat,lon]      可重复，不给就用内置的 10 个
@@ -116,7 +116,7 @@ static const double k_lm[][2] = {
 #define N_ALL_LM    ((int)(sizeof(k_lm) / sizeof(k_lm[0])))
 /* 不带 --nlm 时用的地标个数 = **发货配置**（§52.6：50 个实测是"展开少 10%、
    总耗时打平"，多出来的 20 个对 43/50 条路线的结果毫无影响 ⇒ 30 是拐点）。
-   列表里备到 50 个只是留给对照实验，别让"手跑一次 lmbuild_cli"意外改变配置。 */
+   列表里备到 50 个只是留给对照实验，别让"手跑一次 skedaddle_lmbuild_cli"意外改变配置。 */
 #define N_DEFAULT_LM 30
 
 /* 地标集指纹：FNV-1a 64 位，喂的是各坐标的 e7 整数（不是 double 的字节，

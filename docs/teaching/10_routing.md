@@ -568,7 +568,7 @@ int graph_root_dir(const MapSet *ms, char *out, size_t cap)
 ```c
 int seam_blocked(Router *r, uint64_t k)
 {
-    /* no_seam_restr 只给 restr_ab 做负向对照用：证明"判据能失败"，见 PLAN.md §33 */
+    /* no_seam_restr 只给 skedaddle_restr_ab 做负向对照用：证明"判据能失败"，见 PLAN.md §33 */
     if (r->opt.no_seam_restr) return 0;
     StEnt *f = st_find(&r->st[DIR_FWD], k);
     StEnt *b = st_find(&r->st[DIR_BWD], k);
@@ -1133,7 +1133,7 @@ int router_plan(Router *r, RNode from, RNode to, RouteResult *out)
     uint64_t try_cap = r->opt.adapt_try;
     if (try_cap > r->max_expand) try_cap = r->max_expand;
     /* ★★ plan_search 会把 w 写进 r->opt.heur_w。必须恢复：Router 可复用
-       （route_cli --repeat=N 同一 Router 连算 N 次）。 */
+       （skedaddle_route_cli --repeat=N 同一 Router 连算 N 次）。 */
     double w0 = r->opt.heur_w;
 
     int two_pass = (try_cap != 0) && (r->opt.heur_w_hi != w0);
@@ -1528,14 +1528,14 @@ void maneuver_text(const Maneuver *m, char *buf, size_t n)
 - **下游 · L8 渲染管线**：`RouteResult` 经 L8 `navdraw` 绘制路线折线（按 `pts[]`/`seg_m[]`）。
 - **下游 · L9 搜索**：**L9 搜索结果（地名/POI 坐标）即 L10 的起终点**——搜索出点 → `router_route_ll` 吸附算路。
 - **下游 · L11 导航语音**：`RouteResult` 直接喂 `maneuver_build`（本课 §9）与 `navsim_start`；`RouteOpts` 指名初始化约定被 L11/L12 所有调用点遵守。
-- **下游 · L13 架构门禁**：`lm_admissible`（regress.sh）直接验收地标下界；`restr_ab` / `heap_selftest` 是负向对照工具。
+- **下游 · L13 架构门禁**：`lm_admissible`（regress.sh）直接验收地标下界；`skedaddle_restr_ab` / `skedaddle_heap_selftest` 是负向对照工具。
 
 ## 五、演示、练习与验收
 
-- **演示**：`./build_rel/route_cli --graph=products/graph/beijing --from=39.90,116.40 --to=39.99,116.30 --geojson=route.json`；`./build_rel/route_cli --from=... --to=... --maneuvers` 看 `maneuver_build` 输出；`./build_rel/heap_selftest --expect-fail`（负向对照）；`./build_rel/revbuild_cli --verify`；`./build_rel/restr_ab`；`./build_rel/lmdist_cli`（一对多 Dijkstra 下界）。
-- **练习**：把 `ROUTE_HEUR_W_DEFAULT`（route.h:137）改成 1.0（纯 Dijkstra）和 2.0，对比 `route_cli` 的 `expanded`/`elapsed_ms`；用 `NAVIMAP_LM=0` 关表后 `--exact` 应保证最优。
+- **演示**：`./build_rel/skedaddle_route_cli --graph=products/graph/beijing --from=39.90,116.40 --to=39.99,116.30 --geojson=route.json`；`./build_rel/skedaddle_route_cli --from=... --to=... --maneuvers` 看 `maneuver_build` 输出；`./build_rel/skedaddle_heap_selftest --expect-fail`（负向对照）；`./build_rel/skedaddle_revbuild_cli --verify`；`./build_rel/skedaddle_restr_ab`；`./build_rel/skedaddle_lmdist_cli`（一对多 Dijkstra 下界）。
+- **练习**：把 `ROUTE_HEUR_W_DEFAULT`（route.h:137）改成 1.0（纯 Dijkstra）和 2.0，对比 `skedaddle_route_cli` 的 `expanded`/`elapsed_ms`；用 `NAVIMAP_LM=0` 关表后 `--exact` 应保证最优。
 - **验收（读源码 / 跑命令）**：
   1. 能画出"双向 A* 一次展开"的数据流（取堆顶 → `members_of` → 松弛出/入边 → 查转向限制 → `seam_blocked` 相遇判定），并澄清"非 CH、ALT 非严格下界"。
   2. `coord_key_e7`（`coordkey.h:26`）让一个物理路口只展开一次——对比 `(省,节点)` 主键初版的 111 万状态/97 秒问题。
-  3. `heap_selftest` 随机序列下每次 pop 取当前最小值；`restr_ab` 验证转向限制使里程变化只在被测因素上。
+  3. `skedaddle_heap_selftest` 随机序列下每次 pop 取当前最小值；`skedaddle_restr_ab` 验证转向限制使里程变化只在被测因素上。
   4. `lm_table_match`（`lmtable.c:90`）保证重抽 PBF 后旧 `lm.bin` 被丢弃回退直线启发式，避免悄悄次优。

@@ -30,7 +30,7 @@ typedef struct {
     /* ---- 等高线（SRTM 生成，可选）----
      * 三件套与 lines/areas 平级：contours.bin（记录，类 lines）+ contour_polyrefs.bin
      * （u32 顶点下标序列）+ contour_pts.bin（独立顶点池 lat/lon e7）。
-     * 不进 OSM 导入管线，由 gen_contours 直接产出；与 disp tile 无关（整省一份）。 */
+     * 不进 OSM 导入管线，由 skedaddle_gen_contours 直接产出；与 disp tile 无关（整省一份）。 */
     NMBinFile contours, contour_polyrefs, contour_pts;
     int       has_contours;             /* 三者齐备才为 1 */
     int32_t  *contour_bbox;            /* 等高线缓存（paint_contours 懒填，nc*4 个 i32） */

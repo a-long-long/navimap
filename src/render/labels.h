@@ -41,7 +41,7 @@ void paint_place_labels(Raster *rs, const MapView *v,
  * 而 map 层不能反向依赖 render ⇒ 省一级在 coverage_locate()、市/区在这里，
  * 由 UI 层把两者拼成一条 CovPlace。
  *
- * 分层取值按 places_build.c 的 kind 语义（数值小 = 行政级别高）：
+ * 分层取值按 skedaddle_places_build.c 的 kind 语义（数值小 = 行政级别高）：
  *   市级   kind <= 2（1=省会/直辖市城区，2=地级市）
  *   区县级 kind == 3（县/镇）
  * 输出为"最近的"同名点：地名库里没有省界多边形，只能按最近点近似，故可能

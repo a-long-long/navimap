@@ -1,4 +1,4 @@
-/* tile_xcheck —— 验证"坐标即节点主键"的跨省接边是否成立（阶段 8 地基）
+/* skedaddle_tile_xcheck —— 验证"坐标即节点主键"的跨省接边是否成立（阶段 8 地基）
  *
  * 给定一个经纬度，取它所在的 Z14 瓦片，用 mapset_query_tile 把所有省
  * 在这片里的边都收上来，按 coord_key_e7(节点坐标) 分组：
@@ -10,7 +10,7 @@
  *   3. 打几个缝合点样例（坐标 / OSM id / 都有哪些省）。
  *
  * 用法：
- *   ./tile_xcheck --graph=products/graph [--lat=39.72 --lon=117.15]
+ *   ./skedaddle_tile_xcheck --graph=products/graph [--lat=39.72 --lon=117.15]
  */
 #include <stdio.h>
 #include <stdlib.h>

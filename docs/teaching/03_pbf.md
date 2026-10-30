@@ -372,12 +372,12 @@ const char *pbf_str(PbfBlock *b, uint32_t sid)
   - `map/graph_build.c` —— 建路网图（DenseNodes delta 累积 + `pbf_to_e7`，配合 `nm_fast_dist_m` 算边权）。
   - `map/pbfmap.c` —— 主解码阶段（第 12 课 Qt 前端的显示层数据源）。
   - `tools/places_build.c` —— 地名/POI（第 9 课）。
-  - `tools/tag_stats.c`、`restr_probe.c`、`pbf_info.c` —— 标签统计与转向限制探测。
+  - `tools/tag_stats.c`、`skedaddle_restr_probe.c`、`skedaddle_pbf_info.c` —— 标签统计与转向限制探测。
 - **与 L2（平台抽象）关系**：`pbf_stream` 只依赖标准 `zlib` 与 `protobuf-c`，与 L2 的平台层无直接耦合；解出的路名经 `StrPool`/NamePool（L2/L4）去重后落 `names.bin`。
 - **与 L1（坐标系）关系**：`pbf_to_e7` 是把 OSM 纳米度坐标归一到第 1 课定义的 1e-7 度整数坐标的关键换算，下游所有几何运算都以 e7 为单位。
 
 ## 五、演示、练习与验收
 
-- **演示**：`./build_rel/pbf_info sources/beijing.osm.pbf`（看 block 结构、way 数、node 数）。
-- **练习**：用 `pbf_info` 对比 `bbbike.pbf`（截断文件）与正常文件，确认截断文件**报错退出而非崩溃**（走 `PBF_ERR` 分支）。
+- **演示**：`./build_rel/skedaddle_pbf_info sources/beijing.osm.pbf`（看 block 结构、way 数、node 数）。
+- **练习**：用 `skedaddle_pbf_info` 对比 `bbbike.pbf`（截断文件）与正常文件，确认截断文件**报错退出而非崩溃**（走 `PBF_ERR` 分支）。
 - **验收**：① 能解释为什么 `pbf_str` 不能直接返回 protobuf-c 的原始 `data` 指针（缺少 NUL 结尾）；② 能指出 `pbf_block` 的边界——它给出的是增量值而非坐标，`acc +=` 累加与 `pbf_to_e7` 换算在 `graph_build.c`；③ 能画出 `pbf_stream_next` 的"读大端长度 → 解 BlobHeader → 解 Blob → zlib 解压并校验 raw_size"四步。

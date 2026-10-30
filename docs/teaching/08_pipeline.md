@@ -786,7 +786,7 @@ void paint_chrome(Raster *rs, App *a)
 ## 五、演示、练习与验收
 
 - **演示**：离屏出一张帧图并跑审计（Qt 前端与离屏共用 `app_render_to_buf`）：
-  `./build_rel/navmap_qt --shot-offscreen --graph=products/graph/beijing --lat=39.9 --lon=116.4 --zoom=11 --w=1280 --h=800 --out=frame.bmp`
+  `./build_rel/skedaddle --shot-offscreen --graph=products/graph/beijing --lat=39.9 --lon=116.4 --zoom=11 --w=1280 --h=800 --out=frame.bmp`
   看 stdout 的分阶段耗时 `ms_bg/ms_areas/ms_roads/ms_lines/ms_labels`，以及 `coverage` / `route_pixels` / `nomap_banner_px` / `ASSERT-OK`。
 - **练习**：在 `paint_frame` 里新加一个 `TICK(ms_mystage)`，包住某段代码，看耗时出现在哪（复用既有的 `TICK` 宏）。
 - **练习**：把一条可见路线画进无图区（或反之），跑 `app_offscreen_audit`，观察"有地图却画出无图横幅"或"无图区却没提示横幅"的 `ASSERT-FAIL` 被抓出。

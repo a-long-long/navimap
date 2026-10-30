@@ -1,10 +1,10 @@
-/* route_cli —— 路线计算的命令行入口（阶段 8）
+/* skedaddle_route_cli —— 路线计算的命令行入口（阶段 8）
  *
  * GUI 没法无头断言，所以路由也做成 CLI：给定经纬度起终点，输出路径统计、
  * 逐段自检结果，可选导出 GeoJSON。退出码 0 = 成功且自检通过。
  *
  * 用法：
- *   ./route_cli --graph=products/graph --from=39.90,116.40 --to=34.75,113.63
+ *   ./skedaddle_route_cli --graph=products/graph --from=39.90,116.40 --to=34.75,113.63
  *               [--mode=time|dist] [--avoid-toll] [--avoid-unpaved]
  *               [--geojson=out.json] [--max-expand=N] [--bidir=0|1]
  *               [--no-restr2] [--exact] [--maneuvers] [--avoid-toll] [--avoid-unpaved]
@@ -107,7 +107,7 @@ int main(int argc, char **argv)
     }
     if (!from_s || !to_s) {
         if (!gpx_snap) {
-            fprintf(stderr, "用法: route_cli --graph=<dir> --from=lat,lon --to=lat,lon\n");
+            fprintf(stderr, "用法: skedaddle_route_cli --graph=<dir> --from=lat,lon --to=lat,lon\n");
             return 2;
         }
     }

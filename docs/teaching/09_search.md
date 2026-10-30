@@ -452,10 +452,10 @@ int search_query(SearchDb *d, const char *q,
 
 ## 五、演示、练习与验收
 
-- **演示**：`./build_rel/search_cli --db=products/places_auto.db --q=中关村`；`./build_rel/places_build --help`（看地名库怎么生成）。
+- **演示**：`./build_rel/skedaddle_search_cli --db=products/places_auto.db --q=中关村`；`./build_rel/skedaddle_places_build --help`（看地名库怎么生成）。
 - **练习**：把"中关村"换成单字查询（如"中"），观察它如何先走 `gram` 前缀再退化到全表 `LIKE`（开 `NAVIMAP_RESTR_DEBUG` 无意义，但可在 `search_query` 里加打印看 `ids_by_prefix` 与 `ids_by_scan` 的触发顺序）。
 - **验收（读源码 / 跑命令）**：
   1. 能解释"为什么 bigram + 子串复核"比纯 `LIKE` 快且准，以及单字回退的触发条件（`search.c:264-272`）。
   2. 确认 `search_bigrams` 按**字符**切（`u8_next`，`search.c:33-42`），而非按字节——否则汉字 3 字节会被劈开导致搜索 0 结果。
-  3. `search_query` 返回的 `score` 在给定中心点时必须单调（`qsort` 后 `out[i].score` 升序），可用 `search_cli` 输出的距离/权重手算验证。
+  3. `search_query` 返回的 `score` 在给定中心点时必须单调（`qsort` 后 `out[i].score` 升序），可用 `skedaddle_search_cli` 输出的距离/权重手算验证。
   4. `LIKE` 的 `%`/`_` 经 `like_literal` 转义（`search.c:76-88`），确认输入通配符不会被当成全表匹配。

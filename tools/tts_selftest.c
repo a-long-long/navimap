@@ -1,4 +1,4 @@
-/* tts_selftest —— 语音播报（离线 TTS）集成自测。
+/* skedaddle_tts_selftest —— 语音播报（离线 TTS）集成自测。
  *
  * 不依赖任何真实音频设备 / TTS 引擎：用 NAVIMAP_TTS_DRYRUN 把"发声"重定向到
  * 一个临时文件，断言 nm_tts_speak 把文本正确交给了引擎；再对分层阈值

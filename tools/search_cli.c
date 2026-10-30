@@ -1,4 +1,4 @@
-/* search_cli —— 地名 / POI 搜索的无头验收（阶段 7）
+/* skedaddle_search_cli —— 地名 / POI 搜索的无头验收（阶段 7）
  *
  * 搜索这种东西 GUI 里敲两个字看一眼就算"验过了"，最容易留下性能与排序的坑，
  * 所以把断言写在这里：
@@ -11,7 +11,7 @@
  *   5. 召回：gram 索引完整性抽查（随机抽 400 个二字以上的地名，逐个搜得到自己）
  *
  * 用法：
- *   ./search_cli [--db=products/places_auto.db] [--near=39.90,116.40] [--limit=20]
+ *   ./skedaddle_search_cli [--db=products/places_auto.db] [--near=39.90,116.40] [--limit=20]
  *                [--q=中关村] [--repeat=20] [--recall-check]
  */
 

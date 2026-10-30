@@ -2,7 +2,7 @@
 # sync_maps.sh —— 让 sources/ 下新下载的 PBF 自动变成可加载的路网
 #
 # 存在理由：主程序不会自己扫描目录，也不会检查产物是不是过期。以前加一张新地图
-# 要手工敲 graph_extract、手工记目录名、手工传给 --graph，而且换了 PBF 忘了重转时
+# 要手工敲 skedaddle_graph_extract、手工记目录名、手工传给 --graph，而且换了 PBF 忘了重转时
 # 程序一声不吭继续画旧图（app_init 只比对 magic，连版本号都不校验）。
 # 本脚本把"发现新地图 → 转换 → 校验"这条链自动掉，指纹记在每份产物的 manifest.txt 里。
 #
@@ -12,7 +12,7 @@
 #   ./scripts/sync_maps.sh --only=hebei   # 只处理一个
 #   ./scripts/sync_maps.sh --force        # 无视指纹，全部重转
 #   ./scripts/sync_maps.sh --no-probe     # 跳过 PBF 完整性预检（快一点，坏文件会等到转换时才炸）
-#   ./scripts/sync_maps.sh --no-check     # 转换后不跑 graph_check
+#   ./scripts/sync_maps.sh --no-check     # 转换后不跑 skedaddle_graph_check
 #
 # 退出码：0 = 全部就绪；1 = 至少一个源文件转换失败（需要人工介入）。
 
@@ -23,7 +23,7 @@ BIN="$ROOT/build"
 SRC_DIR="$ROOT/sources"
 OUT_ROOT="$ROOT/products/graph"
 
-# 输出根可能还不存在（全新克隆、或被人手工删过）——graph_extract 不会自己建父目录
+# 输出根可能还不存在（全新克隆、或被人手工删过）——skedaddle_graph_extract 不会自己建父目录
 mkdir -p "$OUT_ROOT" || { printf '[FAIL ] 无法创建输出目录 %s\n' "$OUT_ROOT"; exit 1; }
 
 DRY=0
@@ -62,7 +62,7 @@ md5of() {
     else md5 -q; fi
 }
 
-for b in graph_extract graph_check pbf_info places_build lmbuild_cli; do
+for b in skedaddle_graph_extract skedaddle_graph_check skedaddle_pbf_info skedaddle_places_build skedaddle_lmbuild_cli; do
     if [ ! -x "$BIN/$b" ]; then
         printf '缺少 %s —— 先构建：\n  source env.sh && cmake --build build -j"$NPROC"\n' "$BIN/$b"
         exit 1
@@ -70,7 +70,7 @@ for b in graph_extract graph_check pbf_info places_build lmbuild_cli; do
 done
 
 # 当前期望的二进制格式版本。产物 manifest 里记的版本对不上就重转。
-WANT_VER="$("$BIN/graph_extract" --fmt-version)"
+WANT_VER="$("$BIN/skedaddle_graph_extract" --fmt-version)"
 
 # 从 manifest.txt 取一个键的值（键后面跟的是空白，值到行尾）
 mani_get() { sed -n "s/^$1[[:space:]]\+//p" "$2" 2>/dev/null | head -1; }
@@ -158,8 +158,8 @@ while IFS= read -r f; do
 
     # ---- 完整性预检：截断/损坏的 PBF 在这里就被拦下，而不是转出一张残缺的图 ----
     if [ "$DO_PROBE" = 1 ]; then
-        if ! "$BIN/pbf_info" "$f" >/dev/null 2>&1; then
-            printf '[FAIL ] %-12s PBF 不完整或已损坏（pbf_info 读不通）。\n' "$name"
+        if ! "$BIN/skedaddle_pbf_info" "$f" >/dev/null 2>&1; then
+            printf '[FAIL ] %-12s PBF 不完整或已损坏（skedaddle_pbf_info 读不通）。\n' "$name"
             printf '        建议挪走：mv %s %s/_bad/\n' "$f" "$SRC_DIR"
             n_fail=$((n_fail+1))
             continue
@@ -174,8 +174,8 @@ while IFS= read -r f; do
         continue
     fi
     t0=$(date +%s)
-    if ! "$BIN/graph_extract" --out="$tmp" "$f" > "$tmp.log" 2>&1; then
-        printf '[FAIL ] %-12s graph_extract 闸门未过（%s 秒）\n' "$name" "$(( $(date +%s) - t0 ))"
+    if ! "$BIN/skedaddle_graph_extract" --out="$tmp" "$f" > "$tmp.log" 2>&1; then
+        printf '[FAIL ] %-12s skedaddle_graph_extract 闸门未过（%s 秒）\n' "$name" "$(( $(date +%s) - t0 ))"
         mv "$tmp.log" "$OUT_ROOT/failed-$name.log"
         grep -h 'ASSERT-FAIL' "$OUT_ROOT/failed-$name.log" | head -5 | sed 's/^/        /'
         printf '        多半是新地图出现了 road_tags.c 表里没有的 highway 取值，需要人工补表。\n'
@@ -187,8 +187,8 @@ while IFS= read -r f; do
     fi
 
     if [ "$DO_CHECK" = 1 ]; then
-        if ! "$BIN/graph_check" "$tmp" > "$tmp.check.log" 2>&1; then
-            printf '[FAIL ] %-12s graph_check 不通过，已丢弃本次产物\n' "$name"
+        if ! "$BIN/skedaddle_graph_check" "$tmp" > "$tmp.check.log" 2>&1; then
+            printf '[FAIL ] %-12s skedaddle_graph_check 不通过，已丢弃本次产物\n' "$name"
             mv "$tmp.check.log" "$OUT_ROOT/failed-$name.log"
         grep -h 'ASSERT-FAIL' "$OUT_ROOT/failed-$name.log" | head -5 | sed 's/^/        /'
         drop_tmp "$tmp"
@@ -249,7 +249,7 @@ done < <(find "$SRC_DIR" -maxdepth 1 -type f \( -name '*.osm.pbf' -o -name '*.pb
 # ---------------------------------------------------------------------------
 # 地名 / POI / 街道名库（两份 Provinces 共用一个库，所以放在各省循环之外只做一次）
 #
-# 为什么必须在这里而不是手工跑：地名挂在 PBF 的**节点**上，graph_extract 一个节点
+# 为什么必须在这里而不是手工跑：地名挂在 PBF 的**节点**上，skedaddle_graph_extract 一个节点
 # 都不留（只抽 ways），所以"加了新地图却没重建这里"的表现极难发现 —— 地图照画、
 # 路照通，只有搜索安静地变差、地图上安静地少了地名。以前就是这么丢掉生成器的。
 #
@@ -280,7 +280,7 @@ else
     # 结果是每次跑 --only 都误判要重建。
     while IFS= read -r f; do
         [ -n "$f" ] || continue
-        # meta 里记的是相对 ROOT 的路径（直接跑 places_build 时传什么就是什么），
+        # meta 里记的是相对 ROOT 的路径（直接跑 skedaddle_places_build 时传什么就是什么），
         # 而 find 给的是绝对路径 —— 不剥前缀就永远对不上，每次都会重建一次。
         frel="${f#$ROOT/}"
         mrel="$(pmeta_idx "$pi" source)"
@@ -311,8 +311,8 @@ else
         # 绝不能让它在半途留下一个写了一半、还能被打开的库。
         ptmp="$PLACES_DB.tmp.$$"
         pmtmp="$PLACES_META.tmp.$$"
-        if "$BIN/places_build" --sources="$SRC_DIR" --db="$ptmp" --meta="$pmtmp" > "$ptmp.log" 2>&1 &&
-           "$BIN/places_build" --db="$ptmp" --selftest >> "$ptmp.log" 2>&1; then
+        if "$BIN/skedaddle_places_build" --sources="$SRC_DIR" --db="$ptmp" --meta="$pmtmp" > "$ptmp.log" 2>&1 &&
+           "$BIN/skedaddle_places_build" --db="$ptmp" --selftest >> "$ptmp.log" 2>&1; then
             sed -e "s#^db .*#db           = ${PLACES_DB#$ROOT/}#" "$pmtmp" > "$pmtmp.fix" &&
                 mv -f "$pmtmp.fix" "$pmtmp"
             if mv -f "$ptmp" "$PLACES_DB" && mv -f "$pmtmp" "$PLACES_META"; then
@@ -324,7 +324,7 @@ else
             fi
             rm -f "$ptmp.log" "$pmtmp"
         else
-            printf '[FAIL ] %-12s places_build 未通过（自检失败）\n' "places"
+            printf '[FAIL ] %-12s skedaddle_places_build 未通过（自检失败）\n' "places"
             tail -3 "$ptmp.log" | sed 's/^/        /'
             mv "$ptmp.log" "$ROOT/products/failed-places.log"
             rm -f "$ptmp" "$pmtmp"
@@ -359,7 +359,7 @@ else
     #   路网指纹对不对，都发现不了"源码里的地标列表改了"。不加这一项的话，
     #   改列表后重建会被 SKIP，旧表静默留在原地（与 §51.5 同源）。
     #   --print-lmfp 不加载路网，开销可忽略。
-    lm_fp=$("$BIN/lmbuild_cli" --print-lmfp --nlm="$LM_NLM" 2>/dev/null |
+    lm_fp=$("$BIN/skedaddle_lmbuild_cli" --print-lmfp --nlm="$LM_NLM" 2>/dev/null |
             sed -n 's/^lmfp[[:space:]]\+//p' | head -1)
 
     want_fp=$(
@@ -388,7 +388,7 @@ else
             t0=$(date +%s)
             # 直接写临时文件，成功才 mv：万一构建中途 OOM，不能把一份半截的表
             # 留在正式路径上（半截表 magic 是对的，会被当成有效表加载）。
-            if "$BIN/lmbuild_cli" --graph="$OUT_ROOT" --out="$ltmp" \
+            if "$BIN/skedaddle_lmbuild_cli" --graph="$OUT_ROOT" --out="$ltmp" \
                     --cell=3000 --nlm="$LM_NLM" > "$ltmp.log" 2>&1 &&
                [ -s "$ltmp" ]; then
                 printf 'fingerprint %s\nlmver %s\ncell_m 3000\nnlm %s\nlmfp %s\n' \

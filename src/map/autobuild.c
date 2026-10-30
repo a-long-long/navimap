@@ -56,7 +56,7 @@ static int prov_name(const char *file, char *out, size_t cap)
 /* 探测：转换器、源目录                                                 */
 /* ------------------------------------------------------------------ */
 
-/* graph_extract 在哪：与本程序同目录 → 同目录的 build/ → PATH。
+/* skedaddle_graph_extract 在哪：与本程序同目录 → 同目录的 build/ → PATH。
  * （第三档是 build/RelWithDebInfo/navimap 这种多发生器成本身的场景，
  *  顺带也覆盖仓库根下的 <根>/build/。） */
 static int find_tool(char *out, size_t cap)
@@ -70,17 +70,17 @@ static int find_tool(char *out, size_t cap)
             char *slash = (char *)nm_last_sep(dir);
             if (slash) {
                 *slash = '\0';
-                if (nm_which(dir, "graph_extract", out, cap) == 0) return 0;
+                if (nm_which(dir, "skedaddle_graph_extract", out, cap) == 0) return 0;
                 char sub[4096];
                 if (nm_path_join(sub, sizeof(sub), dir, "build") == 0 &&
-                    nm_which(sub, "graph_extract", out, cap) == 0) return 0;
+                    nm_which(sub, "skedaddle_graph_extract", out, cap) == 0) return 0;
                 char up[4096];
                 if (nm_path_join(up, sizeof(up), dir, "..") == 0 &&
-                    nm_which(up, "graph_extract", out, cap) == 0) return 0;
+                    nm_which(up, "skedaddle_graph_extract", out, cap) == 0) return 0;
             }
         }
     }
-    return nm_find_in_path("graph_extract", out, cap);
+    return nm_find_in_path("skedaddle_graph_extract", out, cap);
 }
 
 /* sources/ 在哪：从 graph_dir 逐级往上找，最多 6 级 */
@@ -557,7 +557,7 @@ int autobuild_repair(const char *graph_dir, const AutoBuildOpt *opt,
         if (!have_tool) {
             if (o.tool && *o.tool) snprintf(tool, sizeof(tool), "%s", o.tool);
             else if (find_tool(tool, sizeof(tool)) != 0) {
-                fprintf(stderr, "[自动重建] 找不到 graph_extract，无法自动重建。"
+                fprintf(stderr, "[自动重建] 找不到 skedaddle_graph_extract，无法自动重建。"
                                 "手工执行：./scripts/sync_maps.sh\n");
                 st.failed += (nn - i);
                 break;

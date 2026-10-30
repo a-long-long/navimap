@@ -22,7 +22,7 @@
 
 ### 1.1 构建系统（关键事实）
 - 整个 `src/` 编译成**一个** `navimap_core` 静态库（`add_library(navimap_core STATIC ${CORE_SRCS})`，`CORE_SRCS` 显式罗列、非 glob）。
-- 24 个可执行文件（主程序 + `tools/` 各类 CLI + 可选 `navmap_qt`）全部 `target_link_libraries(... navimap_core)`。
+- 24 个可执行文件（主程序 + `tools/` 各类 CLI + 可选 `skedaddle`）全部 `target_link_libraries(... navimap_core)`。
 - 没有多包/多模块构建（vcpkg/conan 之类）。这是 L2 的"起点状态"，不是缺陷。
 
 ### 1.2 目录即模块（L1 已到位）
@@ -132,7 +132,7 @@ navmap_geo / navmap_strpool / navmap_plat / navmap_mem  (叶子，mem→plat)
 阶段 3 的实际做法（可作为后续同类工作的模板）：
 
 1. **耦合从低到高**：先抽不依赖搜索状态的子系统（状态表 → 转向限制 → 代价/启发式 → 瓦片缝合 → 地标距离 → 结果校验），搜索本体（`members_of` / `expand_dir` / `plan_search`）留到最后；
-2. **每步独立 commit + 独立证据**：`route_cli` 5 条代表路线的**展开节点数**等确定性字段逐字节不变，外加该块的专属判据（lmdist 三距离、route_check 自检行、restr_ab 正负对照）；
+2. **每步独立 commit + 独立证据**：`skedaddle_route_cli` 5 条代表路线的**展开节点数**等确定性字段逐字节不变，外加该块的专属判据（lmdist 三距离、route_check 自检行、skedaddle_restr_ab 正负对照）；
 3. **私有头 `route_priv.h` 承接完整结构体**，公共头 `route.h` 不泄漏，避免把整套依赖强加给 render/ui；
 4. 编译**零警告**是硬门禁，整轮 `regress.sh` 恒为 52/54（2 项本机环境 glitch）。
 
@@ -148,7 +148,7 @@ navmap_geo / navmap_strpool / navmap_plat / navmap_mem  (叶子，mem→plat)
 2. **无幽灵依赖**：依赖图是真实 `#include` 推导（已剥注释/字符串），无注释里"以前写在 X 里"之类的伪依赖。
 3. **符号带模块前缀**：`route_*` `paint_*` `nm_*` `geo_*` —— fan-out 可直接按前缀读，模块边界"可命名、可 grep"。
 4. **平台隔离已收口**：全部 `#ifdef _WIN32` 在 `plat.{h,c}`，业务代码零分叉（前序工作已验证 MSYS2/Qt6 实机编译）。
-5. **验证手段齐备**：`tools/` 有 `regress.sh`（54 项）、`plat_selftest`、`map_shot` 像素级截图、各 `route_cli`/`search_cli` 探针——任何拆分都可立即回归，风险可控。
+5. **验证手段齐备**：`tools/` 有 `regress.sh`（54 项）、`skedaddle_plat_selftest`、`map_shot` 像素级截图、各 `skedaddle_route_cli`/`skedaddle_search_cli` 探针——任何拆分都可立即回归，风险可控。
 6. **零跨文件 extern 全局**：状态封装良好，拆库不会触发"全局被谁改了"的隐性数据流问题。
 
 ---
@@ -157,7 +157,7 @@ navmap_geo / navmap_strpool / navmap_plat / navmap_mem  (叶子，mem→plat)
 
 - **阶段 0（已完成）**：把本报告 §1.3 的 DAG 作为模块契约文档沉淀（注意：原 DAG 缺 `map→render` 边且误判为无环，见 §1.3 修正注）。
 - **阶段 1（已完成，commit 4986ace）**：把 `navmap_utils`（src/utils/*）拆成 4 个独立叶子库 `navmap_geo / navmap_strpool / navmap_plat / navmap_mem`（mem→plat），加 `navmap_pbf`，共 5 个叶子库；`navimap_core` 改为依赖它们。零破环风险。验收：regress.sh 52/54（2 项为环境相关 glitch）、零警告。
-- **阶段 2（已完成，commit a244de9 + 9316777）**：把 `map / route / search / render / ui` 提升为 5 个独立模块库，`navimap_core` 退化为聚合层（仅含 `core_anchor.c`，用 `-Wl,--start-group` 包裹所有模块库 + 叶子库 + 3rd 方库）；24 个 CLI 工具裁剪为只链所需模块子集（via `nm_link_tool()`）；`navmap_qt` 仍链聚合层。纯 CMake 改动。验收：regress.sh 52/54 零回归、核心 `core_no_sdl` 门禁仍报 CORE-NO-SDL-OK。
+- **阶段 2（已完成，commit a244de9 + 9316777）**：把 `map / route / search / render / ui` 提升为 5 个独立模块库，`navimap_core` 退化为聚合层（仅含 `core_anchor.c`，用 `-Wl,--start-group` 包裹所有模块库 + 叶子库 + 3rd 方库）；24 个 CLI 工具裁剪为只链所需模块子集（via `nm_link_tool()`）；`skedaddle` 仍链聚合层。纯 CMake 改动。验收：regress.sh 52/54 零回归、核心 `skedaddle_core_no_sdl` 门禁仍报 CORE-NO-SDL-OK。
 - **阶段 3（进行中，触发点：让路由核心可测试/可分解）**：分解 `route.c` 内部。
   用户拍板的原则：**从低耦合小块开始、搜索核心 `plan_search` 放最后，每步必须有行为等价证据**。
 
@@ -180,17 +180,17 @@ navmap_geo / navmap_strpool / navmap_plat / navmap_mem  (叶子，mem→plat)
   **剩余（留到最后）**：`members_of` / `expand_dir` / `plan_search` / `router_plan`
   与 Router 生命周期，即搜索本体。`paint.c` 未动。
 
-  验收口径：每步 `route_cli` 5 条代表路线的**展开节点数**（120294 / 531738 / 789703 /
+  验收口径：每步 `skedaddle_route_cli` 5 条代表路线的**展开节点数**（120294 / 531738 / 789703 /
   546391 / 5135）与总长/预计/吸附/地标表逐字节不变（耗时 ms 随负载波动，不作判据），
   外加**各块专属判据**（lmdist 三距离 23136.791 / 21932.828 / 27700.450 秒；
-  route_check 自检行「通过（3917 段，跨省次数 1）」；restr_ab 正向 OK + 负向 FAIL）；
+  route_check 自检行「通过（3917 段，跨省次数 1）」；skedaddle_restr_ab 正向 OK + 负向 FAIL）；
   整轮 `regress.sh` 恒为 52/54（2 项环境 glitch），零警告。
 
 - **工具层去重（已完成，commit a8f3441）**：8 个 CLI 里逐字重复的样板收敛到
   `tools/tool_common.{h,c}`（`tc_arg_val` / `tc_ab_init` / `tc_load_graph`）。
   验收同口径：regress 日志改前改后逐行一致（仅 `route_hard_ms` 471→487 ms 负载噪声），
   map_shot 10 张 BMP 用 `git stash` A/B **逐字节 IDENTICAL**。
-  ⚠️ `parse_ll` **故意不统一**：`lmbuild_cli` 多一道空纬度防护，统一会改变另外
+  ⚠️ `parse_ll` **故意不统一**：`skedaddle_lmbuild_cli` 多一道空纬度防护，统一会改变另外
   5 个工具的行为（已在 tool_common.h 顶部注明，留作独立的有意改动）。
 
 - **阶段 4（2026-10-28 立项，进行中）：消掉两处模块级分层倒置** ——

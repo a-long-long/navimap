@@ -627,19 +627,19 @@ void DownloadDialog::runContoursGeneration()
     // 省目录路径
     QString provDir = m_repo + "/products/graph/" + m_dlName;
     
-    // 用 pbf_info 获取 PBF 的 bbox
+    // 用 skedaddle_pbf_info 获取 PBF 的 bbox
     QString pbfPath = m_sources + "/" + m_dlName + "-latest.osm.pbf";
     if (!QFile::exists(pbfPath)) {
         m_log->append(QString::fromUtf8("  [等高线] PBF 文件不存在，跳过生成。"));
         return;
     }
     
-    // 检查 pbf_info 工具是否存在（构建产物在 build/ 顶层，历史曾在 build/tools/，两者都探）
-    QString pbfInfo = m_repo + "/build/pbf_info.exe";
+    // 检查 skedaddle_pbf_info 工具是否存在（构建产物在 build/ 顶层，历史曾在 build/tools/，两者都探）
+    QString pbfInfo = m_repo + "/build/skedaddle_pbf_info.exe";
     if (!QFile::exists(pbfInfo))
         pbfInfo = m_repo + "/build/tools/pbf_info.exe";
     if (!QFile::exists(pbfInfo)) {
-        m_log->append(QString::fromUtf8("  [等高线] pbf_info 工具未编译，跳过生成。"));
+        m_log->append(QString::fromUtf8("  [等高线] skedaddle_pbf_info 工具未编译，跳过生成。"));
         return;
     }
     
@@ -647,11 +647,11 @@ void DownloadDialog::runContoursGeneration()
     proc.setWorkingDirectory(m_repo);
     proc.start(pbfInfo, QStringList() << pbfPath);
     if (!proc.waitForFinished(5000)) {
-        m_log->append(QString::fromUtf8("  [等高线] pbf_info 运行超时，跳过生成。"));
+        m_log->append(QString::fromUtf8("  [等高线] skedaddle_pbf_info 运行超时，跳过生成。"));
         return;
     }
     
-    // 解析输出，寻找 "bbox_observed"（由 pbf_info 输出）
+    // 解析输出，寻找 "bbox_observed"（由 skedaddle_pbf_info 输出）
     QByteArray out = proc.readAllStandardOutput();
     QList<QByteArray> lines = out.split('\n');
     double lat0 = 0.0, lon0 = 0.0, lat1 = 0.0, lon1 = 0.0;
@@ -714,9 +714,9 @@ void DownloadDialog::runContoursGeneration()
     // 瓦片去重：仅当 existingTiles < totalTiles 才在下方追加 --download（见后文）
 
     
-    QString contourExe = m_repo + "/build/gen_contours.exe";
+    QString contourExe = m_repo + "/build/skedaddle_gen_contours.exe";
     if (!QFile::exists(contourExe)) {
-        m_log->append(QString::fromUtf8("  [等高线] gen_contours 工具未编译，跳过生成。"));
+        m_log->append(QString::fromUtf8("  [等高线] skedaddle_gen_contours 工具未编译，跳过生成。"));
         return;
     }
     

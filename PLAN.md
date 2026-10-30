@@ -58,7 +58,7 @@ Program received signal SIGSEGV, Segmentation fault.
 
 ### 0.4 "天津分片只有 62 个节点"——已查清，不是 bug（2026-09-21 实测）
 
-`graphset.txt` 里 `shard 7 tianjin.osm.pbf 62 2` 看着像抽取失败，用阶段 2 新写的 `pbf_info` 实测后排除了：
+`graphset.txt` 里 `shard 7 tianjin.osm.pbf 62 2` 看着像抽取失败，用阶段 2 新写的 `skedaddle_pbf_info` 实测后排除了：
 
 | 文件                | dense 节点   | ways      | 观测 bbox                           |
 | ----------------- | ---------- | --------- | --------------------------------- |
@@ -298,12 +298,12 @@ typedef struct {
 | 阶段        | 状态 | 说明                                                                                                                                                            |
 | --------- | -- | ------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | 0 骨架      | ✅  | `env.sh` + CMake（SDL2_ttf 改为 REQUIRED，缺失即失败）+ protoc-c 代码生成                                                                                                   |
-| 2 PBF 解析  | ✅  | `pbf_info`：北京 530,968 ways 与旧版 meta.txt 完全对上；`bbbike.pbf` 实为截断文件（当负向样本）                                                                                       |
-| 3 路网落盘    | ✅  | `graph_extract` + `graph_check`：北京 1,451,478 节点 / 2,843,824 边 / 363 转向限制，3.3 秒                                                                                |
+| 2 PBF 解析  | ✅  | `skedaddle_pbf_info`：北京 530,968 ways 与旧版 meta.txt 完全对上；`bbbike.pbf` 实为截断文件（当负向样本）                                                                                       |
+| 3 路网落盘    | ✅  | `skedaddle_graph_extract` + `skedaddle_graph_check`：北京 1,451,478 节点 / 2,843,824 边 / 363 转向限制，3.3 秒                                                                                |
 | 1+5 渲染    | ✅  | `navimap`（Wayland 窗口实测跑通）+ `map_shot`（离屏渲染，三档 zoom 人工核验）                                                                                                      |
 | 4 空间索引    | ✅  | 单省 Z14 tile（北京 10,593 tile）；**多省图集**：`--graph=products/graph`（父目录）自动扫描加载全部 8 省、按视口 bbox 整省裁剪、分阶段渲染（面→路→线→标注）；**跨省渲染去重**；**数据包含检测**（北京/天津 ⊂ 河北，加载时自动识别，路由跳过副本） |
 | 6 中文标注    | ✅  | 字形缓存（glyph cache，按码点哈希）+ 字体可选（`--font=`）、字号运行期可调（`[` `]`，8~32pt）                                                                                              |
-| 7 搜索      | ✅  | 2026-09-22 完成，见 §13：`search_cli` 均值 1.0 ms，边界输入不崩；GUI 顶栏搜索框 + 结果钉子                                                                                            |
+| 7 搜索      | ✅  | 2026-09-22 完成，见 §13：`skedaddle_search_cli` 均值 1.0 ms，边界输入不崩；GUI 顶栏搜索框 + 结果钉子                                                                                            |
 | 8 路线计算    | ✅  | 跨省坐标键 A* + 双向 A\*；京→郑 693.65 km，5.4 s / 展开 231 万；`route_check` 自检（含 Σseg_ds == total_s）三条路线全过                                                                 |
 | 9 GUI 与导航 | ✅  | 2026-09-22 完成，见 §12：点选起终点（后台线程算路）+ 路线叠加 + 指令面板 + 模拟导航（跟随/偏航重算/剩余 ETA）                                                                                         |
 
@@ -338,16 +338,16 @@ typedef struct {
 ### 新地图自动识别（2026-09-21 补）
 
 `scripts/sync_maps.sh`：扫描 `sources/*.pbf`，与 `products/graph/<省>/manifest.txt` 里的指纹  
-（`src_bytes` / `src_mtime` / `binfmt_version`，由 graph_extract 写入）比对，  
-缺失或过期就自动 `pbf_info` 预检（拦截断文件）→ `graph_extract`（转临时目录，  
-成功才替换）→ `graph_check`。闸门失败（新省出现表外 highway 取值）会明确报  
+（`src_bytes` / `src_mtime` / `binfmt_version`，由 skedaddle_graph_extract 写入）比对，  
+缺失或过期就自动 `skedaddle_pbf_info` 预检（拦截断文件）→ `skedaddle_graph_extract`（转临时目录，  
+成功才替换）→ `skedaddle_graph_check`。闸门失败（新省出现表外 highway 取值）会明确报  
 "需人工补表"，不会静默产出残图。注意：
 
 - **"有 manifest.txt" 严格等价于 "产物可用"**（闸门没过不写 manifest，此前是先写后判，失败产物会被当成已转换）。
 - 加载端仍未校验：`app_init` 不读 manifest、`nmbin_open` 只比对 magic 不校验版本——  
   换了 PBF 不跑本脚本，程序会静默画旧图。启动校验待做（加载端读 manifest 比对 + 调用 nmbin_check）。
 - 地名库 `places_auto.db` 的**生成器已随旧源码丢失**，新省只有路名标注（names.bin），  
-  没有地名/POI 标注（places.db），需要重写 places_build。
+  没有地名/POI 标注（places.db），需要重写 skedaddle_places_build。
 
 
 ### 阶段 8：跨省路线计算（2026-09-21 完成）
@@ -375,7 +375,7 @@ typedef struct {
 - 状态表：开放寻址（key+1 编码空槽），ents 数组会 realloc ⇒ **StEnt* 严禁跨  
   st_intern 持有\*\*（全文件 intern→立刻用完→下次重新 find）。
 
-验收（`route_cli` 全部 ROUTE-OK，路径逐段自检通过）：
+验收（`skedaddle_route_cli` 全部 ROUTE-OK，路径逐段自检通过）：
 
 | 路线           | 结果              | 绕行系数 | 耗时                                  |
 | ------------ | --------------- | ---- | ----------------------------------- |
@@ -444,9 +444,9 @@ products/graph/beijing/          # 自描述二进制（NAVMBIN v1）
   仍是全项目最大短板。下一步：按块预投影缓存。
 - ~~路名渲染（还没接字形缓存）~~ → 已做，含 glyph cache（按码点哈希，`font.c`）。
 - ~~跨文件去重 + graphset 分块索引~~ → 已做（`mapset.c` + `paint.c` 的 DedupSet）。
-- **via=way 的转向限制仍未处理**（182 条被跳过，占 28%）：`graph_extract` 只写  
+- **via=way 的转向限制仍未处理**（182 条被跳过，占 28%）：`skedaddle_graph_extract` 只写  
   via_node 型，`route.c` 的 `restr_blocked` 也只认 via_node。会规划出禁止转向的路线。
-- **`places_build` 地名库生成器缺失**：新导入的省没有地名标注，搜索覆盖范围不随  
+- **`skedaddle_places_build` 地名库生成器缺失**：新导入的省没有地名标注，搜索覆盖范围不随  
   数据增长（现有 22.6 万条是旧工具产出的存量）。
 - **跨省接缝处的转向限制未验证**：接缝两侧分属不同省，限制记录的 via 节点在对方省里，  
   目前未做跨省限制检查。
@@ -459,7 +459,7 @@ products/graph/beijing/          # 自描述二进制（NAVMBIN v1）
 
 ## 8. 地图信息补全（2026-09-21 下午完成）
 
-用户反馈"显示的地图信息不全"。诊断（tag_stats 统计 beijing.osm.pbf）：  
+用户反馈"显示的地图信息不全"。诊断（skedaddle_tag_stats 统计 beijing.osm.pbf）：  
 ways_total 530,968 中只有 34% 进图——建筑 137,837、landuse/natural 56,213 全丢，  
 footway/path/steps/cycleway/pedestrian 87,417 因"不可通行"丢弃，且没有任何文字标注。
 
@@ -496,8 +496,8 @@ z11-12 仍偏慢，待做网格空间索引（见已知待办）。
 
 ### 验证链
 
-tag_stats（要素对账）→ graph_extract（对账式=total，rt_unknown_drivable=0）  
-→ graph_check（lines/areas 下标越界/面闭合/kind 合法，全过）→ map_shot  
+skedaddle_tag_stats（要素对账）→ skedaddle_graph_extract（对账式=total，rt_unknown_drivable=0）  
+→ skedaddle_graph_check（lines/areas 下标越界/面闭合/kind 合法，全过）→ map_shot  
 （BMP 颜色直方图断言填充色存在）→ Wayland 窗口 3 次 timeout 退出无 core dump。  
 截图存档 docs/shots/{area_z11,area_z14,area_z16,label_z12,label_z16}.png
 
@@ -614,7 +614,7 @@ zoom 12 全城帧时间 496ms → 210ms（软件渲染，窗口模式实测）�
 
 ### 验收（全部无头断言）
 
-- `navsim_cli`（新工具）：推进单调性、恒等式（已走+剩余==全程）、车头恒贴线  
+- `skedaddle_navsim_cli`（新工具）：推进单调性、恒等式（已走+剩余==全程）、车头恒贴线  
   （横向偏移 ≈ 0）、到达判定、模拟耗时 ≈ 预计耗时、200 m 判偏航 / 30 m 不判、  
   偏航后重算起点贴住注入点。北京城内 8.27 km 与京→郑 693.65 km（238 条指令）  
   全过，跨省投影零误差。
@@ -663,7 +663,7 @@ SQLite 依旧只当**索引**，路网主存储不变（arch.md 的要求）。
   连接**——共用连接会互相踩游标。main/map_shot 支持 `--q=<关键词>`。
 - 搜索结果在图上画钉子（选中蓝芯带名字）。
 
-### 验收（search_cli + map_shot --q，全过）
+### 验收（skedaddle_search_cli + map_shot --q，全过）
 
 - "中关村/西二旗/天安门/五道口"命中且结果名含关键词；"五道口"本体排第一  
   （匹配质量生效）；跨省同名不误判（"中关村"在山东 378 km 外有同名村，  
@@ -680,7 +680,7 @@ SQLite 依旧只当**索引**，路网主存储不变（arch.md 的要求）。
   自检炸了。修法：total_s 改用**舍入后**的段耗时累计，两边严格相等  
   （导航剩余 ETA 本来就按 seg_ds 累计，这一改口径完全统一）。
 - 已知数据缺口：places_auto.db 里没有"天安门"本体（只有安检口/绿地），  
-  是地名抽取阶段的遗漏，不是搜索问题；places_build 生成器仍缺（见遗留）。
+  是地名抽取阶段的遗漏，不是搜索问题；skedaddle_places_build 生成器仍缺（见遗留）。
 
 ---
 
@@ -835,7 +835,7 @@ z12 观感反而**更清晰**（对比 §15 的修前图）：主干路网层次
 ## 16. 启动自愈：产物没了/坏了就自动重建（2026-09-22 完成）
 
 此前程序是纯加载（src/ 里没有 system/popen/exec）：删掉 products/graph/tianjin  
-后 map_shot 只打印一句"既不是省目录也没有 nodes.bin"就空跑，graph_check 直接  
+后 map_shot 只打印一句"既不是省目录也没有 nodes.bin"就空跑，skedaddle_graph_check 直接  
 ASSERT-FAIL —— 没有任何自愈。现在启动时先体检，需要就现场重建。
 
 ### 判据（与 scripts/sync_maps.sh 完全一致，避免"脚本说该转、程序说不转"）
@@ -852,7 +852,7 @@ ASSERT-FAIL —— 没有任何自愈。现在启动时先体检，需要就现�
 
 - `autobuild_repair()` 体检 + 重建；`mapset_load_repair()` = 先修再加载。
 - 重建走 **fork + execv**（不走 shell、不经 system），只执行项目自带的  
-  graph_extract（与本程序同目录 → PATH 依次探测），参数固定；省名过白名单  
+  skedaddle_graph_extract（与本程序同目录 → PATH 依次探测），参数固定；省名过白名单  
   （禁 `/`、`.`、`..`），所以没有命令注入与路径逃逸。
 - 旧产物先清掉再转：混着写会产出"新 nodes.bin 配旧 osmid.bin"这种自相矛盾的  
   图。清理用自己的 unlink/rmdir 递归（**不能**用 rm 命令——本机 rm 是只搬回收站  
@@ -860,7 +860,7 @@ ASSERT-FAIL —— 没有任何自愈。现在启动时先体检，需要就现�
 - 并发锁：`<省>.building` 里写 pid，O_EXCL 抢占；进程死了的孤儿锁会被接管，  
   活着的就等（实测打印"等待中…"）。
 - 开关：默认开，`--no-autobuild` 只诊断不动手；`--sources=` 指定源目录。  
-  接入 navimap / map_shot / route_cli / navsim_cli / restr_ab / tile_xcheck。
+  接入 navimap / map_shot / skedaddle_route_cli / skedaddle_navsim_cli / skedaddle_restr_ab / skedaddle_tile_xcheck。
 
 ### 验收（逐个场景实测，不是跑通正常路径就算）
 
@@ -905,7 +905,7 @@ bbox 是矩形、省界不规则，所以"落在某省 bbox 内"不等于真有�
 
 ### 验收（tools/coverage_cli.c + map_shot 像素断言）
 
-- coverage_cli 自检：北京中心必须有路、(30,110) 必须无数据、无数据时提示里  
+- skedaddle_coverage_cli 自检：北京中心必须有路、(30,110) 必须无数据、无数据时提示里  
   必须同时含 sources/、sync_maps.sh 与下载链接、有数据时不得出现"下载"。
 - map_shot 像素断言（横幅边框琥珀色 255,186,64）：  
   省外点 `nomap_banner_px 1220` ASSERT-OK；北京 ASSERT-OK 且横幅 0 px。
@@ -1052,7 +1052,7 @@ z9 0.000% / z11 0.004% / z13 0.016%，且转移全是"相邻要素边界换了�
 
 - `scripts/regress.sh`：把散在各会话里的验收固化成一件事——8 个省各渲一帧  
   （含"无地图区域必须出提示横幅"）、跨省路线+里程区间自检、两条模拟导航、  
-  `restr_ab` / `tile_xcheck` / `coverage_cli` / `search_cli`，共 21 项。  
+  `skedaddle_restr_ab` / `skedaddle_tile_xcheck` / `skedaddle_coverage_cli` / `skedaddle_search_cli`，共 21 项。  
   判据是"出现期望标记 且 无 ASSERT-FAIL 且返回值为 0"。
 - `scripts/bmpdiff.py`：本机没 PIL/ImageMagick，用它做优化前后的逐像素对比 +  
   颜色转移统计（区分"像素抖动"和"要素丢了"）。
@@ -1454,7 +1454,7 @@ polyrefs，上限也只有 ~12 ms，不值得为此再动一次数据格式。
 
 ---
 
-## 25. places_build —— 补上地名 / POI 抽取（2026-09-23，首轮落地）
+## 25. skedaddle_places_build —— 补上地名 / POI 抽取（2026-09-23，首轮落地）
 
 ### 25.1 为什么必须有它
 
@@ -1467,7 +1467,7 @@ polyrefs，上限也只有 ~12 ms，不值得为此再动一次数据格式。
 
 ### 25.2 工具形态
 
-`tools/places_build.c`（已进 CMake target `places_build`）：
+`tools/places_build.c`（已进 CMake target `skedaddle_places_build`）：
 
 ```
 --sources=sources --db=products/places_auto.db [--meta=…] [--verbose]
@@ -1566,14 +1566,14 @@ PLK_ROAD = 13,   /* > labels.c kind_max_for_zoom() 的上限 12 ⇒ 标注查不
 
 ### 25.7 已替换旧库并接入自动链路
 
-- `products/places_auto.db` 已换成 places_build 产出的库；旧的那份留在  
+- `products/places_auto.db` 已换成 skedaddle_places_build 产出的库；旧的那份留在  
   `products/places_auto.db.pre-places-build.bak`（含 .meta），随时可换回去。
 - `scripts/sync_maps.sh`：各省循环之后多一步 places。判据是 sources 的字节数 / mtime  
   全对上才跳过；建库先落临时文件，`--selftest` 过了才 mv 就位（地名库是运行时  
   sqlite3 直接打开的，绝不能留下写了一半还能打开的库）。实测：删掉 meta 让它重建  
   → 42 s 出 `[ OK ]`，之后连续两次 `[SKIP ]`。  
   ★ 两个写错就出问题的细节：meta 记的是**带下标**的键（`src_bytes[0]`）且键值之间是  
-  `= `，跟各省 manifest.txt 不是一套；脚本传的是绝对路径，而直接跑 places_build 传  
+  `= `，跟各省 manifest.txt 不是一套；脚本传的是绝对路径，而直接跑 skedaddle_places_build 传  
   相对路径时记的是相对路径 —— 比对前必须两边都剥一次 `$ROOT/`。
 - `scripts/regress.sh`：新增 `places_selftest`（第 22 项）。**这条判据是踩出来的**：  
   加上路名那一刻，库里 5.7 万条被自检判为非法，而当时 21 项里没有一项会报警  
@@ -1772,7 +1772,7 @@ bit5 量出**一次随机访存只值 6 ms**，也就是这个改动的上限就
 的启发式下搜索"。路网又有强方向性（高速），自然还是走到同一条路。
 
 ⇒ 默认改成 `ROUTE_HEUR_W_DEFAULT 1.2`。★ **验收/对拍工具必须显式传 1.0**  
-（`restr_ab` 两遍、以及 `--exact` 对拍）：否则里程差异不再只反映被测因素  
+（`skedaddle_restr_ab` 两遍、以及 `--exact` 对拍）：否则里程差异不再只反映被测因素  
 （转向限制）本身的代价，A/B 就失效了。
 
 ### 27.3 否决：Douglas-Peucker 简化几何（有数据，别再试第二遍）
@@ -2111,7 +2111,7 @@ z9 分解（第 2 帧）：背景 0 / **面 65** / 路 43 / 线 20 / 标注 3。
 - `router_route_ll()`：经纬度→经纬度算路，**仅当 `router_plan` 返回 -1（不连通）
   时换下一组候选**；按 (i+j) 升序试（优先只换一端、先换起点）；
   -2（超限）立刻放弃，不越试越糟。
-- `route_cli` 改用它，并**复用首次成功的结果** ⇒ `--repeat=N` 不多跑一趟。
+- `skedaddle_route_cli` 改用它，并**复用首次成功的结果** ⇒ `--repeat=N` 不多跑一趟。
 - 石家庄现在吸附到 `#116278`（196.8 m），保定→石家庄 139.04 km（绕行 1.12）、
   石家庄→北京 290.36 km —— 都合理。
 - ★ **不会改变原先成功的路线**：新过滤只在"最近节点没有出边"时才起作用，
@@ -2176,11 +2176,11 @@ A/B，而我挑的 8 条里有一半是难走路线，样本偏了**。50 条全
 
 - `router_create`：有表时 `heur_w` **和** `heur_w_hi` 都兜底成 1.3
   （hi 同值 = 关掉升级）；无表维持 1.4 / 1.8。显式传了 `--heur-w` 不受影响。
-- ⚠️ **踩到的坑**：`route_cli` / `navsim_cli` / `window.c` 都在 `RouteOpts` 里
+- ⚠️ **踩到的坑**：`skedaddle_route_cli` / `skedaddle_navsim_cli` / `window.c` 都在 `RouteOpts` 里
   写死了 `.heur_w = ROUTE_HEUR_W_DEFAULT`，把兜底**顶掉了**（命令行没给
   `--heur-w` 却一直是 1.4）。三处都改成留 0 —— 兜底逻辑只能有一个入口，
   调用点写死就等于废掉它。
-- `router_lm_loaded()` / `router_heur_w()` 两个访问器，`route_cli` 打印
+- `router_lm_loaded()` / `router_heur_w()` 两个访问器，`skedaddle_route_cli` 打印
   `地标表 已加载（生效 w=1.30）`，回归新增 `lm_loaded` 判据。
 
 #### 为什么"撞顶升 1.8"必须关掉
@@ -2197,7 +2197,7 @@ A/B，而我挑的 8 条里有一半是难走路线，样本偏了**。50 条全
 - 负向对照：只加载 1 个省时对 8 省的表 →
   `lm.bin 与当前路网不匹配（表：8 省 / 52276894 节点；现在：1 省 / 4322181 节点）
   ——已忽略，退回直线启发式`，且 w 自动回到 1.40。✓
-- `lmbuild_cli` 打印 `图指纹 8 省 / 52276894 节点`；**两边算法必须一致**，
+- `skedaddle_lmbuild_cli` 打印 `图指纹 8 省 / 52276894 节点`；**两边算法必须一致**，
   否则每次加载都误判不匹配而把表丢掉。
 
 ### 51.6 lm.bin 接进 sync_maps.sh
@@ -2258,7 +2258,7 @@ vs 基线 8913；质量仍是 −2.8%**。§51.4 里那个"中位慢 1.8×"的�
 
 ### 51.9 补上主程序算路路径的回归覆盖（43 项）
 
-发现一个**覆盖盲区**：`navsim_*` 三项用的是独立工具 `navsim_cli`，**不走 window.c**；
+发现一个**覆盖盲区**：`navsim_*` 三项用的是独立工具 `skedaddle_navsim_cli`，**不走 window.c**；
 `map_shot` 不带 `--from/--to` 也不算路 ⇒ 主程序的 `nav_worker` / `app_nav_plan_sync`
 长期没有任何自动化判据，而它们才是对外行为。我在 §51.2 刚改过这两处。
 
@@ -2285,7 +2285,7 @@ vs 基线 8913；质量仍是 −2.8%**。§51.4 里那个"中位慢 1.8×"的�
   逐省 rev.bin 产物，无个人文档。
 - 用户确认后用 `gio trash` 移入回收站（**可恢复**，不是直接删）。
   ⇒ 866 MB 仍在 `~/.local/share/Trash`，要真正腾出空间需再清空回收站。
-- rev.bin 本身是**可重建**的（`revbuild_cli` / 运行时自动建），删了不影响功能。
+- rev.bin 本身是**可重建**的（`skedaddle_revbuild_cli` / 运行时自动建），删了不影响功能。
 - **2026-09-28 12:59 复核：已不存在了。** 全盘 `find`（含 `~/.local/share/Trash`、
   `/home/.Trash-1000`、`~/Downloads/.Trash-1000`）都找不到 `rev_v2` / `rev_v1_bak`；
   回收站里只剩一条无关条目 `nav-desktop`（108 MB，来自 `/home/along/osmand-app`）。
@@ -2370,7 +2370,7 @@ vs 基线 8913；质量仍是 −2.8%**。§51.4 里那个"中位慢 1.8×"的�
 跟 §51.5 同源：**改了源码里的地标列表，路网指纹不变 ⇒ 重建被 SKIP，旧表继续被用**。
 不报错、不崩，只是算路悄悄慢 1.7 倍、质量悄悄差 0.4% —— 极难归因。
 
-**修法**：`lmbuild_cli --print-lmfp` 打印地标集指纹（FNV-1a 64，喂的是坐标的
+**修法**：`skedaddle_lmbuild_cli --print-lmfp` 打印地标集指纹（FNV-1a 64，喂的是坐标的
 **e7 整数**而不是 double 字节，否则 `39.9` 与 `39.90000000000001` 会算出两个指纹），
 不加载路网所以开销可忽略；`sync_maps.sh` 把它和 `--nlm=` 一起并进指纹：
 
@@ -2508,7 +2508,7 @@ nlm=30  lmfp fee5ccb6b3124ebb
 |---|---|---|
 | 罚项 4045 m 不够，加大就行 | `NAVIMAP_LM_PENALTY_ADD_M` 扫 0/2k/4k/8k/16k（时间）、0/5k/10k/20k/40k（距离） | ✗ 时间口径**完全不变**；距离口径 895.16→894.30→890.68→890.44→882.73，**+40 km 都没收敛到 878.41** |
 | 双向 `lm_tc[dir]`（两端目标格）搞错 | 改单向 `--bidir=0` 重跑 | ✗ 单向同样越界（895.16 vs 878.41），与双向无关 |
-| 地标 Dijkstra **每节点只存一个状态**，而算路用 (节点,入边) 状态 ⇒ 有转向限制时地标距离偏乐观 | 加 `RouteOpts.lm_no_restr`，建一张**不做转向限制**的表（`lmbuild_cli --no-restr`）重测 | ✗ 照样越界（129 vs 128；895.29 vs 878.41）⇒ **转向限制不是原因** |
+| 地标 Dijkstra **每节点只存一个状态**，而算路用 (节点,入边) 状态 ⇒ 有转向限制时地标距离偏乐观 | 加 `RouteOpts.lm_no_restr`，建一张**不做转向限制**的表（`skedaddle_lmbuild_cli --no-restr`）重测 | ✗ 照样越界（129 vs 128；895.29 vs 878.41）⇒ **转向限制不是原因** |
 
 顺带：不带限制时 Dijkstra 反而从 7.8 s 涨到 15.0 s（限制被跳过 ⇒ 松弛的边更多）。
 
@@ -2535,7 +2535,7 @@ d(u,t) ≥ d(L,t) − d(L,u)
 - 发货配置是 **时间口径 w=1.25**，本来就不承诺最优（w>1 是有意的质量换速度）。
 - 50 条实测（§52.2）：开表 w=1.25 比无表基线**质量好 3.21%**（32 好 / 11 差）。
   ⇒ **越界让个别路线差 1 分，整体上开表仍是明显正收益**。
-- 真正受损的是**"最优性"这个承诺**：`--exact` 和 `restr_ab` 的对拍依赖它。
+- 真正受损的是**"最优性"这个承诺**：`--exact` 和 `skedaddle_restr_ab` 的对拍依赖它。
   现在这个承诺在开表时不成立。
 
 ### 定夺：**接受并写明**（用户 2026-09-28 拍板）
@@ -2573,7 +2573,7 @@ d(u,t) ≥ d(L,t) − d(L,u)
   加了 `--slack=N`：`--slack=1` = 接受当前已知的最多差 1 分（退出码 0）；
   不加就是严格的"必须相等"判据。
 - 诊断旋钮（保留，后续还要用）：`NAVIMAP_LM_PENALTY_ADD_M`（在表自带 penalty 上
-  再加 N 米，默认 0）、`RouteOpts.lm_no_restr` + `lmbuild_cli --no-restr`
+  再加 N 米，默认 0）、`RouteOpts.lm_no_restr` + `skedaddle_lmbuild_cli --no-restr`
   （建表时的全图 Dijkstra 不做转向限制）。两者都只查一次 getenv / 只影响建表。
 - `products/graph/lm.bin` 仍是 30 地标那份（实验中临时换过的都已恢复并 cmp 校验）。
 
@@ -2593,7 +2593,7 @@ map 层实际上依赖 render 层、render 层实际上依赖 ui 层。
 
 具体代价：
 1. **map→render**：`navmap_map` 库名义上只依赖 `navmap_pbf` + 叶子库，实际却要 render 的符号才能链接。
-   任何"只要地图数据、不要渲染"的工具（如 `gen_contours`）都被迫把 render 拖进来。
+   任何"只要地图数据、不要渲染"的工具（如 `skedaddle_gen_contours`）都被迫把 render 拖进来。
 2. **render→ui**：`navmap_render` 名义上不依赖 `navmap_ui`，实际 `chrome.c`/`audit.c` 调 `ui/window.c` 的
    `app_*` ⇒ 迫使 CMake 用 `-Wl,--start-group` 包裹全部模块库来消解符号级环（CMakeLists.txt:430-450）。
    环一旦存在，就**无法用链接器暴露新的错误**，边界形同虚设。
@@ -2652,7 +2652,7 @@ utils  ◄ pbf  ◄ map  ◄ route ◄ render ◄ ui ◄ ui_qt
 - **依赖方向**：`grep -rn '#include "render/' src/map/` 为空（R1 后）；`grep -rn '#include "ui/' src/render/` 为空（R2 后）。
 - **行为等价**：R1/R2 前后各出一张 `--shot-offscreen` 图，`python3 scripts/bmpdiff.py 旧 新` 判 **IDENTICAL**
   （不是"看起来一样"——渲染改动最常见的失效模式就是"长得还是那样但要素少了"）。
-- **UI 逻辑**：`navmap_qt --ui-test` 33 项全过。
+- **UI 逻辑**：`skedaddle --ui-test` 33 项全过。
 - **全量回归**：`./scripts/regress.sh` 不劣于重构前（本机 Linux 数据齐全，可跑全量 77/3）。
 
 ### 53.5 R3 的门禁为什么必须"能判负"

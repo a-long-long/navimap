@@ -1,8 +1,8 @@
-/* tile_selftest —— 瓦片下标"查表版 vs 精确版"的逐点等价性验收
+/* skedaddle_tile_selftest —— 瓦片下标"查表版 vs 精确版"的逐点等价性验收
  *
  * 用法:
- *   tile_selftest --graph=<dir>                默认：nm_tile_of 必须与精确版逐点相同
- *   tile_selftest --graph=<dir> --expect-diff   对照组：nm_tile_of_raw（不带边界
+ *   skedaddle_tile_selftest --graph=<dir>                默认：nm_tile_of 必须与精确版逐点相同
+ *   skedaddle_tile_selftest --graph=<dir> --expect-diff   对照组：nm_tile_of_raw（不带边界
  *                                               回退）必须**有**差异
  *
  * ★ 为什么不抽样：nm_tile_of 用的是 nm_mercator_y_fast() 插值表，误差 3.8e-6
@@ -61,7 +61,7 @@ int main(int argc, char **argv)
         else { fprintf(stderr, "未知参数 %s\n", a); return 1; }
     }
     if (!graph) {
-        fprintf(stderr, "用法: tile_selftest --graph=<dir> [--expect-diff]\n");
+        fprintf(stderr, "用法: skedaddle_tile_selftest --graph=<dir> [--expect-diff]\n");
         return 1;
     }
 

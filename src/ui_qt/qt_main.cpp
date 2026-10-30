@@ -1,7 +1,7 @@
-/* navmap_qt —— navimap 的 Qt 前端入口（★ 唯一的交互前端）。
+/* skedaddle —— navimap 的 Qt 前端入口（★ 唯一的交互前端）。
  *
  * 用法：
- *   ./navmap_qt [--graph=products/graph/beijing] [--w=1280] [--h=800]
+ *   ./skedaddle [--graph=products/graph/beijing] [--w=1280] [--h=800]
  *               [--font=<路径.ttf|none>] [--font-size=14]
  *               [--no-autobuild] [--sources=<目录>]
  *               [--pbf-display=<sources目录>[:LRU上限]] [--q=<查询词>]

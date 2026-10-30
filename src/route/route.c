@@ -1147,7 +1147,7 @@ int router_plan(Router *r, RNode from, RNode to, RouteResult *out)
     uint64_t try_cap = r->opt.adapt_try;
     if (try_cap > r->max_expand) try_cap = r->max_expand;
     /* ★★ plan_search 会把 w 写进 r->opt.heur_w。**必须恢复**：Router 是可复用的
-       （route_cli --repeat=N 就是同一个 Router 连算 N 次），不恢复的话第 2 次
+       （skedaddle_route_cli --repeat=N 就是同一个 Router 连算 N 次），不恢复的话第 2 次
        会把上一遍的重 w 当成基准 w，--repeat 的第 2 次起全被污染 —— 表现为
        "自适应看起来和纯 1.8 一样快"，其实是白赚的假数字（踩到过）。 */
     double w0 = r->opt.heur_w;

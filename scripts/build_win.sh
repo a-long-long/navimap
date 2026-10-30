@@ -25,7 +25,7 @@
 #       修法就是给构建进程一个**只含 ucrt64 的干净 PATH**。
 #
 #   本脚本还顺手做两件事：
-#     ① Qt6 的 bin 目录要进 PATH（否则运行 navmap_qt 报缺 DLL）；
+#     ① Qt6 的 bin 目录要进 PATH（否则运行 skedaddle 报缺 DLL）；
 #     ② 并发降到 -j4：MSYS2 下 gcc 偶发启动失败（Defender 实时扫描新起的
 #        cc1plus 进程时偶发），低并发能显著降低重试成本。
 #
@@ -68,7 +68,7 @@ fi
 #   cc1plus 加载到不匹配的 libstdc++ ⇒ 进程静默死掉（退出码 1、stderr 全空），
 #   且 C 文件能编过、C++ 文件全灭（cc1 不需要 libstdc++，cc1plus 需要）。
 #   实证：PATH=MSYS+usr+sys32+win ⇒ C/C++ 都过；PATH=QT+MSYS+… ⇒ C++ 全灭。
-#   Qt DLL 只在**运行** navmap_qt.exe 时才需要，编译期一律不进 PATH
+#   Qt DLL 只在**运行** skedaddle.exe 时才需要，编译期一律不进 PATH
 #   （跑 UI 自检时再单独加，见 regress.sh 里 QT_BIN 的用法）。
 CLEAN_PATH="$MSYS_BIN:/usr/bin:/c/Windows/system32:/c/Windows"
 
@@ -103,5 +103,5 @@ env PATH="$CLEAN_PATH" \
 
 echo
 echo "=== 构建完成 ==="
-# 前端只有 navmap_qt（#88 已删 navmap / navmap_sdl / map_shot 三个可执行）。
-ls -la "$BUILD"/navmap_qt.exe 2>/dev/null || true
+# 前端只有 skedaddle（#88 已删 navmap / navmap_sdl / map_shot 三个可执行）。
+ls -la "$BUILD"/skedaddle.exe 2>/dev/null || true

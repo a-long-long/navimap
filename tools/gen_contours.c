@@ -1,4 +1,4 @@
-/* gen_contours —— 从 SRTM .hgt 瓦片生成等高线（自包含，零外部依赖）。
+/* skedaddle_gen_contours —— 从 SRTM .hgt 瓦片生成等高线（自包含，零外部依赖）。
  *
  * 为什么自写：本机没有 GDAL（gdal_contour / gdalwarp 全无），且环境里也没有
  * osmium / python osgeo。等高线不进 OSM 导入管线，直接产出 navimap 专属的三件套
@@ -17,7 +17,7 @@
  *         contours.bin         每条等高线记录（高程 / ref_off / ref_cnt / class）
  *
  * 用法：
- *   gen_contours --out-dir=products/graph/beijing --hgt-dir=/tmp/srtm \
+ *   skedaddle_gen_contours --out-dir=products/graph/beijing --hgt-dir=/tmp/srtm \
  *       --bbox=39.4,115.4,41.1,117.5 [--interval=20] [--index=100] \
  *       [--download[=MIRROR]]
  *
@@ -237,7 +237,7 @@ int main(int argc, char **argv)
         else if (!strncmp(a, "--downloader=", 13)) g_dl_override = a + 13;
         else if (!strcmp(a, "-h") || !strcmp(a, "--help")) {
             fprintf(stderr,
-                "用法: gen_contours --out-dir=DIR --hgt-dir=DIR "
+                "用法: skedaddle_gen_contours --out-dir=DIR --hgt-dir=DIR "
                 "--bbox=lat0,lon0,lat1,lon1 [--interval=M] [--index=M]\n"
                 "      --prefix=NAME      输出文件前缀（默认 \"contour\" → NAME_contours.bin）\n"
                 "      --download[=MIRROR]  缺失的 SRTM 瓦片自动从 MIRROR 下载"
@@ -360,9 +360,9 @@ int main(int argc, char **argv)
     snprintf(p_poly, sizeof(p_poly), "%s/%s_contour_polyrefs.bin", out_dir, prefix);
     snprintf(p_pts,  sizeof(p_pts),  "%s/%s_contour_pts.bin", out_dir, prefix);
 
-    NMBinWriter *wc  = nmbin_create(p_cont, NMBIN_KIND_CONTOURS, NM_CONTOUR_BYTES, "gen_contours");
-    NMBinWriter *wp  = nmbin_create(p_poly, NMBIN_KIND_CONTOUR_POLYREFS, 4, "gen_contours");
-    NMBinWriter *wpt = nmbin_create(p_pts,  NMBIN_KIND_CONTOUR_PTS, NM_CONTOUR_PT_BYTES, "gen_contours");
+    NMBinWriter *wc  = nmbin_create(p_cont, NMBIN_KIND_CONTOURS, NM_CONTOUR_BYTES, "skedaddle_gen_contours");
+    NMBinWriter *wp  = nmbin_create(p_poly, NMBIN_KIND_CONTOUR_POLYREFS, 4, "skedaddle_gen_contours");
+    NMBinWriter *wpt = nmbin_create(p_pts,  NMBIN_KIND_CONTOUR_PTS, NM_CONTOUR_PT_BYTES, "skedaddle_gen_contours");
     if (!wc || !wp || !wpt) {
         fprintf(stderr, "无法创建输出文件（目录存在？）\n");
         if (wc) nmbin_abort(wc);

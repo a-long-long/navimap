@@ -1,4 +1,4 @@
-/* pbf_info —— PBF 文件的"体检表"。
+/* skedaddle_pbf_info —— PBF 文件的"体检表"。
  *
  * 存在理由：本机没有 xvfb-run / valgrind，GUI 无法无头验证，所以解析层
  * 必须能在命令行上被断言。这里的输出是后续所有对账的基准：
@@ -6,8 +6,8 @@
  *   - 天津：旧 graphset 里只抽出 62 个节点，用本工具看它到底有多少 way
  *
  * 用法：
- *   ./pbf_info data/beijing.osm.pbf
- *   ./pbf_info --expect-ways=530968 data/beijing.osm.pbf    # 带断言，不符返回非 0
+ *   ./skedaddle_pbf_info data/beijing.osm.pbf
+ *   ./skedaddle_pbf_info --expect-ways=530968 data/beijing.osm.pbf    # 带断言，不符返回非 0
  */
 #include <stdio.h>
 #include <stdlib.h>

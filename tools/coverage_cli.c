@@ -1,6 +1,6 @@
-/* coverage_cli —— "这里有没有地图、这是哪儿"的无头验收
+/* skedaddle_coverage_cli —— "这里有没有地图、这是哪儿"的无头验收
  *
- * 用法: coverage_cli [--graph=products/graph] [--lat=<度> --lon=<度>]
+ * 用法: skedaddle_coverage_cli [--graph=products/graph] [--lat=<度> --lon=<度>]
  *                    [--radius=3000] [--places=<地名库>|--no-places]
  *                    [--no-autobuild]
  *

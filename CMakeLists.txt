@@ -31,7 +31,7 @@ find_package(Threads REQUIRED)
 
 # ---------------------------------------------------------------------------
 # 依赖（方案2 架构约束：navimap_core 不链 SDL）。
-# SDL 现仅出现在去 SDL 化门禁对照体 blend_equiv / clip_equiv（合法链 SDL2）。
+# SDL 现仅出现在去 SDL 化门禁对照体 skedaddle_blend_equiv / skedaddle_clip_equiv（合法链 SDL2）。
 # navimap_qt 只链 navimap_core + Qt Widgets；离屏出图走 src/ui/offscreen_shot.c（零 SDL）。
 # （单头文件、零外部库），于是"核心零 SDL"完全可行。SDL2_ttf 已彻底移除。
 # ---------------------------------------------------------------------------
@@ -212,7 +212,7 @@ endif()
 # 叶子库 1：navmap_plat（src/utils/plat.c，纯叶子）
 # ★ plat.c 内的线程/互斥（nm_thread_create / NmMutex）用 pthread 实现，故 -pthread
 #   由本库统一承载（"平台差异只在 plat.c"），所有经 nm_link_tool 链 plat 的目标自动带上。
-#   原先漏挂，导致本机 Linux 链接 tts_selftest 等目标时报 pthread_create 未定义
+#   原先漏挂，导致本机 Linux 链接 skedaddle_tts_selftest 等目标时报 pthread_create 未定义
 #   （Windows/MinGW 不需要显式 -pthread，副机自测未踩到）。
 add_library(navmap_plat STATIC src/utils/plat.c)
 target_include_directories(navmap_plat PUBLIC ${CMAKE_SOURCE_DIR}/src)
@@ -277,7 +277,7 @@ target_link_libraries(navmap_map PUBLIC
     ${SQLITE3_LIBRARIES})
 
 # navmap_search：仅叶子库（search→utils）。search.c 真正调用 sqlite3_*，
-# 故把 sqlite3 收进本模块库，保证 search 系列工具（search_cli/places_build）
+# 故把 sqlite3 收进本模块库，保证 search 系列工具（skedaddle_search_cli/skedaddle_places_build）
 # 只链 navmap_search 也能解析数据库符号（模块可独立复用，不必拖整库）。
 add_library(navmap_search STATIC ${SEARCH_SRCS})
 target_include_directories(navmap_search PUBLIC
@@ -327,8 +327,8 @@ target_link_libraries(navmap_settings PUBLIC navmap_plat)
 # navimap_core：聚合层（方案2 架构边界的对外门面）。
 #   ★ 仅含一个无副作用的锚点符号（src/core_anchor.c），不含业务 .c；
 #     把 5 个模块库 + 5 个叶子库 + 第三方库聚合成一个链接面，
-#     使 24 个 exe / navmap_qt 等无需改动即可继续链接 navimap_core。
-#   ★ 核心零 SDL：聚合层连 SDL 的 include 都不给；SDL 仅 blend_equiv / clip_equiv 合法链。
+#     使 24 个 exe / skedaddle 等无需改动即可继续链接 navimap_core。
+#   ★ 核心零 SDL：聚合层连 SDL 的 include 都不给；SDL 仅 skedaddle_blend_equiv / skedaddle_clip_equiv 合法链。
 add_library(navimap_core STATIC src/core_anchor.c)
 
 # ★ 核心不含 SDL：连 include 路径都不给。理由见上面"依赖"一节的架构约束。
@@ -444,42 +444,42 @@ endfunction()
 # ---------------------------------------------------------------------------
 # 命令行工具（GUI 无法无头验证，逻辑一律做成可断言的 CLI）
 # ---------------------------------------------------------------------------
-add_executable(pbf_info tools/pbf_info.c)
-nm_link_tool(pbf_info)
+add_executable(skedaddle_pbf_info tools/pbf_info.c)
+nm_link_tool(skedaddle_pbf_info)
 
 # 等高线生成工具：从 SRTM .hgt 瓦片生成 contours/contour_polyrefs/contour_pts 三件套。
 # 零外部依赖（无 GDAL），直接读原始大端 int16 .hgt。
-add_executable(gen_contours tools/gen_contours.c)
-nm_link_tool(gen_contours navmap_map)
+add_executable(skedaddle_gen_contours tools/gen_contours.c)
+nm_link_tool(skedaddle_gen_contours navmap_map)
 
 
 # PBF 按需解码显示层的等价性校验（"只留 PBF"方案的门禁）
-add_executable(pbfmap_check tools/pbfmap_check.c)
-nm_link_tool(pbfmap_check navmap_map navmap_route navmap_search navmap_render navmap_ui)
+add_executable(skedaddle_pbfmap_check tools/pbfmap_check.c)
+nm_link_tool(skedaddle_pbfmap_check navmap_map navmap_route navmap_search navmap_render navmap_ui)
 
 # via=way 转向限制形态探针（调研用）
-add_executable(restr_probe tools/restr_probe.c)
-nm_link_tool(restr_probe)
+add_executable(skedaddle_restr_probe tools/restr_probe.c)
+nm_link_tool(skedaddle_restr_probe)
 
-add_executable(graph_extract tools/graph_extract.c)
-nm_link_tool(graph_extract navmap_map navmap_route navmap_search navmap_render navmap_ui)
+add_executable(skedaddle_graph_extract tools/graph_extract.c)
+nm_link_tool(skedaddle_graph_extract navmap_map navmap_route navmap_search navmap_render navmap_ui)
 
-add_executable(graph_check tools/graph_check.c)
-nm_link_tool(graph_check navmap_map navmap_route navmap_search navmap_render navmap_ui)
+add_executable(skedaddle_graph_check tools/graph_check.c)
+nm_link_tool(skedaddle_graph_check navmap_map navmap_route navmap_search navmap_render navmap_ui)
 
-add_executable(tag_stats tools/tag_stats.c)
-nm_link_tool(tag_stats)
+add_executable(skedaddle_tag_stats tools/tag_stats.c)
+nm_link_tool(skedaddle_tag_stats)
 
 # ---------------------------------------------------------------------------
 # SDL 适配层（navmap_sdl / window_sdl.c / navimap 可执行）已于 #88 彻底移除：
-# 彻底 Qt 化后，交互前端是 navmap_qt，离屏像素审计走 C 核心缓冲（chrome.c，
+# 彻底 Qt 化后，交互前端是 skedaddle，离屏像素审计走 C 核心缓冲（chrome.c，
 # a.qt_ui=0 把 chrome 画进缓冲、零 SDL）。本机不再构建任何 SDL GUI 二进制。
-# 仅 blend_equiv / clip_equiv 仍合法链 SDL2（去 SDL 化门禁用的对照体）。
+# 仅 skedaddle_blend_equiv / skedaddle_clip_equiv 仍合法链 SDL2（去 SDL 化门禁用的对照体）。
 # ---------------------------------------------------------------------------
 
-# 主程序（GUI）：原 navimap (SDL) 已移除，交互前端统一为 navmap_qt（见下方 Qt 段）。
+# 主程序（GUI）：原 navimap (SDL) 已移除，交互前端统一为 skedaddle（见下方 Qt 段）。
 
-# Qt 前端（可选）：找到 Qt6 或 Qt5 的 Widgets 就多编一个 navmap_qt。
+# Qt 前端（可选）：找到 Qt6 或 Qt5 的 Widgets 就多编一个 skedaddle。
 #   同一份源码同时兼容 Qt5/Qt6：无 Q_OBJECT/信号槽，故无需 moc；事件坐标统一用
 #   position()/angleDelta()。配置时给 -DCMAKE_PREFIX_PATH=<Qt前缀> 指定版本，
 #   找不到则跳过本目标，不影响其余全部产物。
@@ -494,13 +494,13 @@ else()
     endif()
 endif()
 if(QT)
-    add_executable(navmap_qt
+    add_executable(skedaddle
         src/ui_qt/qt_main.cpp
         src/ui_qt/map_canvas.cpp
         src/ui_qt/qt_font.cpp
 # 离屏渲染：src/ui/offscreen_shot.c（offscreen_shot_main，零 SDL，纯内存缓冲 +
-# 内建 24 位 BMP 写出）。该通道作为 navmap_qt --shot-offscreen 的单一可信源。
-# #88 后 map_shot 壳已删除，regress 直接吃 navmap_qt --shot-offscreen
+# 内建 24 位 BMP 写出）。该通道作为 skedaddle --shot-offscreen 的单一可信源。
+# #88 后 map_shot 壳已删除，regress 直接吃 skedaddle --shot-offscreen
 # （见 scripts/regress.sh 的 shot()/app_route/gpx_render/ovl_shot）。
         src/ui_qt/qt_icons.cpp
         src/ui_qt/main_window.cpp
@@ -514,136 +514,136 @@ if(QT)
     else()
         qt5_add_resources(NAVIMAP_QT_RC_GEN ${NAVIMAP_QT_QRC})
     endif()
-    target_sources(navmap_qt PRIVATE ${NAVIMAP_QT_RC_GEN})
-    target_link_libraries(navmap_qt PRIVATE navimap_core ${QT}::Widgets ${QT}::Network Threads::Threads)
+    target_sources(skedaddle PRIVATE ${NAVIMAP_QT_RC_GEN})
+    target_link_libraries(skedaddle PRIVATE navimap_core ${QT}::Widgets ${QT}::Network Threads::Threads)
     message(STATUS "Qt 前端: 启用 (${QT} ${${QT}Widgets_VERSION})")
 else()
-    message(STATUS "Qt 前端: 未找到 Qt6/Qt5 Widgets，跳过 navmap_qt")
+    message(STATUS "Qt 前端: 未找到 Qt6/Qt5 Widgets，跳过 skedaddle")
 endif()
 
 
 # 光栅 alpha 混色与 SDL 软渲染器的逐像素等价性（去 SDL 化的门禁）。
-add_executable(blend_equiv tools/blend_equiv.c)
-target_include_directories(blend_equiv PRIVATE ${SDL2_INCLUDE_DIRS})
-target_link_directories(blend_equiv PRIVATE ${SDL2_LIBRARY_DIRS})
-nm_link_tool(blend_equiv navmap_map navmap_route navmap_search navmap_render navmap_ui)
-target_link_libraries(blend_equiv PRIVATE ${SDL2_LIBRARIES} Threads::Threads)
+add_executable(skedaddle_blend_equiv tools/blend_equiv.c)
+target_include_directories(skedaddle_blend_equiv PRIVATE ${SDL2_INCLUDE_DIRS})
+target_link_directories(skedaddle_blend_equiv PRIVATE ${SDL2_LIBRARY_DIRS})
+nm_link_tool(skedaddle_blend_equiv navmap_map navmap_route navmap_search navmap_render navmap_ui)
+target_link_libraries(skedaddle_blend_equiv PRIVATE ${SDL2_LIBRARIES} Threads::Threads)
 
 # 线段裁剪与 SDL_IntersectRectAndLine 的等价性（去 SDL 化的门禁）。
-add_executable(clip_equiv tools/clip_equiv.c)
-target_include_directories(clip_equiv PRIVATE ${SDL2_INCLUDE_DIRS})
-target_link_directories(clip_equiv PRIVATE ${SDL2_LIBRARY_DIRS})
-nm_link_tool(clip_equiv navmap_map navmap_route navmap_search navmap_render navmap_ui)
-target_link_libraries(clip_equiv PRIVATE ${SDL2_LIBRARIES} Threads::Threads)
+add_executable(skedaddle_clip_equiv tools/clip_equiv.c)
+target_include_directories(skedaddle_clip_equiv PRIVATE ${SDL2_INCLUDE_DIRS})
+target_link_directories(skedaddle_clip_equiv PRIVATE ${SDL2_LIBRARY_DIRS})
+nm_link_tool(skedaddle_clip_equiv navmap_map navmap_route navmap_search navmap_render navmap_ui)
+target_link_libraries(skedaddle_clip_equiv PRIVATE ${SDL2_LIBRARIES} Threads::Threads)
 
 # 架构门禁：核心与 Qt 前端零 SDL 符号（正反双向）。
-add_executable(core_no_sdl tools/core_no_sdl.c)
-nm_link_tool(core_no_sdl)
+add_executable(skedaddle_core_no_sdl tools/core_no_sdl.c)
+nm_link_tool(skedaddle_core_no_sdl)
 
 # 跨省接边验证（阶段 8 坐标键路由的前提）
-add_executable(tile_xcheck tools/tile_xcheck.c)
-nm_link_tool(tile_xcheck navmap_map navmap_route navmap_search navmap_render navmap_ui)
+add_executable(skedaddle_tile_xcheck tools/tile_xcheck.c)
+nm_link_tool(skedaddle_tile_xcheck navmap_map navmap_route navmap_search navmap_render navmap_ui)
 
 # 瓦片下标 查表版 vs 精确版 的逐点等价性验收
-add_executable(tile_selftest tools/tile_selftest.c)
-nm_link_tool(tile_selftest navmap_map navmap_route navmap_search navmap_render navmap_ui)
+add_executable(skedaddle_tile_selftest tools/tile_selftest.c)
+nm_link_tool(skedaddle_tile_selftest navmap_map navmap_route navmap_search navmap_render navmap_ui)
 
 # 优先队列自验收（--expect-fail 是负向对照）
-add_executable(heap_selftest tools/heap_selftest.c)
-nm_link_tool(heap_selftest navmap_route)
+add_executable(skedaddle_heap_selftest tools/heap_selftest.c)
+nm_link_tool(skedaddle_heap_selftest navmap_route)
 
 # 路线计算（跨省 A*，坐标键接边）
-add_executable(route_cli tools/route_cli.c tools/tool_common.c)
-nm_link_tool(route_cli navmap_map navmap_route navmap_search navmap_render navmap_ui)
+add_executable(skedaddle_route_cli tools/route_cli.c tools/tool_common.c)
+nm_link_tool(skedaddle_route_cli navmap_map navmap_route navmap_search navmap_render navmap_ui)
 
 # 地标距离：一对多 Dijkstra（PLAN.md §48）
-add_executable(lmdist_cli tools/lmdist_cli.c tools/tool_common.c)
-nm_link_tool(lmdist_cli navmap_map navmap_route navmap_search navmap_render navmap_ui)
+add_executable(skedaddle_lmdist_cli tools/lmdist_cli.c tools/tool_common.c)
+nm_link_tool(skedaddle_lmdist_cli navmap_map navmap_route navmap_search navmap_render navmap_ui)
 
 # 地标下界表 lm.bin 的构建（网格聚合，PLAN.md §49.6）
-add_executable(lmbuild_cli tools/lmbuild_cli.c tools/tool_common.c)
-nm_link_tool(lmbuild_cli navmap_map navmap_route navmap_search navmap_render navmap_ui)
+add_executable(skedaddle_lmbuild_cli tools/lmbuild_cli.c tools/tool_common.c)
+nm_link_tool(skedaddle_lmbuild_cli navmap_map navmap_route navmap_search navmap_render navmap_ui)
 
 # 反向入边索引 rev.bin 的生成与逐元素自验收（--verify）
-add_executable(revbuild_cli tools/revbuild_cli.c)
-nm_link_tool(revbuild_cli navmap_map navmap_route navmap_search navmap_render navmap_ui)
+add_executable(skedaddle_revbuild_cli tools/revbuild_cli.c)
+nm_link_tool(skedaddle_revbuild_cli navmap_map navmap_route navmap_search navmap_render navmap_ui)
 
 # 模拟定位 / 偏航 / 剩余 ETA 的无头验收（阶段 9 导航层）
-add_executable(navsim_cli tools/navsim_cli.c tools/tool_common.c)
-nm_link_tool(navsim_cli navmap_map navmap_route navmap_search navmap_render navmap_ui)
+add_executable(skedaddle_navsim_cli tools/navsim_cli.c tools/tool_common.c)
+nm_link_tool(skedaddle_navsim_cli navmap_map navmap_route navmap_search navmap_render navmap_ui)
 
 # via=way 两段转向限制的 A/B 对照验收（阶段 8 补）
-add_executable(restr_ab tools/restr_ab.c tools/tool_common.c)
-nm_link_tool(restr_ab navmap_map navmap_route navmap_search navmap_render navmap_ui)
+add_executable(skedaddle_restr_ab tools/restr_ab.c tools/tool_common.c)
+nm_link_tool(skedaddle_restr_ab navmap_map navmap_route navmap_search navmap_render navmap_ui)
 
 # 地名 / POI 搜索的无头验收（阶段 7）
-add_executable(search_cli tools/search_cli.c tools/tool_common.c)
-nm_link_tool(search_cli navmap_search)
+add_executable(skedaddle_search_cli tools/search_cli.c tools/tool_common.c)
+nm_link_tool(skedaddle_search_cli navmap_search)
 
 # 地名 / POI 库生成器（2026-09-23 补）
-add_executable(places_build tools/places_build.c)
-nm_link_tool(places_build navmap_search)
+add_executable(skedaddle_places_build tools/places_build.c)
+nm_link_tool(skedaddle_places_build navmap_search)
 
 # 无地图区域检测（GUI 提示条的无头验收）
-add_executable(coverage_cli tools/coverage_cli.c tools/tool_common.c)
-nm_link_tool(coverage_cli navmap_map navmap_route navmap_search navmap_render navmap_ui)
+add_executable(skedaddle_coverage_cli tools/coverage_cli.c tools/tool_common.c)
+nm_link_tool(skedaddle_coverage_cli navmap_map navmap_route navmap_search navmap_render navmap_ui)
 
 # 平台抽象层（utils/plat.h）的全接口自验收（正反双向）。
-add_executable(plat_selftest tools/plat_selftest.c)
-nm_link_tool(plat_selftest)
-add_executable(tts_selftest tools/tts_selftest.c)
-nm_link_tool(tts_selftest)
+add_executable(skedaddle_plat_selftest tools/plat_selftest.c)
+nm_link_tool(skedaddle_plat_selftest)
+add_executable(skedaddle_tts_selftest tools/tts_selftest.c)
+nm_link_tool(skedaddle_tts_selftest)
 # 语音播报策略（抄自 OsmAnd）：分级提前量 / 话术模板 / 播报节奏。
-add_executable(voice_selftest tools/voice_selftest.c)
-nm_link_tool(voice_selftest navmap_route navmap_map navmap_geo navmap_strpool navmap_plat navmap_mem)
+add_executable(skedaddle_voice_selftest tools/voice_selftest.c)
+nm_link_tool(skedaddle_voice_selftest navmap_route navmap_map navmap_geo navmap_strpool navmap_plat navmap_mem)
 # 语音播报**端到端**自测：走生产路径（navsim → navsim_next_maneuver →
 # **ui/voice_wire.c 的 nav_voice_frame** → nm_tts_speak），
 # 验证"接线"本身（距离口径、告警基准、播报顺序、冷却、收尾语）——单函数自测抓不到这些。
 # ★ 必须链 navmap_ui：接线的**唯一实现**在 src/ui/voice_wire.c 里，
 #   链接它才能证明"自测跑的就是生产代码"（原先这里只链 route，自测只好复刻一遍接线
 #   ⇒ 接线坏掉时判据假绿，负向对照第 8 项就是这么被抓住的）。
-add_executable(voice_e2e tools/voice_e2e.c)
-nm_link_tool(voice_e2e navmap_map navmap_route navmap_search navmap_render navmap_ui)
-add_executable(alts_selftest tools/alts_selftest.c tools/tool_common.c)
-nm_link_tool(alts_selftest navmap_map navmap_route navmap_search navmap_render navmap_ui)
+add_executable(skedaddle_voice_e2e tools/voice_e2e.c)
+nm_link_tool(skedaddle_voice_e2e navmap_map navmap_route navmap_search navmap_render navmap_ui)
+add_executable(skedaddle_alts_selftest tools/alts_selftest.c tools/tool_common.c)
+nm_link_tool(skedaddle_alts_selftest navmap_map navmap_route navmap_search navmap_render navmap_ui)
 
 # 车道转向指示（turn:lanes）数据链路验收：mapset 加载 lanes.bin 并能按 (省,边)
 # 取出合法车道串。
-add_executable(lane_selftest tools/lane_selftest.c)
-nm_link_tool(lane_selftest navmap_map navmap_route navmap_search navmap_render navmap_ui)
+add_executable(skedaddle_lane_selftest tools/lane_selftest.c)
+nm_link_tool(skedaddle_lane_selftest navmap_map navmap_route navmap_search navmap_render navmap_ui)
 
 # PBF 显示层后台异步解码验收：set_view 不阻塞主线程 + 进度回调生效 + 解码完成。
-add_executable(dmap_selftest tools/dmap_selftest.c)
-nm_link_tool(dmap_selftest navmap_map navmap_route navmap_search navmap_render navmap_ui)
+add_executable(skedaddle_dmap_selftest tools/dmap_selftest.c)
+nm_link_tool(skedaddle_dmap_selftest navmap_map navmap_route navmap_search navmap_render navmap_ui)
 
-add_executable(disp_tile_selftest tools/disp_tile_selftest.c)
-nm_link_tool(disp_tile_selftest navmap_map navmap_route navmap_search navmap_render navmap_ui)
+add_executable(skedaddle_disp_tile_selftest tools/disp_tile_selftest.c)
+nm_link_tool(skedaddle_disp_tile_selftest navmap_map navmap_route navmap_search navmap_render navmap_ui)
 
-add_executable(disp_runtime_selftest tools/disp_runtime_selftest.c)
-nm_link_tool(disp_runtime_selftest navmap_map navmap_route navmap_search navmap_render navmap_ui)
+add_executable(skedaddle_disp_runtime_selftest tools/disp_runtime_selftest.c)
+nm_link_tool(skedaddle_disp_runtime_selftest navmap_map navmap_route navmap_search navmap_render navmap_ui)
 
-add_executable(gpx_selftest tools/gpx_selftest.c)
-nm_link_tool(gpx_selftest navmap_map navmap_geo navmap_plat)
+add_executable(skedaddle_gpx_selftest tools/gpx_selftest.c)
+nm_link_tool(skedaddle_gpx_selftest navmap_map navmap_geo navmap_plat)
 
 # 坐标系（大地基准）自测：WGS84/CGCS2000/北京54/西安80 的枚举/往返/位移合理性 + 负向对照。
-add_executable(datum_selftest tools/datum_selftest.c)
-nm_link_tool(datum_selftest navmap_map navmap_route navmap_search navmap_render navmap_ui)
+add_executable(skedaddle_datum_selftest tools/datum_selftest.c)
+nm_link_tool(skedaddle_datum_selftest navmap_map navmap_route navmap_search navmap_render navmap_ui)
 
 # 字体契约验收：内置 Noto 字体集是否真能加载并出字形。
-add_executable(font_selftest tools/font_selftest.c)
-nm_link_tool(font_selftest navmap_map navmap_route navmap_search navmap_render navmap_ui)
+add_executable(skedaddle_font_selftest tools/font_selftest.c)
+nm_link_tool(skedaddle_font_selftest navmap_map navmap_route navmap_search navmap_render navmap_ui)
 
 # 设置持久化模块自测：默认值/存读往返/reset/env覆盖/损坏文件健壮性。
-add_executable(settings_selftest tools/settings_selftest.c)
-nm_link_tool(settings_selftest navmap_settings)
+add_executable(skedaddle_settings_selftest tools/settings_selftest.c)
+nm_link_tool(skedaddle_settings_selftest navmap_settings)
 
 # 字体诊断探针：中文变方框（tofu）时定位是"没有字形"还是"有字形但画不出"。
-add_executable(font_probe tools/font_probe.c)
-nm_link_tool(font_probe navmap_map navmap_route navmap_search navmap_render navmap_ui)
+add_executable(skedaddle_font_probe tools/font_probe.c)
+nm_link_tool(skedaddle_font_probe navmap_map navmap_route navmap_search navmap_render navmap_ui)
 
 # 字体链的中文覆盖断言：地图文字（stb_truetype）与 Qt 控件文字共用这条候选链。
-add_executable(font_cjk_check tools/font_cjk_check.c)
-nm_link_tool(font_cjk_check navmap_map navmap_route navmap_search navmap_render navmap_ui)
+add_executable(skedaddle_font_cjk_check tools/font_cjk_check.c)
+nm_link_tool(skedaddle_font_cjk_check navmap_map navmap_route navmap_search navmap_render navmap_ui)
 
 # ---------------------------------------------------------------------------
 # Windows(MSYS2)：给所有目标挂编译启动器。

@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""download_srtm.py —— 下载 SRTM DEM 瓦片（.hgt）到本地目录，供 gen_contours 自动生成等高线。
+"""download_srtm.py —— 下载 SRTM DEM 瓦片（.hgt）到本地目录，供 skedaddle_gen_contours 自动生成等高线。
 
 只依赖 Python 标准库（urllib + gzip），**无需 GDAL / curl / 任何第三方包**。
-脚本会在 gen_contours --download 时被自动调用；也可单独手动运行，预拉取某区域的 DEM。
+脚本会在 skedaddle_gen_contours --download 时被自动调用；也可单独手动运行，预拉取某区域的 DEM。
 
 SRTM 瓦片按 1°×1° 划分，文件名形如 N<lat>E<lon>.hgt（如 N37E114.hgt）：
   - 北纬 N、南纬 S；东经 E、西经 W
@@ -11,7 +11,7 @@ SRTM 瓦片按 1°×1° 划分，文件名形如 N<lat>E<lon>.hgt（如 N37E114.
 
 默认从 AWS Open Data 的 skadi 数据集下载 .hgt.gz 并就地解压：
     https://s3.amazonaws.com/elevation-tiles-prod/skadi/N37/N37E114.hgt.gz
-（skadi 在美/日等覆盖 SRTM1 30m，其余地区 SRTM3 90m；两种尺寸 gen_contours 都能读。）
+（skadi 在美/日等覆盖 SRTM1 30m，其余地区 SRTM3 90m；两种尺寸 skedaddle_gen_contours 都能读。）
 
 部分网络（如中国大陆）直连 S3 不稳，可用 --mirror 指向可达镜像/代理，例如：
     --mirror=https://elevation-tiles-prod.s3.amazonaws.com/skadi

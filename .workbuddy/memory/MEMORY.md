@@ -5,7 +5,7 @@
 ## 固定动作
 - `sources/` 只放原始 `*.osm.pbf`；`products/` 全可删、`./scripts/sync_maps.sh` 重建。
 - 验收 `./scripts/regress.sh`：Linux 主机（数据齐全）**78 通过 / 3 失败**（3 项环境缺失：lanes.bin / disp.idx / objdump 路径）。Windows/MSYS2 副机 products 仅 beijing 1 省 ⇒ 多省 graph / places_auto.db / liaoning/rev.bin / lm.bin 缺失，相关用例必 FAIL、**非代码回归**；全量 77/3 只能在数据齐全的 Linux 跑。编译零警告（-Werror）。改渲染补 `python3 scripts/bmpdiff.py 旧 新`（要素色→背景色=丢要素）。
-- `navmap_qt --ui-test`（33 项）已进 regress.sh。完成即 commit + push origin main。**前端只有 navmap_qt**（原 navimap/map_shot 已删）。
+- `skedaddle --ui-test`（33 项）已进 regress.sh。完成即 commit + push origin main。**前端只有 skedaddle**（原 navimap/map_shot 已删）。
 - ★★ **删文件前必须 grep 它提供的符号在别处的声明**（删 `window_sdl.c` ⇒ `window.h` 的 `app_run` 成悬空声明，链接不报错但是假 API）。★ 同理**删 include 前必须 grep 该头的全部符号**（只 grep `label_` 漏掉 `NamePool`，差点把承重依赖当死代码删掉）。
 
 ## 构建环境
@@ -24,15 +24,15 @@
 - 图标符号（＋◎☰🔍）不能用字体字符（`inFont()` 全 false）⇒ `qt_icons.cpp` 自绘；`drawPixmap` 在 DPR≠1 下画到矩形一角 ⇒ 直接 paintEvent 画路径。控件中文要把 `nm_font_candidates()` 字体注册进 Qt；判"能否画中文"别用 Qt 字体度量（offscreen 下所有族宽度一样）⇒ 查字体文件 cmap。
 
 ## 渲染边界（SDL 已彻底移除，2026-10-26 #88）
-- `navmap_sdl`/`window_sdl.c`/`navimap`/`map_shot` 全删。交互前端唯一是 `navmap_qt`；离屏出图唯一是 `src/ui/offscreen_shot.c`（**零 SDL**：malloc 缓冲 + 内建 24 位 BMP writer）。SDL 现只出现在 `blend_equiv`/`clip_equiv`（去 SDL 化门禁对照体）。
+- `navmap_sdl`/`window_sdl.c`/`navimap`/`map_shot` 全删。交互前端唯一是 `skedaddle`；离屏出图唯一是 `src/ui/offscreen_shot.c`（**零 SDL**：malloc 缓冲 + 内建 24 位 BMP writer）。SDL 现只出现在 `skedaddle_blend_equiv`/`skedaddle_clip_equiv`（去 SDL 化门禁对照体）。
 - ★★ **审计计数源走 C 核心地图缓冲**：`offscreen_shot_main` 设 `a.qt_ui=0` ⇒ C 核心把 chrome/横幅/搜索框全画进缓冲 ⇒ 与旧 map_shot 逐字节一致。**⇒ 不可删 `chrome.c`/`paint.c`/`navdraw.c`**。共享审计模块 = `src/render/audit.{c,h}`。
-- 自写光栅必须与 SDL 软渲染逐像素等价（实证 3 个真 bug：alpha 两次除法 / `raster_rect` 角点只画一次 / 裁剪逐字复刻 `SDL_rect_impl.h`）。门禁 `blend_equiv` / `clip_equiv`。
+- 自写光栅必须与 SDL 软渲染逐像素等价（实证 3 个真 bug：alpha 两次除法 / `raster_rect` 角点只画一次 / 裁剪逐字复刻 `SDL_rect_impl.h`）。门禁 `skedaddle_blend_equiv` / `skedaddle_clip_equiv`。
 - `--shot` 截图路径必须显式刷新状态栏（主循环不启动 ⇒ 状态栏空白），否则**截图在撒谎**。销毁 renderer 前必须 `font_drop_textures()`；stb_truetype 后端只清 CPU 字形缓存，**不能每帧调**（毁 CJK 缓存）。
 
 ## 判据纪律（最高价值）
 - 布尔判据用展开数/里程/像素，时间只兜底取多轮最小；渲染取第二帧、算路丢第 1 次。
 - ★★★ 手挑样本下结论必翻车（踩 4 次）：样本须覆盖形状且成对配对；**负向对照必须能失败**。
-- ★ 判"成功"看**退出码**不是输出行数（`dmap_selftest` 打完 DMAP-OK 就 return，栈上 MapSet 被 worker 命中 ⇒ rc=139 却显示"通过"）。收尾必须 `mapset_free(&ms)`。
+- ★ 判"成功"看**退出码**不是输出行数（`skedaddle_dmap_selftest` 打完 DMAP-OK 就 return，栈上 MapSet 被 worker 命中 ⇒ rc=139 却显示"通过"）。收尾必须 `mapset_free(&ms)`。
 - 等价性判据套路："参数从模块读 + 另一条路径独立复算"；跟外部公布值比用外部口径。
 - ★★ **浮层半透明后 `count_color_pixels`（精确配色计数）判据全失效** ⇒ 改数**混合后**的颜色：有效 alpha = 元素 alpha/255 × 浮层 alpha/255，对背景 (244,241,234) 混合 + 容差 8（`count_overlay_pixels`）。★ 数哪个元素看它的 **alpha 基准**（无图横幅边框画在填充之上 ⇒ 必须数填充）。
 - ★ 判半透明比率：合成线性 ⇒ `|M−H| / |O−H| == pct/100`（M 该 pct / O 100% / H 0%）。脚本 `scripts/ovl_px.py`。★ 读 BMP 按绝对坐标取像素：`h>0` 自下而上，必须 `rows.reverse()`。★ 判"底板按 pct 淡"取矩形内所有变化像素的**中位数**。
@@ -46,7 +46,7 @@
 - ★★ **顺序耦合**：到达那一刻既要置 `sim_paused=1` 又要播收尾语 ⇒ ① **先播报后置位**；② 收尾语**单独判**、不受 paused 挡（否则永远播不出来 —— 实测真 bug）。
 - ★ 判"窗口真的播了什么"：设 `NAVIMAP_TTS_DRYRUN=<文件>`，`nm_tts_speak` 同步写文本 ⇒ 直接断言真实发声。
 - ★ 负向对照注入点必须**可观测**（锚到 `arrived_said` 先置位处 = 永远命中不了 = 假绿）。注入写法别让变量变"未使用"（-Werror ⇒ 编不过 ⇒ 跑的仍是旧 exe ⇒ 同样假绿）。用 `if (n < 0)` 而不是 `i < 0`。
-- ✅ `0179e51` 把"到达帧例外"收归 `voice_wire.c` 成为唯一裁决点；`voice_e2e.c` A8 + `scripts/voice_neg.sh` #9/#10 盖住两道闸。
+- ✅ `0179e51` 把"到达帧例外"收归 `voice_wire.c` 成为唯一裁决点；`skedaddle_voice_e2e.c` A8 + `scripts/voice_neg.sh` #9/#10 盖住两道闸。
 
 ## 设置项与 C/C++
 - ★★★ `app_init` **逐字段读设置**（不走 `app_apply_settings`）⇒ 新设置项三处都改：`SETTINGS_SCHEMA` + `app_init` + `app_persist_settings`。漏 `app_init`：启动不生效、退出还写回默认值。C++ include 的 C 头必须 `extern "C"`；注释里别写 `src/x/*.cpp`（`/*` 触发 -Wcomment，-Werror 下 FAIL）。
@@ -77,6 +77,6 @@
 - ★ **UI 改版后像素判据的硬编码坐标必然失效** ⇒ 判据坐标是"每次 UI 改版都要重测"的活资产，不是一次写死的常量。
 
 ## 已达成水平
-- 渲染 1280×800：**z9 113 / z11 51 / z13 35 / z15 16 ms**（`navmap_qt --shot-offscreen`，8 省北京中心，4 轮取最小，2026-10-27）。★★ **旧值 116/56/42/31 是 `map_shot`（SDL 壳，已删）口径，与新值不可相减**（同视口差 −3/−5/−7/−15 ms，随 zoom 单调增大，属执行路径差异）。任何"快了 N 倍"结论必须先对齐口径。
+- 渲染 1280×800：**z9 113 / z11 51 / z13 35 / z15 16 ms**（`skedaddle --shot-offscreen`，8 省北京中心，4 轮取最小，2026-10-27）。★★ **旧值 116/56/42/31 是 `map_shot`（SDL 壳，已删）口径，与新值不可相减**（同视口差 −3/−5/−7/−15 ms，随 zoom 单调增大，属执行路径差异）。任何"快了 N 倍"结论必须先对齐口径。
 - 算路 50 条（30 地标 w=1.25）：中位 123 / p90 753 / 最慢 1503 ms，展开 10.43 M；比无表快 1.6×、p90 快 4.2×、质量 −3.21%。
 - 图 5228 万节点、六成出度 0 ⇒ 按"有出边"2250 万算基数；全图 CH 放不下。热态固定成本 39~65 ms ⇒ 别抠启动。

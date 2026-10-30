@@ -21,7 +21,7 @@
 1. **能实测就不要估算**——性能瓶颈、算法正确性一律靠 `scripts/regress.sh`、像素判据、确定性量说话，不靠"我觉得"。
 2. **核心与窗口系统解耦**——C 渲染核心一行不动，Qt 只把像素缓冲包成 `QImage`。这就是为什么能"无头出图 + GUI 两套前端共用同一渲染入口"。
 3. **依赖是纯 DAG**——`utils ← pbf ← map ← route ← render ← ui ← ui_qt`，反向依赖会立刻 `undefined-reference`。`scripts/check_layers.sh` 是守护门禁。
-4. **核心零 SDL**——`navimap_core` 连 SDL 的 include 都不给；SDL 仅残留在两个去 SDL 化对照体（`blend_equiv`/`clip_equiv`）里做"逐像素等价"验证。
+4. **核心零 SDL**——`navimap_core` 连 SDL 的 include 都不给；SDL 仅残留在两个去 SDL 化对照体（`skedaddle_blend_equiv`/`skedaddle_clip_equiv`）里做"逐像素等价"验证。
 
 ### 0.3 课程表（建议 15 篇：第 0 课总览 → 第 14 课综合项目，编号与 `tutorial/00–14` 一一对应）
 
@@ -74,14 +74,14 @@ cmake --build build_rel -j$(nproc)
 
 ```bash
 # GUI（Wayland 会话里直接跑）
-./build_rel/navmap_qt --graph=products/graph/beijing
+./build_rel/skedaddle --graph=products/graph/beijing
 
 # 无头出图（CI/自测用，零 SDL，纯内存缓冲 + 内建 24 位 BMP）
-./build_rel/navmap_qt --shot-offscreen --graph=products/graph/beijing \
+./build_rel/skedaddle --shot-offscreen --graph=products/graph/beijing \
     --lat=39.9 --lon=116.4 --zoom=11 --w=1280 --h=800 --out=shot.bmp
 
 # 算一条路线（CLI，可断言）
-./build_rel/route_cli --graph=products/graph/beijing \
+./build_rel/skedaddle_route_cli --graph=products/graph/beijing \
     --from=39.90,116.40 --to=39.99,116.30 --geojson=route.json
 ```
 
@@ -117,7 +117,7 @@ cmake --build build_rel -j$(nproc)
 
 **课堂演示**
 ```bash
-./build_rel/datum_selftest        # 坐标系枚举/往返/位移合理性 + 负向对照
+./build_rel/skedaddle_datum_selftest        # 坐标系枚举/往返/位移合理性 + 负向对照
 ```
 
 **练习**：用 `nm_haversine_m` 和 `nm_fast_dist_m` 分别算北京→上海距离，对比误差与速度。
@@ -137,11 +137,11 @@ cmake --build build_rel -j$(nproc)
 
 **核心讲解**
 1. **业务代码零 `#ifdef _WIN32`**：所有"换个平台就不成立"的调用都只在 `plat.c` 里出现。这是**可移植性 / 依赖倒置**的范本。
-2. **链接纪律**：`plat.c` 的线程用 pthread 实现，故 `-pthread` 由 `navmap_plat` 库统一承载（CMakeLists.txt:213-222）。漏挂会在链接 `tts_selftest` 时报 `pthread_create` 未定义。
+2. **链接纪律**：`plat.c` 的线程用 pthread 实现，故 `-pthread` 由 `navmap_plat` 库统一承载（CMakeLists.txt:213-222）。漏挂会在链接 `skedaddle_tts_selftest` 时报 `pthread_create` 未定义。
 
 **课堂演示**
 ```bash
-./build_rel/plat_selftest        # 平台层全接口自验收（正反双向）
+./build_rel/skedaddle_plat_selftest        # 平台层全接口自验收（正反双向）
 ```
 
 **练习**：在 `plat.c` 里加一个 `nm_sleep_ms`（用 `usleep`/`Sleep` 适配），并在一个 selftest 里调用它。
@@ -165,10 +165,10 @@ cmake --build build_rel -j$(nproc)
 
 **课堂演示**
 ```bash
-./build_rel/pbf_info sources/beijing.osm.pbf     # 看 block 结构、way 数、node 数
+./build_rel/skedaddle_pbf_info sources/beijing.osm.pbf     # 看 block 结构、way 数、node 数
 ```
 
-**练习**：用 `pbf_info` 对比 `bbbike.pbf`（截断文件）与正常文件，确认截断文件**报错退出而非崩溃**。
+**练习**：用 `skedaddle_pbf_info` 对比 `bbbike.pbf`（截断文件）与正常文件，确认截断文件**报错退出而非崩溃**。
 
 **验收**：能解释为什么 `pbf_str` 不能直接返回 protobuf-c 的原始 `data` 指针。
 
@@ -190,8 +190,8 @@ cmake --build build_rel -j$(nproc)
 
 **课堂演示**
 ```bash
-./build_rel/dmap_selftest            # 后台异步解码：set_view 不阻塞 + 进度回调
-./build_rel/disp_tile_selftest
+./build_rel/skedaddle_dmap_selftest            # 后台异步解码：set_view 不阻塞 + 进度回调
+./build_rel/skedaddle_disp_tile_selftest
 ```
 
 **练习**：用 `xxd` 看一个 `.nmbin` 文件头的 magic 与字段表，手动解析出第一个字段的偏移。
@@ -215,9 +215,9 @@ cmake --build build_rel -j$(nproc)
 
 **课堂演示**
 ```bash
-./build_rel/graph_extract --help      # 看抽取参数（被 autobuild 调）
-./build_rel/graph_check               # 校验抽取结果
-./build_rel/tag_stats sources/beijing.osm.pbf   # highway 取值统计
+./build_rel/skedaddle_graph_extract --help      # 看抽取参数（被 autobuild 调）
+./build_rel/skedaddle_graph_check               # 校验抽取结果
+./build_rel/skedaddle_tag_stats sources/beijing.osm.pbf   # highway 取值统计
 ```
 
 **练习**：挑一个 `highway=*` 取值（如 `tertiary`），在 `road_tags.c` 里追它如何变成 `road_class`。
@@ -236,12 +236,12 @@ cmake --build build_rel -j$(nproc)
 
 **核心讲解**
 1. **投影缓存的惰性失效**：只有视口参数真正变了才重算 `cx,cy,scale`，否则直接复用——避免每帧重投影。
-2. **瓦片键三版本**：`lround` 会掩盖 ULP 差异，所以 `tile_selftest` 对 5228 万真实节点**逐点**比对而非抽样。
+2. **瓦片键三版本**：`lround` 会掩盖 ULP 差异，所以 `skedaddle_tile_selftest` 对 5228 万真实节点**逐点**比对而非抽样。
 
 **课堂演示**
 ```bash
-./build_rel/tile_selftest       # 查表版 vs 精确版 逐点等价
-./build_rel/tile_xcheck         # 跨省接边验证
+./build_rel/skedaddle_tile_selftest       # 查表版 vs 精确版 逐点等价
+./build_rel/skedaddle_tile_xcheck         # 跨省接边验证
 ```
 
 **练习**：给定两个经纬度，手算 Z14 瓦片坐标，再用 `nm_tile_of` 验证。
@@ -268,7 +268,7 @@ cmake --build build_rel -j$(nproc)
 **课堂演示**
 ```bash
 # 改 LOD 档位看效果（改 src/render/paint.h 的 AREA_DOT_PX 后重编）
-./build_rel/navmap_qt --shot-offscreen --graph=products/graph/beijing \
+./build_rel/skedaddle --shot-offscreen --graph=products/graph/beijing \
     --lat=39.9 --lon=116.4 --zoom=9 --w=1280 --h=800 --out=z9_a.bmp
 python3 scripts/bmpdiff.py z9_a.bmp z9_b.bmp    # 看丢了多少要素（要素色→背景色=丢要素）
 ```
@@ -285,7 +285,7 @@ python3 scripts/bmpdiff.py z9_a.bmp z9_b.bmp    # 看丢了多少要素（要素
 
 **必读代码**
 - `src/ui/window.h` / `window.c`：`App` 状态机、`paint_frame`（`window.c:1169`，渲染编排）、`app_render_to_buf`（`window.c:1435`，绑定 `Raster` 后调 `paint_frame`）。
-- `src/ui/offscreen_shot.c` / `offscreen_shot.h`：`offscreen_shot_main`（`navmap_qt --shot-offscreen` 单一可信源；纯内存缓冲 `0x00RRGGBB` + 内建 24 位 BMP 写出，零 SDL）。
+- `src/ui/offscreen_shot.c` / `offscreen_shot.h`：`offscreen_shot_main`（`skedaddle --shot-offscreen` 单一可信源；纯内存缓冲 `0x00RRGGBB` + 内建 24 位 BMP 写出，零 SDL）。
 - `src/ui/chrome.c` / `chrome.h`：`ChromeID`/`paint_chrome`/`chrome_hit`/`chrome_act`（自绘标题栏/顶栏/右栏/菜单/面板）。
 - `src/ui/audit.c` / `audit.h`：`app_offscreen_audit`（像素计数 + 断言共享模块）。
 
@@ -296,7 +296,7 @@ python3 scripts/bmpdiff.py z9_a.bmp z9_b.bmp    # 看丢了多少要素（要素
 
 **课堂演示**
 ```bash
-./build_rel/navmap_qt --shot-offscreen --graph=products/graph/beijing \
+./build_rel/skedaddle --shot-offscreen --graph=products/graph/beijing \
     --lat=39.9 --lon=116.4 --zoom=11 --w=1280 --h=800 --out=frame.bmp
 # 看 stdout 里 ms_bg/ms_areas/ms_roads/ms_lines/ms_labels 的分阶段耗时
 ```
@@ -321,8 +321,8 @@ python3 scripts/bmpdiff.py z9_a.bmp z9_b.bmp    # 看丢了多少要素（要素
 
 **课堂演示**
 ```bash
-./build_rel/search_cli --db=products/places_auto.db --q=中关村
-./build_rel/places_build --help      # 看地名库怎么生成
+./build_rel/skedaddle_search_cli --db=products/places_auto.db --q=中关村
+./build_rel/skedaddle_places_build --help      # 看地名库怎么生成
 ```
 
 **练习**：把"中关村"换成单字查询，观察它如何退化到 `gram` 前缀 + 全表 `LIKE`。
@@ -353,15 +353,15 @@ python3 scripts/bmpdiff.py z9_a.bmp z9_b.bmp    # 看丢了多少要素（要素
 
 **课堂演示**
 ```bash
-./build_rel/route_cli --graph=products/graph/beijing \
+./build_rel/skedaddle_route_cli --graph=products/graph/beijing \
     --from=39.90,116.40 --to=39.99,116.30 --geojson=route.json
-./build_rel/heap_selftest --expect-fail     # 优先队列负向对照
-./build_rel/revbuild_cli --verify           # rev.bin 逐元素自验收
-./build_rel/lmbuild_cli --help
-./build_rel/restr_ab                         # via=way 两段限制 A/B 对照
+./build_rel/skedaddle_heap_selftest --expect-fail     # 优先队列负向对照
+./build_rel/skedaddle_revbuild_cli --verify           # rev.bin 逐元素自验收
+./build_rel/skedaddle_lmbuild_cli --help
+./build_rel/skedaddle_restr_ab                         # via=way 两段限制 A/B 对照
 ```
 
-**练习**：把 `ROUTE_HEUR_W_DEFAULT` 改成 1.0（纯 Dijkstra）和 2.0，对比展开数与耗时（用 `route_cli` 的 `expanded`/`elapsed_ms` 输出）。
+**练习**：把 `ROUTE_HEUR_W_DEFAULT` 改成 1.0（纯 Dijkstra）和 2.0，对比展开数与耗时（用 `skedaddle_route_cli` 的 `expanded`/`elapsed_ms` 输出）。
 
 **验收**：能画出"双向 A* 一次展开"的数据流（取堆顶 → `members_of` → 松弛出边 → 查转向限制 → 相遇判定）。
 
@@ -384,13 +384,13 @@ python3 scripts/bmpdiff.py z9_a.bmp z9_b.bmp    # 看丢了多少要素（要素
 
 **课堂演示**
 ```bash
-./build_rel/navsim_cli --help              # 模拟定位/偏航/ETA
-./build_rel/voice_selftest                 # 播报策略（话术/提前量/节奏）
-NAVIMAP_TTS_DRYRUN=/tmp/tts.txt ./build_rel/voice_e2e   # 端到端：直接断言真实发声文本
+./build_rel/skedaddle_navsim_cli --help              # 模拟定位/偏航/ETA
+./build_rel/skedaddle_voice_selftest                 # 播报策略（话术/提前量/节奏）
+NAVIMAP_TTS_DRYRUN=/tmp/tts.txt ./build_rel/skedaddle_voice_e2e   # 端到端：直接断言真实发声文本
 ./scripts/voice_neg.sh                     # 负向对照
 ```
 
-**练习**：在 `voice.c` 里加一条新播报规则（如"前方 200 米有收费站"），然后用 `voice_e2e` + `NAVIMAP_TTS_DRYRUN` 验证它真的被说出。
+**练习**：在 `voice.c` 里加一条新播报规则（如"前方 200 米有收费站"），然后用 `skedaddle_voice_e2e` + `NAVIMAP_TTS_DRYRUN` 验证它真的被说出。
 
 **验收**：能解释"为什么 `voice_wire.c` 是唯一接线点、为什么收尾语要单独判"。
 
@@ -412,7 +412,7 @@ NAVIMAP_TTS_DRYRUN=/tmp/tts.txt ./build_rel/voice_e2e   # 端到端：直接断�
 
 **课堂演示**
 ```bash
-./build_rel/navmap_qt --graph=products/graph/beijing
+./build_rel/skedaddle --graph=products/graph/beijing
 # 在 GUI 里缩放/平移/搜索/起终点导航，肉眼确认交互
 ```
 
@@ -437,7 +437,7 @@ NAVIMAP_TTS_DRYRUN=/tmp/tts.txt ./build_rel/voice_e2e   # 端到端：直接断�
 **核心讲解**
 1. **分层门禁是第二道防线**：链接器单趟解析（不用 `--start-group`）是第一道，`-Wl,--start-group` 已移除——它会让链接器多轮扫描悄悄补上反向依赖，边界形同虚设。
 2. **确定性量 > 时间**：时间判据 flaky（机器负载放大一个数量级），所以用 `areas_dotted`、像素计数这类确定性量守 LOD。
-3. **负向对照必须能失败**：任何判据都要注入一个"必失败"的改动来验证它真的在起作用（如 `heap_selftest --expect-fail`、`voice_neg.sh`）。
+3. **负向对照必须能失败**：任何判据都要注入一个"必失败"的改动来验证它真的在起作用（如 `skedaddle_heap_selftest --expect-fail`、`voice_neg.sh`）。
 
 **课堂演示**
 ```bash
@@ -459,10 +459,10 @@ NAVIMAP_TTS_DRYRUN=/tmp/tts.txt ./build_rel/voice_e2e   # 端到端：直接断�
 **目标**：独立完成"改一个点 + 加一条判据"，体验完整的"改 → 测 → 守"闭环。
 
 **可选课题（按难度）**
-1. **【易】新增一个 CLI 工具**：比如 `route_cli` 加 `--via` 途经点（接 `router_route_via`），并加一条 `alts_selftest` 式断言。
+1. **【易】新增一个 CLI 工具**：比如 `skedaddle_route_cli` 加 `--via` 途经点（接 `router_route_via`），并加一条 `skedaddle_alts_selftest` 式断言。
 2. **【中】调一个 LOD 旋钮**：把 `AREA_DOT_PX` 从 4 调到 6，用 `bmpdiff.py` 量化净损失，更新 `docs/PERF-AREA-LOD-TIERS.md` 档位表，收紧 `regress.sh` 的 `area_lod_tier` 区间。
 3. **【难】加一个新要素类型**：在 `paint.c` 加一种渲染要素（如 `paint_contours` 已存在，可复制其骨架做"等高线标注"），并在 `offscreen_shot` 输出里加一个计数，补一条 regress 判据。
-4. **【难】路由新策略**：在 `cost.c` 的 `edge_cost` 里加一个 `avoid_unpaved` 的惩罚项，用 `route_cli` 对比开关前后的 `total_m`/`expanded`。
+4. **【难】路由新策略**：在 `cost.c` 的 `edge_cost` 里加一个 `avoid_unpaved` 的惩罚项，用 `skedaddle_route_cli` 对比开关前后的 `total_m`/`expanded`。
 
 **交付要求**
 - 改动走 `scripts/check_layers.sh` 零违规。
@@ -477,15 +477,15 @@ NAVIMAP_TTS_DRYRUN=/tmp/tts.txt ./build_rel/voice_e2e   # 端到端：直接断�
 
 | 类别 | 工具 |
 |---|---|
-| PBF/建图 | `pbf_info` `graph_extract` `graph_check` `tag_stats` `pbfmap_check` `gen_contours` |
-| 路网/路由 | `route_cli` `revbuild_cli` `lmbuild_cli` `lmdist_cli` `restr_ab` `restr_probe` `tile_xcheck` `tile_selftest` `heap_selftest` `alts_selftest` `lane_selftest` |
-| 导航层 | `navsim_cli` `voice_selftest` `voice_e2e` |
-| 搜索/地名 | `search_cli` `places_build` |
-| 覆盖/坐标 | `coverage_cli` `datum_selftest` |
-| 字体/TTS | `font_selftest` `font_probe` `font_cjk_check` `tts_selftest` |
-| GPX | `gpx_selftest` |
-| 架构门禁 | `core_no_sdl` `blend_equiv` `clip_equiv` `plat_selftest` `dmap_selftest` `disp_tile_selftest` `disp_runtime_selftest` |
-| 前端 | `navmap_qt`（含 `--shot-offscreen`） |
+| PBF/建图 | `skedaddle_pbf_info` `skedaddle_graph_extract` `skedaddle_graph_check` `skedaddle_tag_stats` `skedaddle_pbfmap_check` `skedaddle_gen_contours` |
+| 路网/路由 | `skedaddle_route_cli` `skedaddle_revbuild_cli` `skedaddle_lmbuild_cli` `skedaddle_lmdist_cli` `skedaddle_restr_ab` `skedaddle_restr_probe` `skedaddle_tile_xcheck` `skedaddle_tile_selftest` `skedaddle_heap_selftest` `skedaddle_alts_selftest` `skedaddle_lane_selftest` |
+| 导航层 | `skedaddle_navsim_cli` `skedaddle_voice_selftest` `skedaddle_voice_e2e` |
+| 搜索/地名 | `skedaddle_search_cli` `skedaddle_places_build` |
+| 覆盖/坐标 | `skedaddle_coverage_cli` `skedaddle_datum_selftest` |
+| 字体/TTS | `skedaddle_font_selftest` `skedaddle_font_probe` `skedaddle_font_cjk_check` `skedaddle_tts_selftest` |
+| GPX | `skedaddle_gpx_selftest` |
+| 架构门禁 | `skedaddle_core_no_sdl` `skedaddle_blend_equiv` `skedaddle_clip_equiv` `skedaddle_plat_selftest` `skedaddle_dmap_selftest` `skedaddle_disp_tile_selftest` `skedaddle_disp_runtime_selftest` |
+| 前端 | `skedaddle`（含 `--shot-offscreen`） |
 
 ### B. 关键不变量（贯穿全课）
 

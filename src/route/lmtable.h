@@ -86,7 +86,7 @@ size_t lm_cell_of(const LmTable *t, int32_t lat_e7, int32_t lon_e7);
 /* u → 目标格 tc 的地标下界（**米**）。不可用（任意一侧没数据）返回负数。 */
 double lm_bound_m(const LmTable *t, size_t tc, int32_t lat_e7, int32_t lon_e7);
 
-/* 写端（lmbuild_cli 用）：分配/填充/落盘。 */
+/* 写端（skedaddle_lmbuild_cli 用）：分配/填充/落盘。 */
 int  lm_table_init(LmTable *t, int32_t lat0_e7, int32_t lon0_e7, uint32_t cell_e7,
                    uint32_t nrow, uint32_t ncol, uint32_t nlm, uint32_t penalty_m,
                    uint32_t nprov, uint64_t total_nodes);

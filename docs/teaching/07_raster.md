@@ -414,5 +414,5 @@ static inline void raster_line(Raster *rs, int x0, int y0, int x1, int y1, uint3
   `./build_rel/tools/clip_equiv`（逐字比对 `SDL_IntersectRectAndLine` 与 `raster_clip_line`）。
 - **演示**：跑混色等价门禁：
   `./build_rel/tools/blend_equiv`（36 组颜色 × 4096 像素逐位相同）。
-- **练习**：在 `raster_clip_line` 里把某处差值方向改成 `(x1-x2)`，重跑 `clip_equiv`，观察跨界线段差 1 像素的断言被抓出；改回。
+- **练习**：在 `raster_clip_line` 里把某处差值方向改成 `(x1-x2)`，重跑 `skedaddle_clip_equiv`，观察跨界线段差 1 像素的断言被抓出；改回。
 - **验收**：能口述 `raster_line` 的"退化点 → 画布内快速判定 → Cohen-Sutherland 裁剪 → 裁剪后光栅化"四段结构，并解释 64 位中间量与差值方向这两处为"逐位等价 SDL"而存在的细节。

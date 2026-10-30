@@ -3,7 +3,7 @@
 # Release 构建 + 发布包部署（Windows / MSYS2）。
 #
 # 产出：dist/navimap-release/  —— 一个自包含、可直接双击 start.bat 运行的目录：
-#   navmap_qt.exe (Release)
+#   skedaddle.exe (Release)
 #   Qt6 DLL + 平台插件 (qwindows / qoffscreen)
 #   第三方 DLL (protobuf-c / sqlite3 / zlib / libgcc / libstdc++ / winpthread)
 #   fonts/  (CJK 字体，exe 同级的 fonts/ 或 ../fonts/)
@@ -53,12 +53,12 @@ fi
 echo "=== 部署到 $DIST ==="
 rm -rf "$DIST"
 mkdir -p "$DIST"
-cp "$BUILD/navmap_qt.exe" "$DIST/"
+cp "$BUILD/skedaddle.exe" "$DIST/"
 cp -r "$ROOT/fonts" "$DIST/fonts"
 
 # ---- 3) Qt 依赖收集 ----------------------------------------------------
 echo "=== windeployqt --release ==="
-"$QT_BIN/windeployqt.exe" --release "$DIST/navmap_qt.exe"
+"$QT_BIN/windeployqt.exe" --release "$DIST/skedaddle.exe"
 # 附带上 qoffscreen 插件，便于无头出图（--shot-offscreen）自检。
 if [ -f "$QT_BIN/../plugins/platforms/qoffscreen.dll" ]; then
     cp "$QT_BIN/../plugins/platforms/qoffscreen.dll" "$DIST/platforms/" 2>/dev/null || true
@@ -80,16 +80,16 @@ done
 cat > "$DIST/start.bat" <<'EOF'
 @echo off
 cd /d "%~dp0"
-navmap_qt.exe --graph=E:/navimap/products/graph/beijing
+skedaddle.exe --graph=E:/navimap/products/graph/beijing
 EOF
 
 cat > "$DIST/README.txt" <<'EOF'
-navmap_qt Release 版
+skedaddle Release 版
 ====================
 
 【运行】双击 start.bat，自动加载本机已有的北京地图
 （E:/navimap/products/graph/beijing，约 370MB，由 sync_maps.sh 生成）。
-或自己指定地图目录：  navmap_qt.exe --graph=<地图目录>
+或自己指定地图目录：  skedaddle.exe --graph=<地图目录>
 
 【操作】视图菜单勾选「等高线」或按 O 键开关等高线；
 鼠标拖拽平移、滚轮缩放；右上角搜索框搜地点（需 places_auto.db 地名库）。

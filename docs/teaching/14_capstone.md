@@ -18,7 +18,7 @@
 | 数据生产（PBF→二进制→建图） | L3 / L4 / L5 | `scripts/sync_maps.sh`、`tools/graph_extract.c`（`graph_build`、`nmbin_open`、`rev_write`） | `scripts/sync_maps.sh:1-432`（完整体见第三节）；`tools/graph_extract.c:1-172`（完整体见第三节） |
 | 每帧渲染（视口投影→软件光栅→管线） | L6 / L7 / L8 | `src/ui/offscreen_shot.c`（`offscreen_shot_main`、`render_buffer`、`write_bmp24`、`app_offscreen_audit`）、`map/map_view.c`（`mv_project`、`mv_visible_bbox`） | `src/ui/offscreen_shot.c:194-647`（`offscreen_shot_main` 完整体）；关键段见第三节 |
 | 用户交互（搜索→路由→导航语音） | L9 / L10 / L11 | `tools/route_cli.c`（`router_route_ll`、`maneuver_build`）、`src/ui/window.c`（`app_nav_plan_sync`）、`route/maneuver.c`、`route/voice.c`、`ui/voice_wire.c` | `tools/route_cli.c:46-338`（main 完整体）；`--maneuvers` 块见第三节 |
-| Qt 外壳 | L12 | `src/ui_qt/qt_main.cpp`、`map_canvas.cpp`、`main_window.cpp` | `CMakeLists.txt:496-512`（`navmap_qt` 目标） |
+| Qt 外壳 | L12 | `src/ui_qt/qt_main.cpp`、`map_canvas.cpp`、`main_window.cpp` | `CMakeLists.txt:496-512`（`skedaddle` 目标） |
 | 门禁 | L13 | `scripts/regress.sh`、`scripts/check_layers.sh`、`tools/core_no_sdl.c` | `scripts/regress.sh:1-802`（关键判据函数节选见 3.6 节；完整脚本见 `13_gates.md` 内嵌，全文 802 行） |
 
 纯 DAG 底座：`utils ← pbf ← map ← route ← render ← ui ← ui_qt`（L2 平台抽象、L1 坐标系为全程底座）。
@@ -29,14 +29,14 @@
 
 ### 3.1 数据生产：`scripts/sync_maps.sh`（完整体）
 
-把 `sources/` 下新下载的 PBF 自动变成可加载的路网，并顺手重建地名库 `places_auto.db` 与地标表 `lm.bin`。它内部调用 `graph_extract` + `graph_check` + `places_build` + `lmbuild_cli`，并用 manifest 指纹判断过期（`sync_maps.sh:120-146`）。
+把 `sources/` 下新下载的 PBF 自动变成可加载的路网，并顺手重建地名库 `places_auto.db` 与地标表 `lm.bin`。它内部调用 `skedaddle_graph_extract` + `skedaddle_graph_check` + `skedaddle_places_build` + `skedaddle_lmbuild_cli`，并用 manifest 指纹判断过期（`sync_maps.sh:120-146`）。
 
 ```sh
 #!/bin/bash
 # sync_maps.sh —— 让 sources/ 下新下载的 PBF 自动变成可加载的路网
 #
 # 存在理由：主程序不会自己扫描目录，也不会检查产物是不是过期。以前加一张新地图
-# 要手工敲 graph_extract、手工记目录名、手工传给 --graph，而且换了 PBF 忘了重转时
+# 要手工敲 skedaddle_graph_extract、手工记目录名、手工传给 --graph，而且换了 PBF 忘了重转时
 # 程序一声不吭继续画旧图（app_init 只比对 magic，连版本号都不校验）。
 # 本脚本把"发现新地图 → 转换 → 校验"这条链自动掉，指纹记在每份产物的 manifest.txt 里。
 #
@@ -46,7 +46,7 @@
 #   ./scripts/sync_maps.sh --only=hebei   # 只处理一个
 #   ./scripts/sync_maps.sh --force        # 无视指纹，全部重转
 #   ./scripts/sync_maps.sh --no-probe     # 跳过 PBF 完整性预检（快一点，坏文件会等到转换时才炸）
-#   ./scripts/sync_maps.sh --no-check     # 转换后不跑 graph_check
+#   ./scripts/sync_maps.sh --no-check     # 转换后不跑 skedaddle_graph_check
 #
 # 退出码：0 = 全部就绪；1 = 至少一个源文件转换失败（需要人工介入）。
 
@@ -57,7 +57,7 @@ BIN="$ROOT/build"
 SRC_DIR="$ROOT/sources"
 OUT_ROOT="$ROOT/products/graph"
 
-# 输出根可能还不存在（全新克隆、或被人手工删过）——graph_extract 不会自己建父目录
+# 输出根可能还不存在（全新克隆、或被人手工删过）——skedaddle_graph_extract 不会自己建父目录
 mkdir -p "$OUT_ROOT" || { printf '[FAIL ] 无法创建输出目录 %s\n' "$OUT_ROOT"; exit 1; }
 
 DRY=0
@@ -96,7 +96,7 @@ md5of() {
     else md5 -q; fi
 }
 
-for b in graph_extract graph_check pbf_info places_build lmbuild_cli; do
+for b in skedaddle_graph_extract skedaddle_graph_check skedaddle_pbf_info skedaddle_places_build skedaddle_lmbuild_cli; do
     if [ ! -x "$BIN/$b" ]; then
         printf '缺少 %s —— 先构建：\n  source env.sh && cmake --build build -j"$NPROC"\n' "$BIN/$b"
         exit 1
@@ -104,7 +104,7 @@ for b in graph_extract graph_check pbf_info places_build lmbuild_cli; do
 done
 
 # 当前期望的二进制格式版本。产物 manifest 里记的版本对不上就重转。
-WANT_VER="$("$BIN/graph_extract" --fmt-version)"
+WANT_VER="$("$BIN/skedaddle_graph_extract" --fmt-version)"
 
 # 从 manifest.txt 取一个键的值（键后面跟的是空白，值到行尾）
 mani_get() { sed -n "s/^$1[[:space:]]\+//p" "$2" 2>/dev/null | head -1; }
@@ -192,8 +192,8 @@ while IFS= read -r f; do
 
     # ---- 完整性预检：截断/损坏的 PBF 在这里就被拦下，而不是转出一张残缺的图 ----
     if [ "$DO_PROBE" = 1 ]; then
-        if ! "$BIN/pbf_info" "$f" >/dev/null 2>&1; then
-            printf '[FAIL ] %-12s PBF 不完整或已损坏（pbf_info 读不通）。\n' "$name"
+        if ! "$BIN/skedaddle_pbf_info" "$f" >/dev/null 2>&1; then
+            printf '[FAIL ] %-12s PBF 不完整或已损坏（skedaddle_pbf_info 读不通）。\n' "$name"
             printf '        建议挪走：mv %s %s/_bad/\n' "$f" "$SRC_DIR"
             n_fail=$((n_fail+1))
             continue
@@ -208,8 +208,8 @@ while IFS= read -r f; do
         continue
     fi
     t0=$(date +%s)
-    if ! "$BIN/graph_extract" --out="$tmp" "$f" > "$tmp.log" 2>&1; then
-        printf '[FAIL ] %-12s graph_extract 闸门未过（%s 秒）\n' "$name" "$(( $(date +%s) - t0 ))"
+    if ! "$BIN/skedaddle_graph_extract" --out="$tmp" "$f" > "$tmp.log" 2>&1; then
+        printf '[FAIL ] %-12s skedaddle_graph_extract 闸门未过（%s 秒）\n' "$name" "$(( $(date +%s) - t0 ))"
         mv "$tmp.log" "$OUT_ROOT/failed-$name.log"
         grep -h 'ASSERT-FAIL' "$OUT_ROOT/failed-$name.log" | head -5 | sed 's/^/        /'
         printf '        多半是新地图出现了 road_tags.c 表里没有的 highway 取值，需要人工补表。\n'
@@ -221,8 +221,8 @@ while IFS= read -r f; do
     fi
 
     if [ "$DO_CHECK" = 1 ]; then
-        if ! "$BIN/graph_check" "$tmp" > "$tmp.check.log" 2>&1; then
-            printf '[FAIL ] %-12s graph_check 不通过，已丢弃本次产物\n' "$name"
+        if ! "$BIN/skedaddle_graph_check" "$tmp" > "$tmp.check.log" 2>&1; then
+            printf '[FAIL ] %-12s skedaddle_graph_check 不通过，已丢弃本次产物\n' "$name"
             mv "$tmp.check.log" "$OUT_ROOT/failed-$name.log"
         grep -h 'ASSERT-FAIL' "$OUT_ROOT/failed-$name.log" | head -5 | sed 's/^/        /'
         drop_tmp "$tmp"
@@ -283,7 +283,7 @@ done < <(find "$SRC_DIR" -maxdepth 1 -type f \( -name '*.osm.pbf' -o -name '*.pb
 # ---------------------------------------------------------------------------
 # 地名 / POI / 街道名库（两份 Provinces 共用一个库，所以放在各省循环之外只做一次）
 #
-# 为什么必须在这里而不是手工跑：地名挂在 PBF 的**节点**上，graph_extract 一个节点
+# 为什么必须在这里而不是手工跑：地名挂在 PBF 的**节点**上，skedaddle_graph_extract 一个节点
 # 都不留（只抽 ways），所以"加了新地图却没重建这里"的表现极难发现 —— 地图照画、
 # 路照通，只有搜索安静地变差、地图上安静地少了地名。以前就是这么丢掉生成器的。
 #
@@ -314,7 +314,7 @@ else
     # 结果是每次跑 --only 都误判要重建。
     while IFS= read -r f; do
         [ -n "$f" ] || continue
-        # meta 里记的是相对 ROOT 的路径（直接跑 places_build 时传什么就是什么），
+        # meta 里记的是相对 ROOT 的路径（直接跑 skedaddle_places_build 时传什么就是什么），
         # 而 find 给的是绝对路径 —— 不剥前缀就永远对不上，每次都会重建一次。
         frel="${f#$ROOT/}"
         mrel="$(pmeta_idx "$pi" source)"
@@ -345,8 +345,8 @@ else
         # 绝不能让它在半途留下一个写了一半、还能被打开的库。
         ptmp="$PLACES_DB.tmp.$$"
         pmtmp="$PLACES_META.tmp.$$"
-        if "$BIN/places_build" --sources="$SRC_DIR" --db="$ptmp" --meta="$pmtmp" > "$ptmp.log" 2>&1 &&
-           "$BIN/places_build" --db="$ptmp" --selftest >> "$ptmp.log" 2>&1; then
+        if "$BIN/skedaddle_places_build" --sources="$SRC_DIR" --db="$ptmp" --meta="$pmtmp" > "$ptmp.log" 2>&1 &&
+           "$BIN/skedaddle_places_build" --db="$ptmp" --selftest >> "$ptmp.log" 2>&1; then
             sed -e "s#^db .*#db           = ${PLACES_DB#$ROOT/}#" "$pmtmp" > "$pmtmp.fix" &&
                 mv -f "$pmtmp.fix" "$pmtmp"
             if mv -f "$ptmp" "$PLACES_DB" && mv -f "$pmtmp" "$PLACES_META"; then
@@ -358,7 +358,7 @@ else
             fi
             rm -f "$ptmp.log" "$pmtmp"
         else
-            printf '[FAIL ] %-12s places_build 未通过（自检失败）\n' "places"
+            printf '[FAIL ] %-12s skedaddle_places_build 未通过（自检失败）\n' "places"
             tail -3 "$ptmp.log" | sed 's/^/        /'
             mv "$ptmp.log" "$ROOT/products/failed-places.log"
             rm -f "$ptmp" "$pmtmp"
@@ -393,7 +393,7 @@ else
     #   路网指纹对不对，都发现不了"源码里的地标列表改了"。不加这一项的话，
     #   改列表后重建会被 SKIP，旧表静默留在原地（与 §51.5 同源）。
     #   --print-lmfp 不加载路网，开销可忽略。
-    lm_fp=$("$BIN/lmbuild_cli" --print-lmfp --nlm="$LM_NLM" 2>/dev/null |
+    lm_fp=$("$BIN/skedaddle_lmbuild_cli" --print-lmfp --nlm="$LM_NLM" 2>/dev/null |
             sed -n 's/^lmfp[[:space:]]\+//p' | head -1)
 
     want_fp=$(
@@ -422,7 +422,7 @@ else
             t0=$(date +%s)
             # 直接写临时文件，成功才 mv：万一构建中途 OOM，不能把一份半截的表
             # 留在正式路径上（半截表 magic 是对的，会被当成有效表加载）。
-            if "$BIN/lmbuild_cli" --graph="$OUT_ROOT" --out="$ltmp" \
+            if "$BIN/skedaddle_lmbuild_cli" --graph="$OUT_ROOT" --out="$ltmp" \
                     --cell=3000 --nlm="$LM_NLM" > "$ltmp.log" 2>&1 &&
                [ -s "$ltmp" ]; then
                 printf 'fingerprint %s\nlmver %s\ncell_m 3000\nnlm %s\nlmfp %s\n' \
@@ -467,14 +467,14 @@ fi
 
 ### 3.2 建图核心：`tools/graph_extract.c`（完整体）
 
-PBF → 自描述路网二进制（`nodes.bin`/`edges.bin`/`osmid.bin`/`names.bin`/`restrictions.bin`/`manifest.txt`），并顺手写派生索引 `rev.bin`。**闸门没过就不写 manifest**（`graph_extract.c:89-107`），让“有 manifest”严格等价于“产物可用”。
+PBF → 自描述路网二进制（`nodes.bin`/`edges.bin`/`osmid.bin`/`names.bin`/`restrictions.bin`/`manifest.txt`），并顺手写派生索引 `rev.bin`。**闸门没过就不写 manifest**（`skedaddle_graph_extract.c:89-107`），让“有 manifest”严格等价于“产物可用”。
 
 ```c
-/* graph_extract —— PBF → 自描述路网二进制
+/* skedaddle_graph_extract —— PBF → 自描述路网二进制
  *
  * 用法：
- *   ./graph_extract --out=products/graph/beijing sources/beijing.osm.pbf
- *   ./graph_extract --fmt-version          # 只打印当前 NMBIN 版本号后退出
+ *   ./skedaddle_graph_extract --out=products/graph/beijing sources/beijing.osm.pbf
+ *   ./skedaddle_graph_extract --fmt-version          # 只打印当前 NMBIN 版本号后退出
  *
  * 产出（全部带 NAVMBIN 自描述头，字段名/偏移/类型写在文件里）：
  *   nodes.bin  edges.bin  osmid.bin  names.bin  restrictions.bin  manifest.txt
@@ -645,7 +645,7 @@ int main(int argc, char **argv)
 
 ### 3.3 每帧渲染（离屏通道）：`src/ui/offscreen_shot.c` 的 `offscreen_shot_main` 关键段（完整体位于 `offscreen_shot.c:194-647`）
 
-`navmap_qt --shot-offscreen` 调 `offscreen_shot_main()`，是离屏像素审计的**单一可信源**（regress 的全部离屏判据都走它）。它内部用 `app_init` 加载图集、`app_render_to_buf` 渲进内存缓冲、`write_bmp24` 写 24 位 BMP，**零 SDL**。下面展示“进程内算路”这一段（L10 路由结果被直接叠进画面），以及末尾的确定性量审计锚点（L7/L8 的 `areas_dotted`）。
+`skedaddle --shot-offscreen` 调 `offscreen_shot_main()`，是离屏像素审计的**单一可信源**（regress 的全部离屏判据都走它）。它内部用 `app_init` 加载图集、`app_render_to_buf` 渲进内存缓冲、`write_bmp24` 写 24 位 BMP，**零 SDL**。下面展示“进程内算路”这一段（L10 路由结果被直接叠进画面），以及末尾的确定性量审计锚点（L7/L8 的 `areas_dotted`）。
 
 ```c
     App a;
@@ -737,7 +737,7 @@ int main(int argc, char **argv)
     printf("road_labels    %llu\n", (unsigned long long)st.road_labels_drawn);
 
     /* 像素计数 + 断言 + 日志：交给共享审计模块（render/audit.c）。
-       navmap_qt --shot-offscreen 也走同一份逻辑，保证两前端判据逐位一致。 */
+       skedaddle --shot-offscreen 也走同一份逻辑，保证两前端判据逐位一致。 */
     AuditCtx actx;
     actx.have_search = have_search;
     actx.have_route  = have_route;
@@ -749,9 +749,9 @@ int main(int argc, char **argv)
     return rc;
 ```
 
-### 3.4 用户交互（路由 + 转向指令）：`tools/route_cli.c` 的 `--maneuvers` 块（完整体位于 `route_cli.c:280-300`）
+### 3.4 用户交互（路由 + 转向指令）：`tools/route_cli.c` 的 `--maneuvers` 块（完整体位于 `skedaddle_route_cli.c:280-300`）
 
-`route_cli` 是路由的命令行入口（L10）。`--maneuvers` 调 `maneuver_build` 生成转向指令，并断言“指令里程和 == 总里程”（不变量）。GUI 面板看到的转向指令就是同一份。
+`skedaddle_route_cli` 是路由的命令行入口（L10）。`--maneuvers` 调 `maneuver_build` 生成转向指令，并断言“指令里程和 == 总里程”（不变量）。GUI 面板看到的转向指令就是同一份。
 
 ```c
     if (want_man) {
@@ -784,22 +784,22 @@ int main(int argc, char **argv)
 ```sh
 # ① 数据生产（L3 解析 / L4 二进制 / L5 建图）：把 PBF 变成可加载路网
 cp  ~/Downloads/beijing.osm.pbf  sources/beijing.osm.pbf
-./scripts/sync_maps.sh                       # 内部调 graph_extract + graph_check + places_build + lmbuild_cli
+./scripts/sync_maps.sh                       # 内部调 skedaddle_graph_extract + skedaddle_graph_check + skedaddle_places_build + skedaddle_lmbuild_cli
 #   产物：products/graph/beijing/{nodes,edges,osmid,names,restrictions}.bin + manifest.txt + rev.bin
 #         products/places_auto.db（L9 搜索库）、products/graph/lm.bin（L10 地标表）
 
 # ② 算一条路 + 转向指令（L10 路由 / L11 导航层）
-./build/route_cli --graph=products/graph --from=39.90,116.40 --to=34.75,113.62 --maneuvers
+./build/skedaddle_route_cli --graph=products/graph --from=39.90,116.40 --to=34.75,113.62 --maneuvers
 #   输出：起终点吸附、总长、绕行系数、预计分钟、转向指令 N 条（里程和==总里程）
 
 # ③ 离屏出一张带路线的图（L6 视口投影 / L7 软件光栅 / L8 渲染管线 / L12 Qt 外壳）
-./build/navmap_qt --shot-offscreen --graph=products/graph/beijing \
+./build/skedaddle --shot-offscreen --graph=products/graph/beijing \
     --from=39.90,116.40 --to=34.75,113.62 --fit-route \
     --lat=39.90 --lon=116.40 --zoom=12 --w=1280 --h=800 --out=/tmp/route.bmp
 #   等价于 GUI 里选起终点后看到的画面；offscreen_shot_main 直接调 app_nav_plan_sync 算路并叠画。
 
 # ④ 搜索验收（L9）：离屏也能查 + 画
-./build/navmap_qt --shot-offscreen --graph=products/graph/beijing --q=中关村 --w=1280 --h=800 --out=/tmp/search.bmp
+./build/skedaddle --shot-offscreen --graph=products/graph/beijing --q=中关村 --w=1280 --h=800 --out=/tmp/search.bmp
 
 # ⑤ 门禁（L13）：改完跑全套
 ./scripts/regress.sh            # 或 ./scripts/regress.sh --build 先编译
@@ -846,7 +846,7 @@ run() {                       # run <名字> <必须出现的标记> <命令...>
 area_lod_tier() {             # area_lod_tier <名字> <zoom> <dotted_lo> <dotted_hi> <drawn>
     local name=$1 z=$2 lo=$3 hi=$4 want_drawn=$5
     local log="$SHOTS/$name.log"
-    "$BUILD/navmap_qt" --shot-offscreen --graph="$GRAPH" \
+    "$BUILD/skedaddle" --shot-offscreen --graph="$GRAPH" \
         --lat=39.90 --lon=116.40 --zoom="$z" --w=1280 --h=800 \
         --out="$SHOTS/$name.bmp" >"$log" 2>&1
     local rc=$?
@@ -882,19 +882,19 @@ area_lod_tier() {             # area_lod_tier <名字> <zoom> <dotted_lo> <dotte
 ## 四、与其他功能之间的联系
 
 - **L1 坐标系 / L2 平台抽象**：全程底座。`utils/geo`（墨卡托投影、`nm_haversine_m`）与 `utils/plat`（线程 / mmap / 临时目录）被 L3–L12 所有模块依赖，是纯 DAG 的最底端叶子，反向绝不被依赖。
-- **L3 PBF 解析 → L4 自描述二进制与图集 → L5 建图**：`graph_extract`（L5）消费 `pbf/pbf_stream`（L3），产出 `nmbin` 自描述二进制（L4），再由 `map/mapset`（L4）在运行时按视口加载。这是 `mapset_set_view`（L6）在视野变化时加载的内容，也是路由（L10）的输入。
+- **L3 PBF 解析 → L4 自描述二进制与图集 → L5 建图**：`skedaddle_graph_extract`（L5）消费 `pbf/pbf_stream`（L3），产出 `nmbin` 自描述二进制（L4），再由 `map/mapset`（L4）在运行时按视口加载。这是 `mapset_set_view`（L6）在视野变化时加载的内容，也是路由（L10）的输入。
 - **L6 视口投影 → L7 软件光栅 → L8 渲染管线**：`mv_visible_bbox`/`mv_project`（L6）决定可见范围，喂给 `paint_areas/roads/lines`（L7），由 `paint_frame`（L8，`offscreen_shot.c` 的 `render_buffer` → `app_render_to_buf` → `paint_frame`）按 9 步编排成一帧。
-- **L9 搜索 → L10 路由 → L11 导航语音**：UI 上触发先后出现；`route_cli`/`app_nav_plan_sync`（L10）出 `RouteResult`，交给 `maneuver`（L11）生成指令，再经 `navsim`/`voice`/`ui/voice_wire`（L11）播报。
+- **L9 搜索 → L10 路由 → L11 导航语音**：UI 上触发先后出现；`skedaddle_route_cli`/`app_nav_plan_sync`（L10）出 `RouteResult`，交给 `maneuver`（L11）生成指令，再经 `navsim`/`voice`/`ui/voice_wire`（L11）播报。
 - **L12 Qt 前端**：只是外壳——`qt_main.cpp` 启动事件循环，每帧 `MapCanvas::tick()` 驱动 `paint_frame`；它只链 `navimap_core + Qt Widgets`，不链 SDL。
-- **L13 架构门禁**：守护前面所有课——`check_layers.sh` 把纯 DAG 锁死，`core_no_sdl` 把“L12 不链 SDL”锁死，`regress.sh` 把 L7/L8/L10/L11/L12 的几十个用例串成回归门禁。
+- **L13 架构门禁**：守护前面所有课——`check_layers.sh` 把纯 DAG 锁死，`skedaddle_core_no_sdl` 把“L12 不链 SDL”锁死，`regress.sh` 把 L7/L8/L10/L11/L12 的几十个用例串成回归门禁。
 - **纯 DAG 总结**：`utils ← pbf ← map ← route ← render ← ui ← ui_qt`。`map` 只许依赖 `pbf,utils`；`route` 只许依赖 `map,utils`；`render` 纯光栅、零 ui 依赖；`ui` 依赖 `render` 但绝不被 `render/map/route` 反向依赖；`ui_qt` 只依赖 `map,render,settings,ui,utils`。任何反向依赖会被链接器（第一道）与 `check_layers.sh`（第二道）同时抓出。
 
 ## 五、演示、练习与验收
 
 - **端到端演示（从 PBF 到屏幕路线）**：
   1. 放一份 `beijing.osm.pbf` 到 `sources/`，跑 `./scripts/sync_maps.sh`，确认 `products/graph/beijing` 出现 `manifest.txt` 与各类 `.bin`；
-  2. 跑 `./build/route_cli --graph=products/graph --from=39.90,116.40 --to=34.75,113.62 --maneuvers`，确认打印里程与转向指令、且 `ASSERT-OK`；
-  3. 跑 `./build/navmap_qt --shot-offscreen --graph=products/graph/beijing --from=39.90,116.40 --to=34.75,113.62 --fit-route --out=/tmp/route.bmp`，打开 `/tmp/route.bmp` 应能看到一条红色路线；
+  2. 跑 `./build/skedaddle_route_cli --graph=products/graph --from=39.90,116.40 --to=34.75,113.62 --maneuvers`，确认打印里程与转向指令、且 `ASSERT-OK`；
+  3. 跑 `./build/skedaddle --shot-offscreen --graph=products/graph/beijing --from=39.90,116.40 --to=34.75,113.62 --fit-route --out=/tmp/route.bmp`，打开 `/tmp/route.bmp` 应能看到一条红色路线；
   4. 跑 `./scripts/regress.sh`，确认全绿（或仅剩已知环境缺失项，如 beijing 缺 `lanes.bin`）。
 - **练习（改 → 测 → 守 闭环）**：任选 `14_capstone.md` 原稿四类选题之一（如【中】`AREA_DOT_PX` 4→6）：改 `src/render/paint.h` → 用 `scripts/bmpdiff.py` 量化净损失面积 → 更新档位表并收紧 `regress.sh` 的 `area_lod_tier` 区间 → 跑回归确认被钉住。
 - **验收 checklist**：

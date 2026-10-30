@@ -512,7 +512,7 @@ int MainWindow::runUiSelfTest()
         }
         /* 轨迹行应带一个"贴合"按钮（GPX 贴合道路入口）；点击后调用 app_gpx_snap。
          * 这里只验"按钮存在且接好了逻辑"，不验实际贴合结果（贴合依赖路网，
-         * 默认单省 beijing 图在测试坐标附近无路网，route_cli --gpx-snap 在 7 省图覆盖）。 */
+         * 默认单省 beijing 图在测试坐标附近无路网，skedaddle_route_cli --gpx-snap 在 7 省图覆盖）。 */
         {
             bool hasSnap = false;
             if (m_trackRows) {
@@ -548,7 +548,7 @@ int MainWindow::runUiSelfTest()
      * 把 App 入口（app_nav_add_via / del_via / clear_via）和 UI 面板
      * （refreshViaPanel / toggleViaPanel）串起来，并钉住 toggleViaPanel 不会
      * 陷入 setChecked 递归（track 面板同款坑），以及面板贴在右栏左边而非 (0,0)。
-     * 路线经过途经点这条核心契约，靠"等 worker 算完 + 测距"验证（route_cli --via
+     * 路线经过途经点这条核心契约，靠"等 worker 算完 + 测距"验证（skedaddle_route_cli --via
      * 已在 C 层覆盖，这里验 UI 集成后仍能拿到正确结果）。 */
     {
         app_nav_clear(m_a);          /* 清掉之前可能残留的起终点/途经点，保证干净状态 */
@@ -580,9 +580,9 @@ int MainWindow::runUiSelfTest()
         /* 等路线算完，验"路线确实经过该途经点"（途经点模式的核心契约）。
          * ★ 先到的可能是"两点直连"那单（添加途经点前已触发一次），所以要持续
          *   poll、每次重新测距，直到抓到"经过该途经点"的那一趟才算数。
-         * ★ 当前默认图（单省 beijing）在测试坐标附近没有可达路网，route_cli
+         * ★ 当前默认图（单省 beijing）在测试坐标附近没有可达路网，skedaddle_route_cli
          *   同样会"起点吸附失败"；此时路由本就跑不出来，硬判 FAIL 会污染
-         *   regress。故"始终算不出路线"时跳过本项（C 层 route_cli --via 已在
+         *   regress。故"始终算不出路线"时跳过本项（C 层 skedaddle_route_cli --via 已在
          *   7 省图上覆盖此契约），只在"路由确实算出了一条路线"时才验"经过该点"。 */
         {
             int tries = 0; bool passOk = false; double best = 1e12;
@@ -604,7 +604,7 @@ int MainWindow::runUiSelfTest()
             if (m_a->have_rr) {
                 check(passOk, "途经点：路线经过该点（最近距离 <800m）");
             } else {
-                check(true, "途经点：当前环境算不出路线，跳过「经过该点」校验（C 层 route_cli --via 已覆盖）");
+                check(true, "途经点：当前环境算不出路线，跳过「经过该点」校验（C 层 skedaddle_route_cli --via 已覆盖）");
             }
         }
         /* 删除刚加的途经点（删最后一个 = 刚加的） */

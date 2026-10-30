@@ -1,11 +1,11 @@
-/* offscreen_shot —— 离屏像素审计通道（navmap_qt --shot-offscreen 的实现）
+/* offscreen_shot —— 离屏像素审计通道（skedaddle --shot-offscreen 的实现）
  *
  * 存在理由：本机没有 xvfb-run、也没有 valgrind，GUI 只能由人在 Wayland 会话里
  * 肉眼看。渲染对不对（有没有路、投影歪不歪、LOD 生不生效、浮层透不透明、
  * 轨迹画没画上去）必须能无人值守验证，所以做一个离屏渲染通道：出来的图可以
  * 直接打开看，也可以做像素级断言。
  *
- * ★ 本文件是这条通道的**单一可信源**：navmap_qt --shot-offscreen 调
+ * ★ 本文件是这条通道的**单一可信源**：skedaddle --shot-offscreen 调
  *   offscreen_shot_main()，regress.sh 的离屏判据（shot / app_route / gpx_render /
  *   ovl_shot）全部走它。旧 map_shot 壳已于 #88 删除。
  *
@@ -14,12 +14,12 @@
  *   这条路径必须零 SDL）。
  *
  * 用法：
- *   navmap_qt --shot-offscreen --graph=products/graph/beijing --out=/tmp/shot.bmp \
+ *   skedaddle --shot-offscreen --graph=products/graph/beijing --out=/tmp/shot.bmp \
  *             --lat=39.90 --lon=116.40 --zoom=12 --w=1280 --h=800 \
  *             [--from=lat,lon --to=lat,lon --fit-route] \
  *             [--q=<查询词>] [--sim --sim-sec=<秒> --sim-deviate=<米>] \
  *             [--gpx=<文件> ...] [--ovl-alpha=<key>=<pct> ...] \
- *             [--shot-offscreen]  ← 仅 navmap_qt 多传一次，本函数忽略
+ *             [--shot-offscreen]  ← 仅 skedaddle 多传一次，本函数忽略
  */
 #include <stdio.h>
 #include <stdlib.h>
@@ -95,7 +95,7 @@ static int write_bmp24(const char *path, const uint8_t *px, int w, int h)
 }
 
 /* 前缀匹配取参数值：arg_val("--from=39,116", "--from=") -> "39,116"；不匹配返回 NULL。
-   替代 tool_common 的 tc_arg_val（避免 navmap_qt 链接 tool_common）。 */
+   替代 tool_common 的 tc_arg_val（避免 skedaddle 链接 tool_common）。 */
 static const char *arg_val(const char *a, const char *pfx)
 {
     size_t n = strlen(pfx);
@@ -142,7 +142,7 @@ static void draw_line(uint8_t *px, int w, int x0, int y0, int x1, int y1, int r,
 }
 
 /* 极简 GeoJSON LineString 读取：只认 "coordinates" 后面的 [[lon,lat],...]。
- * 用途是把 route_cli 算出的路线叠到地图上做视觉验收，不值得引第三方 JSON 库。 */
+ * 用途是把 skedaddle_route_cli 算出的路线叠到地图上做视觉验收，不值得引第三方 JSON 库。 */
 static double *read_geojson_line(const char *path, size_t *out_n)
 {
     FILE *f = fopen(path, "rb");
@@ -212,7 +212,7 @@ int offscreen_shot_main(int argc, char **argv)
     const char *font = NULL;   /* NULL = 默认字体（宋体） */
     int font_size = 0;         /* <=0 = 默认字号 */
     int resize_font = 0;       /* >0：第二帧前改字号，验证运行期调字号路径 */
-    const char *route = NULL;  /* route_cli 导出的 GeoJSON，叠加成红线 */
+    const char *route = NULL;  /* skedaddle_route_cli 导出的 GeoJSON，叠加成红线 */
     const char *from_s = NULL, *to_s = NULL;   /* 进程内算路（阶段 9） */
     int fit_route = 0;
     const char *q_s = NULL;      /* 搜索关键词：画搜索框 + 结果钉子（阶段 7） */
@@ -334,7 +334,7 @@ int offscreen_shot_main(int argc, char **argv)
                 n_ovl++;
             }
         }
-        /* --shot-offscreen：仅 navmap_qt 调本函数时多传一次，忽略即可。 */
+        /* --shot-offscreen：仅 skedaddle 调本函数时多传一次，忽略即可。 */
         else if (strcmp(argv[i], "--shot-offscreen") == 0) { /* no-op */ }
         else { fprintf(stderr, "未知参数 %s\n", argv[i]); return 2; }
     }
@@ -549,7 +549,7 @@ int offscreen_shot_main(int argc, char **argv)
         printf("gpx            %s -> %d 条轨迹\n", gpx_in[i], n);
     }
     /* 轨迹/收藏的"可见性"判定交给共享审计模块（render/audit.c），
-       它读 a.gpx 自己算，保证与 navmap_qt --shot-offscreen 同口径。 */
+       它读 a.gpx 自己算，保证与 skedaddle --shot-offscreen 同口径。 */
 
     uint8_t *buf = (uint8_t *)malloc((size_t)w * h * 4);
     if (!buf) { fprintf(stderr, "内存不足\n"); return 1; }
@@ -571,7 +571,7 @@ int offscreen_shot_main(int argc, char **argv)
     render_buffer(&a, buf, w, h, &st);
     double warm_ms = (double)(clock() - t1) / CLOCKS_PER_SEC * 1000;
 
-    /* 路线叠加：把 route_cli 算出的路径画成红线，一眼看出路线贴不贴路网 */
+    /* 路线叠加：把 skedaddle_route_cli 算出的路径画成红线，一眼看出路线贴不贴路网 */
     size_t nroute = 0;
     if (route) {
         double *rp = read_geojson_line(route, &nroute);
@@ -634,7 +634,7 @@ int offscreen_shot_main(int argc, char **argv)
     printf("road_labels    %llu\n", (unsigned long long)st.road_labels_drawn);
 
     /* 像素计数 + 断言 + 日志：交给共享审计模块（render/audit.c）。
-       navmap_qt --shot-offscreen 也走同一份逻辑，保证两前端判据逐位一致。 */
+       skedaddle --shot-offscreen 也走同一份逻辑，保证两前端判据逐位一致。 */
     AuditCtx actx;
     actx.have_search = have_search;
     actx.have_route  = have_route;

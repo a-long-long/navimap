@@ -37,7 +37,7 @@
 /*
  * ★ 载荷是 uint64 但**实际只存 uint32 的 StEnt 下标**：这样 sizeof(PQEnt) 仍是
  *   16 字节（没有匿名 padding），一方面保住上面 D=4 的 cache line 论证，
- *   另一方面 heap_selftest 用 memcmp 比对 (f, 载荷) 多重集时才不会踩未初始化的
+ *   另一方面 skedaddle_heap_selftest 用 memcmp 比对 (f, 载荷) 多重集时才不会踩未初始化的
  *   填充字节。别为了"省 4 字节"把它改成 uint32 —— 那会让多重集比对随机失败。
  */
 typedef struct { double f; uint64_t idx; } PQEnt;

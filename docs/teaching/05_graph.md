@@ -925,7 +925,7 @@ static int write_nodes(Graph *g, const char *path, const char *src)
 
 ## 五、演示、练习与验收
 
-- **演示**：`./build_rel/graph_extract --help`、`graph_check`、`tag_stats sources/beijing.osm.pbf`，观察 `GraphBuildStats` 计数（尤其 `rt_unknown_drivable` 必须为 0）。
+- **演示**：`./build_rel/skedaddle_graph_extract --help`、`skedaddle_graph_check`、`skedaddle_tag_stats sources/beijing.osm.pbf`，观察 `GraphBuildStats` 计数（尤其 `rt_unknown_drivable` 必须为 0）。
 - **练习**：选一个 `highway=tertiary`，在 `graph_build.c:152` 的 `pass1` 里追它如何经 `road_tags_parse` 变成 `WayRec`，再进入 `build_edges` 生成 CSR 边；再找一个 `oneway=-1` 的 way，解释 `build_edges`（`graph_build.c:475-482`）为何 `oneway==2` 分支不打 `EF_REVERSE`。
 - **验证 delta 解码**：在 `graph_build.c:390-402` 的 `pass2` 循环设断点，确认 `acc_id/acc_lat/acc_lon` 随 `dn->id[i]` 等 delta 累积而非直接使用原始值。
 - **验收**：能描述"一个 way → 图里的 CSR 边 + 标志位"的映射，说明两遍扫描的必要性，并解释 `coord_key_e7` 如何支撑跨省缝合。

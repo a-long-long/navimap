@@ -1,4 +1,4 @@
-/* dmap_selftest：验证 PBF 显示层**后台异步**解码（不阻塞主线程）。
+/* skedaddle_dmap_selftest：验证 PBF 显示层**后台异步**解码（不阻塞主线程）。
  *
  * 判据（数据驱动，不是"看着没卡"）：
  *   1) set_view 单次耗时远低于一省实际解码耗时（北京 ~1.6s）——证明解码在
@@ -6,7 +6,7 @@
  *   2) 轮询期间观测到进度从 0 爬升到 100（pbfmap_decode 的进度回调生效）；
  *   3) 20s 内该省 has_features 置 1 且 lines 记录数 > 0（解码确实完成且产出正确）。
  *
- * 用法: dmap_selftest [<graph_dir> [<pbf_dir>]]
+ * 用法: skedaddle_dmap_selftest [<graph_dir> [<pbf_dir>]]
  *   默认 graph_dir=products/graph，pbf_dir=sources（需 sources/<省>.osm.pbf 在）。
  */
 #include <stdio.h>

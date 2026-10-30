@@ -1,4 +1,4 @@
-/* clip_equiv — 验证自写光栅的线段裁剪与 SDL_IntersectRectAndLine 逐像素等价。
+/* skedaddle_clip_equiv — 验证自写光栅的线段裁剪与 SDL_IntersectRectAndLine 逐像素等价。
  *
  * 为什么要它：raster.h 写着"与 SDL 软渲染器逐像素等价是硬要求"。去 SDL 化
  * 时把 SDL_IntersectRectAndLine 换成了自写的 raster_clip_line（ Cohen-

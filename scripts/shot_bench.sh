@@ -17,10 +17,10 @@ cd "$ROOT"
 
 NAVMAP_ENV_QUIET=1 . "$ROOT/env.sh" 2>/dev/null || true
 
-# #88 已删 map_shot：离屏出图统一走 navmap_qt --shot-offscreen。它是纯 C 离屏通道
+# #88 已删 map_shot：离屏出图统一走 skedaddle --shot-offscreen。它是纯 C 离屏通道
 # （Qt 初始化前就返回，不建窗口、不依赖显示环境），flag 与旧 map_shot 完全一致，
 # 所以本脚本的用例表和日志正则都不用改。
-SHOT="$ROOT/build/navmap_qt"
+SHOT="$ROOT/build/skedaddle"
 [ -x "$SHOT" ] || { echo "缺 $SHOT，先构建（./scripts/regress.sh --build）"; exit 1; }
 
 ALL="$ROOT/products/graph"

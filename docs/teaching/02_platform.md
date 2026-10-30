@@ -9,7 +9,7 @@
 
 1. 理解"平台差异 100% 收口到 `plat.c`"这条纪律为什么重要，并能在业务代码里坚持"零 `#ifdef _WIN32`"。
 2. 在 `plat.c` 内新增一个跨平台小工具函数（如 `nm_sleep_ms`），而不触碰任何业务 `.c`。
-3. 说清链接期 `-pthread` 为何由 `navmap_plat` 库统一承载（漏挂会在链接 `tts_selftest` 时报 `pthread_create` 未定义）。
+3. 说清链接期 `-pthread` 为何由 `navmap_plat` 库统一承载（漏挂会在链接 `skedaddle_tts_selftest` 时报 `pthread_create` 未定义）。
 4. 看懂 `nm_pin_allocator` 钉死 glibc mmap 阈值的根因：避免大数组改走 brk 主堆导致 SIGSEGV。
 5. 掌握 `StrPool` 字符串去重池的设计（id 0 = "无名"），理解它如何支撑 L3 路名去重与 `names.bin` 落盘。
 
@@ -39,7 +39,7 @@
 ```h
 /* 目录枚举。返回的条目名属于 NmDir，下次 nm_dir_next 前有效；
  * "." 与 ".." 已跳过。顺序由文件系统决定，需要可复现就自己排序
- * （mapset_load / places_build 都先收集再 qsort）。 */
+ * （mapset_load / skedaddle_places_build 都先收集再 qsort）。 */
 typedef struct NmDir NmDir;
 NmDir      *nm_dir_open(const char *path);
 const char *nm_dir_next(NmDir *d);
@@ -1262,12 +1262,12 @@ void sp_serialize(StrPool *p, uint8_t **out, size_t *out_len)
 - **被几乎所有模块使用**：`graph_build.c`/`route.c`/`paint.c`/`ui_qt/*` 只调 `nm_*` 接口。`nm_font_candidates` 被 `render/font.c` 组建字体集；`NmMutex`/`NmCond` 支撑 TTS 后台朗读线程与并发加载；`nm_map_file`（经 `nm_mmap_file`）是所有大文件（nodes.bin / 边表）只读映射的底座。
 - **与 L1 / L3 交汇**：`StrPool` 是 L3 PBF 路名去重后的落盘容器（`names.bin`，`sp_serialize` 输出 `[u32 count][u32 off[count+1]][bytes]`）；`nm_now_ms`/`nm_thread_spawn` 在 L4 / L5 的并行建图与瓦片加载中反复出现。
 - **与 L11 导航语音**：`nm_tts_speak` / `nm_tts_flush` 依赖 `nm_thread_spawn` + `NmMutex`/`NmCond` 实现后台串行朗读线程，调用方（导航每帧推进）绝不被阻塞。
-- **链接纪律**：`plat.c` 的线程用 pthread 实现，故 `-pthread` 由 `navmap_plat` 库统一承载（`CMakeLists.txt` 相关目标）。漏挂会在链接 `tts_selftest` 时报 `pthread_create` 未定义。
+- **链接纪律**：`plat.c` 的线程用 pthread 实现，故 `-pthread` 由 `navmap_plat` 库统一承载（`CMakeLists.txt` 相关目标）。漏挂会在链接 `skedaddle_tts_selftest` 时报 `pthread_create` 未定义。
 - **与 L13 架构门禁**：业务代码零 `#ifdef _WIN32` 是跨平台门禁的验收点之一（`cross-platform-portability-audit` 思路）。
 
 ## 五、演示、练习与验收
 
-- **演示**：运行 `./build_rel/plat_selftest`。它全接口自验收（路径、文件映射、互斥/条件变量、线程、时间、字体链、TTS dryrun 等），正反双向断言契约。
-- **练习**：在 `plat.c` 里加一个 `nm_sleep_ms`（已存在，可仿写 `nm_now_us` 之类的新工具），并在一个 selftest 里调用它——全程不碰任何业务 `.c`。验证 `-pthread` 只在 `navmap_plat` 挂一次：故意在别的库漏掉，看链接 `tts_selftest` 报 `pthread_create` 未定义。
+- **演示**：运行 `./build_rel/skedaddle_plat_selftest`。它全接口自验收（路径、文件映射、互斥/条件变量、线程、时间、字体链、TTS dryrun 等），正反双向断言契约。
+- **练习**：在 `plat.c` 里加一个 `nm_sleep_ms`（已存在，可仿写 `nm_now_us` 之类的新工具），并在一个 selftest 里调用它——全程不碰任何业务 `.c`。验证 `-pthread` 只在 `navmap_plat` 挂一次：故意在别的库漏掉，看链接 `skedaddle_tts_selftest` 报 `pthread_create` 未定义。
 - **阅读验证**：直接读源码确认——`nm_thread_spawn` 在 POSIX 下调 `pthread_create` 并 `pthread_detach`；`nm_pin_allocator` 用 `constructor(101)` 钉死 `M_MMAP_THRESHOLD=128*1024`；`sp_intern` 对空串/NULL 返回 `SP_EMPTY_ID`（0），`sp_get` 对 id 0 / 越界返回 `""`。
 - **验收**：能在不碰业务代码的前提下新增一个跨平台小工具函数，并解释 `-pthread` 为何只在 `navmap_plat` 挂一次、`nm_pin_allocator` 为何要钉死分配器、`StrPool` 为何 id 0 固定为"无名"。

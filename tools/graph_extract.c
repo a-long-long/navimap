@@ -1,8 +1,8 @@
-/* graph_extract —— PBF → 自描述路网二进制
+/* skedaddle_graph_extract —— PBF → 自描述路网二进制
  *
  * 用法：
- *   ./graph_extract --out=products/graph/beijing sources/beijing.osm.pbf
- *   ./graph_extract --fmt-version          # 只打印当前 NMBIN 版本号后退出
+ *   ./skedaddle_graph_extract --out=products/graph/beijing sources/beijing.osm.pbf
+ *   ./skedaddle_graph_extract --fmt-version          # 只打印当前 NMBIN 版本号后退出
  *
  * 产出（全部带 NAVMBIN 自描述头，字段名/偏移/类型写在文件里）：
  *   nodes.bin  edges.bin  osmid.bin  names.bin  restrictions.bin  manifest.txt

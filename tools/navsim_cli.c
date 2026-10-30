@@ -1,4 +1,4 @@
-/* navsim_cli —— 模拟定位 / 偏航 / 剩余 ETA 的无头验收（阶段 9 导航层）
+/* skedaddle_navsim_cli —— 模拟定位 / 偏航 / 剩余 ETA 的无头验收（阶段 9 导航层）
  *
  * GUI 里的导航推进没法断言（要靠人看着车头跑），所以导航层的计算部分
  * 全部放在 src/route/navsim.c，这里按帧推进一遍并对每个不变量下断言：
@@ -12,7 +12,7 @@
  *   7. 重算：从偏航点重新规划，新路线起点必须落在偏航点附近
  *
  * 用法：
- *   ./navsim_cli --graph=products/graph/beijing --from=lat,lon --to=lat,lon
+ *   ./skedaddle_navsim_cli --graph=products/graph/beijing --from=lat,lon --to=lat,lon
  *                [--speed=60] [--dt=0.033] [--max-steps=200000]
  */
 
@@ -71,7 +71,7 @@ int main(int argc, char **argv)
         else { fprintf(stderr, "未知参数 %s\n", a); return 2; }
     }
     if (!from_s || !to_s) {
-        fprintf(stderr, "用法: navsim_cli --graph=<dir> --from=lat,lon --to=lat,lon\n");
+        fprintf(stderr, "用法: skedaddle_navsim_cli --graph=<dir> --from=lat,lon --to=lat,lon\n");
         return 2;
     }
     double flat, flon, tlat, tlon;

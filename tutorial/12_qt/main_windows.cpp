@@ -1,7 +1,7 @@
 // tutorial/12_qt/main_windows.cpp — 第 12 课的真实 GUI 版（窗口显示，非本课验证用）
 //
 // 与 main.cpp 唯一差别：把同一块 C 缓冲包成 QImage 后，放进 QLabel 显示在 QMainWindow。
-// 这就是项目 navmap_qt 的边界原则：C 渲染核心一行不动，Qt 只负责"搬运 + 叠加层"。
+// 这就是项目 skedaddle 的边界原则：C 渲染核心一行不动，Qt 只负责"搬运 + 叠加层"。
 
 #include <QApplication>
 #include <QMainWindow>

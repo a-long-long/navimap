@@ -1,4 +1,4 @@
-/* lane_selftest —— 车道转向指示（turn:lanes）数据链路验收
+/* skedaddle_lane_selftest —— 车道转向指示（turn:lanes）数据链路验收
  *
  * 重建 beijing 图后，验证：
  *   · 该省 has_lanes == 1（lanes.bin + lane_names.bin 齐备且被 mapset 加载）；

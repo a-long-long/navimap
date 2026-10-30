@@ -1,4 +1,4 @@
-/* voice_selftest —— 语音播报策略自测（抄写自 OsmAnd 的那套策略）。
+/* skedaddle_voice_selftest —— 语音播报策略自测（抄写自 OsmAnd 的那套策略）。
  *
  * 覆盖三块（对应 src/route/voice.c 的三个层次）：
  *   1) 分级提前量：速度 × 秒数模型（官方 AnnounceTimeDistances.java）

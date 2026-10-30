@@ -45,7 +45,7 @@ A* 会提前终止并返回**更差**的解。⇒ **开表比无表差哪怕 1 �
 
 注意
 ----
-- 展开上限默认沿用 route_cli 的 1200 万。命中的路线两侧都跑不完 ⇒ 记成
+- 展开上限默认沿用 skedaddle_route_cli 的 1200 万。命中的路线两侧都跑不完 ⇒ 记成
   INCONCLUSIVE，**不能当作通过**。要覆盖它们就调大 --max-expand（内存约
   250 B/展开，20M ≈ 5 GB，本机不一定放得下）。
 - 判据是**预计分钟**（mode_time=1），不是里程。
@@ -67,7 +67,7 @@ CITIES = [("北京", 39.90, 116.40), ("天津", 39.13, 117.20), ("石家庄", 38
           ("汉中", 33.08, 107.02), ("沈阳", 41.80, 123.43), ("大连", 38.91, 121.61),
           ("鞍山", 41.11, 122.99), ("锦州", 41.10, 121.13), ("丹东", 40.13, 124.38)]
 
-BIN = "./build/route_cli"
+BIN = "./build/skedaddle_route_cli"
 GRAPH = "products/graph"
 N_PAIR = 50
 SEED = 7          # 与 scripts/citypairs.py 完全一致 ⇒ 两侧可比
@@ -111,7 +111,7 @@ def run(p, lm, max_expand):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--cap", type=int, default=0, help="只跑前 N 条（冒烟用）")
-    ap.add_argument("--max-expand", type=int, default=0, help="0 = 用 route_cli 默认")
+    ap.add_argument("--max-expand", type=int, default=0, help="0 = 用 skedaddle_route_cli 默认")
     ap.add_argument("--slack", type=int, default=0,
                     help="容忍的开表-真值差（分钟）。0 = 严格必须相等；"
                          "1 = 接受当前已知的最多差 1 分（发货状态）")

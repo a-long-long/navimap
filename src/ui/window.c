@@ -952,7 +952,7 @@ void app_nav_sim_follow(App *a)
 
 /* 注入一次偏航：把定位点朝车头右手方向拉 300 m。
  * 真机上这是 GNSS 漂了 / 走错路口，这里用一个按键代替，顺便把"偏航 →
- * 自动重算"整条链路跑通（无头版在 navsim_cli 里断言，这里是给人看的）。 */
+ * 自动重算"整条链路跑通（无头版在 skedaddle_navsim_cli 里断言，这里是给人看的）。 */
 void app_nav_sim_deviate(App *a)
 {
     if (!a->sim_on || !a->have_rr) return;
@@ -1014,7 +1014,7 @@ void app_nav_sim_tick(App *a)
     a->need_redraw = 1;
 }
 
-/* 同步算一次（无窗口、无主循环时用，见 navmap_qt --shot-offscreen --from/--to）。
+/* 同步算一次（无窗口、无主循环时用，见 skedaddle --shot-offscreen --from/--to）。
    与后台线程走同一套吸附 + 结算逻辑，只是不另起线程。 */
 int app_nav_plan_sync(App *a, double alat, double alon, double blat, double blon)
 {
@@ -1451,7 +1451,7 @@ int app_render_to_buf(App *a, void *px, int w, int h, size_t stride,
     return 0;
 }
 
-/* 主循环与离屏画布：交互主循环在 navmap_qt（Qt 端），离屏出图在
+/* 主循环与离屏画布：交互主循环在 skedaddle（Qt 端），离屏出图在
    src/ui/offscreen_shot.c。C 核心这边两者都不做。 */
 
 void update_status(App *a, double frame_ms)

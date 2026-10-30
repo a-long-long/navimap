@@ -1584,11 +1584,11 @@ int nm_tts_speak(const char *text)
 ## 五、演示、练习与验收
 
 - **演示**：
-  - `./build_rel/navmap_qt`（GUI）模拟导航，听转向/限速/到达/隧道播报；用 V 键静音验证 `voice_on` 开关。
-  - 无头端到端：`NAVIMAP_TTS_DRYRUN=/tmp/tts.txt ./build_rel/voice_e2e`（直接断言真实发声文本，不依赖音频设备）。
-  - 冷却/到达帧/去抖专项：`NAVIMAP_TTS_DRYRUN=/tmp/tts.txt ./build_rel/voice_e2e`，对照用例 A8（到达帧必播收尾语）与负向用例 #9/#10（模拟 `paused` 提前置位时收尾语仍播出）。
-  - 自检：`NAVIMAP_TTS_DRYRUN=/tmp/tts.txt ./build_rel/voice_selftest`。
-- **练习**：在 `voice.c` 的 `g_alarm` 表里加一条新告警（如"前方 200 米有收费站"的二级话术），用 `voice_e2e` + `NAVIMAP_TTS_DRYRUN` 验证它真的被说出；或改 `VOICE_COOLDOWN_SAME_TEXT_MS` 验证同文本冷却对四类播报一视同仁。
+  - `./build_rel/skedaddle`（GUI）模拟导航，听转向/限速/到达/隧道播报；用 V 键静音验证 `voice_on` 开关。
+  - 无头端到端：`NAVIMAP_TTS_DRYRUN=/tmp/tts.txt ./build_rel/skedaddle_voice_e2e`（直接断言真实发声文本，不依赖音频设备）。
+  - 冷却/到达帧/去抖专项：`NAVIMAP_TTS_DRYRUN=/tmp/tts.txt ./build_rel/skedaddle_voice_e2e`，对照用例 A8（到达帧必播收尾语）与负向用例 #9/#10（模拟 `paused` 提前置位时收尾语仍播出）。
+  - 自检：`NAVIMAP_TTS_DRYRUN=/tmp/tts.txt ./build_rel/skedaddle_voice_selftest`。
+- **练习**：在 `voice.c` 的 `g_alarm` 表里加一条新告警（如"前方 200 米有收费站"的二级话术），用 `skedaddle_voice_e2e` + `NAVIMAP_TTS_DRYRUN` 验证它真的被说出；或改 `VOICE_COOLDOWN_SAME_TEXT_MS` 验证同文本冷却对四类播报一视同仁。
 - **验收**：能解释并对照源码说明
   1. `voice_wire.c` 为什么是**唯一**接线点（对比 `tools/voice_e2e.c` 共用同一函数）；
   2. 到达帧为什么不受 `paused` 抑制（`voice_wire.c:49` 的 `suppress` 表达式）；

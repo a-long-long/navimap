@@ -1,7 +1,7 @@
-/* voice_e2e —— 语音播报**端到端**自测（走生产代码本身，不是副本）
+/* skedaddle_voice_e2e —— 语音播报**端到端**自测（走生产代码本身，不是副本）
  *
- * 为什么还要这个工具（voice_selftest 已经覆盖了策略层）：
- *   voice_selftest 测的是 route/voice.c 的**单个函数**（提前量、话术、冷却）。
+ * 为什么还要这个工具（skedaddle_voice_selftest 已经覆盖了策略层）：
+ *   skedaddle_voice_selftest 测的是 route/voice.c 的**单个函数**（提前量、话术、冷却）。
  *   但真正容易出错的是**接线**：nav_voice_frame() 会不会
  *   · 用错"距下一条指令的距离"（to_go）
  *   · 用错"已走里程"（沿路告警扫描的基准）
@@ -32,10 +32,10 @@
  * ★ 为什么用**合成路线**而不是真实路网：
  *   真实路网的转向类型、路名、隧道位置每次构建都可能变 ⇒ 期望值写不稳。
  *   合成路线让"距下一条 300 m ⇒ 应当播「前方300 米左转」"这类断言完全确定。
- *   ★ 真实路网那一层由 voice_selftest 的**官方数值**覆盖
+ *   ★ 真实路网那一层由 skedaddle_voice_selftest 的**官方数值**覆盖
  *     （提前量 1437/275/83/3750 全部来自官方源码），两者互补。
  *
- * 用法：./voice_e2e            （跑全部用例，全过打印 VOICE-E2E-OK）
+ * 用法：./skedaddle_voice_e2e            （跑全部用例，全过打印 VOICE-E2E-OK）
  */
 #include "route/voice.h"
 #include "route/navsim.h"

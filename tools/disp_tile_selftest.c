@@ -1,11 +1,11 @@
-/* disp_tile_selftest —— 显示层分 tile 的覆盖性自测（Phase 1 验收）。
+/* skedaddle_disp_tile_selftest —— 显示层分 tile 的覆盖性自测（Phase 1 验收）。
  *
  * 判据（行为等价，非逐字节）：把整省 areas/lines/polyrefs 与 disp/ 下全部
  * tile 的同类数据对比，要求**每个整省要素（osm_id + 节点内部下标序列）至少
  * 出现在一个 tile 中**——即分 tile 不丢要素。跨 tile 重复（大要素边界保护）
  * 是允许的，故只断言"全覆盖"，并报告 tile 要素总数 >= 整省。
  *
- * 用法：disp_tile_selftest --graph=<省目录> */
+ * 用法：skedaddle_disp_tile_selftest --graph=<省目录> */
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>

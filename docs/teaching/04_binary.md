@@ -1187,7 +1187,7 @@ int autobuild_repair(const char *graph_dir, const AutoBuildOpt *opt,
         if (!have_tool) {
             if (o.tool && *o.tool) snprintf(tool, sizeof(tool), "%s", o.tool);
             else if (find_tool(tool, sizeof(tool)) != 0) {
-                fprintf(stderr, "[自动重建] 找不到 graph_extract，无法自动重建。"
+                fprintf(stderr, "[自动重建] 找不到 skedaddle_graph_extract，无法自动重建。"
                                 "手工执行：./scripts/sync_maps.sh\n");
                 st.failed += (nn - i);
                 break;
@@ -1231,17 +1231,17 @@ static int find_tool(char *out, size_t cap)
             char *slash = (char *)nm_last_sep(dir);
             if (slash) {
                 *slash = '\0';
-                if (nm_which(dir, "graph_extract", out, cap) == 0) return 0;
+                if (nm_which(dir, "skedaddle_graph_extract", out, cap) == 0) return 0;
                 char sub[4096];
                 if (nm_path_join(sub, sizeof(sub), dir, "build") == 0 &&
-                    nm_which(sub, "graph_extract", out, cap) == 0) return 0;
+                    nm_which(sub, "skedaddle_graph_extract", out, cap) == 0) return 0;
                 char up[4096];
                 if (nm_path_join(up, sizeof(up), dir, "..") == 0 &&
-                    nm_which(up, "graph_extract", out, cap) == 0) return 0;
+                    nm_which(up, "skedaddle_graph_extract", out, cap) == 0) return 0;
             }
         }
     }
-    return nm_find_in_path("graph_extract", out, cap);
+    return nm_find_in_path("skedaddle_graph_extract", out, cap);
 }
 
 /* sources/ 在哪：从 graph_dir 逐级往上找，最多 6 级 */
@@ -1642,6 +1642,6 @@ void road_tags_parse(const uint32_t *keys, size_t n_keys,
 
 ## 五、演示、练习与验收
 
-- **演示**：`./build_rel/dmap_selftest`（后台异步解码：set_view 不阻塞 + 进度回调）；`./build_rel/disp_tile_selftest`（显示层分 tile 拼接）。
+- **演示**：`./build_rel/skedaddle_dmap_selftest`（后台异步解码：set_view 不阻塞 + 进度回调）；`./build_rel/skedaddle_disp_tile_selftest`（显示层分 tile 拼接）。
 - **练习**：用 `xxd` 看一个 `.nmbin` 文件头的 magic 与字段表（偏移 0 起 8 字节应为 `NAVMBIN\x01`，偏移 8 的 u32 版本应为 3），手动解析出第一个字段的偏移（头 128 字节 + 字段表从 128 起，每个 24 字节）。
 - **验收**：① 能说清"自描述二进制 vs 定长记录"的取舍，以及为什么本项目选 NAVMBIN（丢源码也能读、避免 aarch64 对齐/填充差异）；② 能解释 `dup_of`（北京⊂河北 100%）如何在路由缝合时被跳过、在渲染时因按 OSM id 去重而不受影响；③ 能解释 `namepool` 下沉到 map 层消除了 `map→render` 模块倒置；④ 能指出 `mapset_set_view` 的 LRU 淘汰只淘汰"不在视口内且最久未用"的 PBF 解码省。

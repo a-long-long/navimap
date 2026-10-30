@@ -21,7 +21,7 @@ gcc -std=c11 -O2 -o tut main.c && ./tut ; echo "exit=$?"
 | 玩具例子 | 真实工程类比（任选其一去做） |
 |---|---|
 | 改 `THRESH` 10→20 | 改 `src/render/paint.h` 的 `AREA_DOT_PX` 4→6；或 `ROUTE_HEUR_W` 1.4→1.25；或 `--ovl-alpha` 改值 |
-| 加 `ASSERT(classify(15)==0)` | 加 `regress.sh` 的 `area_lod_tier` 区间断言；或 `ovl_px.py` 半透明比率判据；或 `heap_selftest --expect-fail` |
+| 加 `ASSERT(classify(15)==0)` | 加 `regress.sh` 的 `area_lod_tier` 区间断言；或 `ovl_px.py` 半透明比率判据；或 `skedaddle_heap_selftest --expect-fail` |
 | 负向对照 `classify_with(10,...)` | 改回原值跑回归，确认新判据 FAIL；或 `voice_neg.sh` / `scripts/voice_neg.sh` |
 
 **交付要求（和真实工程一致）**：

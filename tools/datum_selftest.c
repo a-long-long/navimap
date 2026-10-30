@@ -33,7 +33,7 @@
  *   - 若在 datum.c 里把「加平移」那一步去掉（apply_fwd 退化成恒等）⇒ 第 7 条
  *     两侧差出 ~114 m，立刻 FAIL（第 5 条也会跟着 FAIL）。
  *
- * 用法：datum_selftest
+ * 用法：skedaddle_datum_selftest
  */
 #include "utils/datum.h"
 #include "utils/geo.h"   /* nm_haversine_m */
@@ -206,7 +206,7 @@ int main(void)
      *        W = sqrt(1 − e²sin²B),  N = a/W,  M = a(1−e²)/W³
      *        Δa = a_2000 − a_80,  Δe² = e²_2000 − e²_80
      *    这是"我的严格 ECEF 实现" vs "国标线性化公式"两条独立路径的等价判据
-     *    （与渲染侧的 blend_equiv / clip_equiv 同类）——比自测自己强得多：
+     *    （与渲染侧的 skedaddle_blend_equiv / skedaddle_clip_equiv 同类）——比自测自己强得多：
      *    两条路径一致 ⇒ 平移符号、椭球、正/反算都没搞反。
      *    ★ 参数从模块里读（datum_translation / datum_ellipsoid），不是抄一份常数
      *      ⇒ 以后调参数不会误报，只有**算法**错才 FAIL。

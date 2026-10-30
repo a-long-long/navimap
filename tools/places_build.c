@@ -1,7 +1,7 @@
-/* places_build —— PBF → 地名 / POI 库（places.db）
+/* skedaddle_places_build —— PBF → 地名 / POI 库（places.db）
  *
  * 为什么非要有这个工具：
- *   路名有 graph_extract 落到各省的 names.bin，但**地名和 POI 不是 way**——
+ *   路名有 skedaddle_graph_extract 落到各省的 names.bin，但**地名和 POI 不是 way**——
  *   它们是挂在 node 上的（place=city/town/village、amenity、tourism、shop…），
  *   而 graph_build 只留 ways（pass1 里一个 node 都不写）。所以这些名字既不进
  *   路网、也进不了搜索与地名标注；以前那份 places_auto.db 是旧工具留下的存量，
@@ -12,9 +12,9 @@
  *   坐标（排序 + 二分），不建全图索引。
  *
  * 用法：
- *   ./places_build --sources=sources --db=products/places_auto.db [--meta=<file>]
- *   ./places_build --pbf=sources/beijing.osm.pbf --db=/tmp/bj.db
- *   ./places_build --db=<已建好的库> --selftest
+ *   ./skedaddle_places_build --sources=sources --db=products/places_auto.db [--meta=<file>]
+ *   ./skedaddle_places_build --pbf=sources/beijing.osm.pbf --db=/tmp/bj.db
+ *   ./skedaddle_places_build --db=<已建好的库> --selftest
  *
  * 产出（SQLite，schema 与旧库存量完全一致，所以加载端不用改）：
  *   place(id, name, lat, lon, kind, weight)
@@ -1155,7 +1155,7 @@ static int write_meta(const char *meta_path, const char *db_path,
 {
     FILE *f = fopen(meta_path, "w");
     if (!f) { fprintf(stderr, "写不了 %s\n", meta_path); return -1; }
-    fprintf(f, "# NavMap 自动地名库（places_build 生成）\n");
+    fprintf(f, "# NavMap 自动地名库（skedaddle_places_build 生成）\n");
     fprintf(f, "db           = %s\n", db_path);
     fprintf(f, "sources      = %d\n", nsrc);
     for (int i = 0; i < nsrc; i++) {

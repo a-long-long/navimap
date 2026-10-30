@@ -50,7 +50,7 @@ trap 'rm -f "$ERR_FILE"' EXIT
 #     分辨方法：C 文件能编过、C++ 文件全灭 —— cc1 不需要 libstdc++，
 #     cc1plus 需要，只有它踩坑。
 #     实证：PATH=MSYS+usr+sys32+win ⇒ C/C++ 都过；PATH=QT+MSYS+… ⇒ C++ 全灭。
-#   Qt 的 DLL 只在**运行** navmap_qt.exe 时才需要，编译期一律不进 PATH。
+#   Qt 的 DLL 只在**运行** skedaddle.exe 时才需要，编译期一律不进 PATH。
 MSYS_PATH="/d/msys64/ucrt64/bin:/usr/bin:/c/Windows/system32:/c/Windows"
 
 for ((i = 1; i <= MAX_TRY; i++)); do

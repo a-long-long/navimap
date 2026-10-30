@@ -34,7 +34,7 @@ static uint64_t rev_now_ms(void)
    ★ **默认不跑**，只在 NAVIMAP_REV_STRICT=1 时跑。实测（hebei 97 MB）：
      加了它一次算路从 17 ms 涨到 571 ms——比现场重建（365 ms）还慢，
      把这一刀的收益全吃掉。所以默认只做 O(1) 的结构校验（magic / 规模 /
-     start[n] 尾哨兵 / 文件大小），正文完整性交给 revbuild_cli --verify
+     start[n] 尾哨兵 / 文件大小），正文完整性交给 skedaddle_revbuild_cli --verify
      （每次验收都跑，见 regress.sh）与"删掉让它重建"。
      ★ 注意这确实留了个口子：正文单字节损坏（实测改坏 hebei 的 offset=100）
      结构校验挡不住，可能给出错误路径。取舍记录在 PLAN.md §35。 */
