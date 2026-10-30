@@ -1,0 +1,5 @@
+# 教学小程序构建产物（运行 gcc/g++ main.c 后生成，可随时重建，不入库）
+*.exe
+demo.nmbin
+tut
+tut12
