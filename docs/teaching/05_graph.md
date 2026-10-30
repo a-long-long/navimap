@@ -1,7 +1,7 @@
-# 第 6 课：建图：PBF → 路网
+# 第 5 课：建图：PBF → 路网
 
 > 模块：`src/map/graph_build.{c,h}`、`src/map/coordkey.h`
-> 前置：第 4 课 PBF 解析、第 5 课 NMBIN 自描述二进制、第 2 课 `nm_fast_dist_m` 边权近似。
+> 前置：第 3 课 PBF 解析、第 4 课 NMBIN 自描述二进制、第 1 课 `nm_fast_dist_m` 边权近似。
 
 ## 一、教学目的
 
@@ -428,12 +428,12 @@ static int write_nodes(Graph *g, const char *path, const char *src)
 
 ## 四、与其他功能之间的联系
 
-- **上游 · 第 4 课 PBF 解析**：`pass1`/`pass2` 通过 `pbf_stream_next`/`pbf_unpack_block` 与 `DenseNodes` 的 delta 解码取出原始要素；`road_tags_parse`（第 4 课所属）把 way 标签变成 `RoadTags`。
-- **上游 · 第 5 课 NMBIN 自描述二进制**：本课所有 `write_*` 都走 `nmbin_create`/`nmbin_add_field`/`nmbin_write_records`/`nmbin_finalize`，落盘格式即 L5 定义的图集。
-- **下游 · 第 11 课路由**：本课的 `nodes/edges/restrictions/...` 即 `mapset_load` 加载内容，`route.c`/`sew.c` 基于此寻路。本课是 L5 图集与 L11 路由之间的"数据生产"环节。
-- **下游 · 第 12 课导航语音 / 第 13 课 Qt 前端**：`names.bin` 的路名池、`lanes.bin` 的转向车道串是播报和 UI 的数据源。
-- **跨省缝合 · 第 11 课 `sew.c`**：`coord_key_e7`（`coordkey.h`）把 L6 建出的节点 e7 坐标打包成主键，配合 L7 的 `nm_tile_of` 把不同省的同一坐标合成一个图节点，实现跨省接边。
-- **空间索引 · 第 9 课渲染管线**：`write_spatial_index` 产出的 `edgelist.bin`/`tiles.bin` 让 L9 渲染按需加载视口内 tile，而非整省全量扫描。
+- **上游 · 第 3 课 PBF 解析**：`pass1`/`pass2` 通过 `pbf_stream_next`/`pbf_unpack_block` 与 `DenseNodes` 的 delta 解码取出原始要素；`road_tags_parse`（第 3 课所属）把 way 标签变成 `RoadTags`。
+- **上游 · 第 4 课 NMBIN 自描述二进制**：本课所有 `write_*` 都走 `nmbin_create`/`nmbin_add_field`/`nmbin_write_records`/`nmbin_finalize`，落盘格式即 L4 定义的图集。
+- **下游 · 第 10 课路由**：本课的 `nodes/edges/restrictions/...` 即 `mapset_load` 加载内容，`route.c`/`sew.c` 基于此寻路。本课是 L4 图集与 L10 路由之间的"数据生产"环节。
+- **下游 · 第 11 课导航语音 / 第 12 课 Qt 前端**：`names.bin` 的路名池、`lanes.bin` 的转向车道串是播报和 UI 的数据源。
+- **跨省缝合 · 第 10 课 `sew.c`**：`coord_key_e7`（`coordkey.h`）把 L5 建出的节点 e7 坐标打包成主键，配合 L6 的 `nm_tile_of` 把不同省的同一坐标合成一个图节点，实现跨省接边。
+- **空间索引 · 第 8 课渲染管线**：`write_spatial_index` 产出的 `edgelist.bin`/`tiles.bin` 让 L8 渲染按需加载视口内 tile，而非整省全量扫描。
 
 ## 五、演示、练习与验收
 

@@ -1,7 +1,7 @@
-# 第 12 课：导航层与语音
+# 第 11 课：导航层与语音
 
 > 模块：`src/route/voice.{c,h}`、`src/ui/voice_wire.{c,h}`、`src/utils/plat.{c,h}`（重点 `nm_tts_speak`）
-> 前置：第 11 课 `RouteResult`、GPS/模拟定位概念、TTS 冷却概念。
+> 前置：第 10 课 `RouteResult`、GPS/模拟定位概念、TTS 冷却概念。
 
 ## 一、教学目的
 
@@ -1153,9 +1153,9 @@ int nm_tts_speak(const char *text)
 
 ## 四、与其他功能之间的联系
 
-- **上游（消费）**：第 11 课 `RouteResult`（`rr`）、`ManeuverList`（`man`，由 `maneuver_build` 生成）、`NavSim`（`sim`，由 `navsim_start`/`navsim_tick` 推进）。`nav_voice_frame` 从 `NavSim` 取剩余里程/速度/到达标志、`navsim_next_maneuver` 求当前指令下标与距离。
-- **下游 · 第 13 课**：`nav_voice_frame` 被 Qt 主循环的 `MapCanvas::tick()`→`app_nav_sim_tick`→（window.c 的 `app_nav_sim_tick`）调用；Qt 的 V 键 / 设置菜单把 `App.voice_on` 置位，即 `NavVoiceCtx.voice_on`。`NavSim` 的 `off_m`/`proj_m` 供 Qt 偏航重算 UI；`VoiceFrame`/`VoiceRouter` 纯逻辑被 `tools/voice_e2e.c` 复用做无头端到端验收。
-- **横切**：发声经由第 3 课 `plat.c` 的平台抽象层（`nm_tts_speak`/`nm_thread_spawn`/`nm_proc_*`），**不链 SDL**；语音判定与渲染（第 9 课 `navdraw`）完全解耦。
+- **上游（消费）**：第 10 课 `RouteResult`（`rr`）、`ManeuverList`（`man`，由 `maneuver_build` 生成）、`NavSim`（`sim`，由 `navsim_start`/`navsim_tick` 推进）。`nav_voice_frame` 从 `NavSim` 取剩余里程/速度/到达标志、`navsim_next_maneuver` 求当前指令下标与距离。
+- **下游 · 第 12 课**：`nav_voice_frame` 被 Qt 主循环的 `MapCanvas::tick()`→`app_nav_sim_tick`→（window.c 的 `app_nav_sim_tick`）调用；Qt 的 V 键 / 设置菜单把 `App.voice_on` 置位，即 `NavVoiceCtx.voice_on`。`NavSim` 的 `off_m`/`proj_m` 供 Qt 偏航重算 UI；`VoiceFrame`/`VoiceRouter` 纯逻辑被 `tools/voice_e2e.c` 复用做无头端到端验收。
+- **横切**：发声经由第 2 课 `plat.c` 的平台抽象层（`nm_tts_speak`/`nm_thread_spawn`/`nm_proc_*`），**不链 SDL**；语音判定与渲染（第 8 课 `navdraw`）完全解耦。
 - **唯一接线纪律**：`voice.c` 纯逻辑 + `plat.c` 发声，二者之间**只有** `voice_wire.c:nav_voice_frame` 这一份接线。自测 `tools/voice_e2e.c` 调的就是这一份——若把发声循环改坏，端到端判据必然变红。
 
 ## 五、演示、练习与验收

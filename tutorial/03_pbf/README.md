@@ -1,5 +1,8 @@
 # 第 3 课 · PBF 流式解析（精髓复刻）
 
+> 📖 配套读源码讲义：[`docs/teaching/03_pbf.md`](../../docs/teaching/03_pbf.md)（读源码式讲解，讲清楚“为什么这么写”；与本科小程序同号对应）
+
+
 **累加内容**：PBF 最经典的三个坑——① varint(LEB128) 变长整数；② DenseNodes 的 delta 编码；
 ③ stringtable 不以 `\0` 结尾。本课不引入 protobuf-c，用几十行把三点本质复刻出来，亲手 decode
 一段 DenseNodes 并画出来。

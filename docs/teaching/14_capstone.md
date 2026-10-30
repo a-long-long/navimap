@@ -1,13 +1,13 @@
 # ★ 综合项目（Capstone）
 
-> 目标：独立完成“改一个点 + 加一条判据”，体验完整的“改 → 测 → 守”闭环；并通过一个端到端示例，把第 2–14 课串成一条完整的程序主干。
-> 前置：第 2–14 课全部。
+> 目标：独立完成“改一个点 + 加一条判据”，体验完整的“改 → 测 → 守”闭环；并通过一个端到端示例，把第 1–13 课串成一条完整的程序主干。
+> 前置：第 1–13 课全部。
 > 纪律：改动走 `scripts/check_layers.sh` 零违规；新增/改动有对应 `regress.sh` 判据（确定性量优先）；提交前 `./scripts/regress.sh` 全绿（或仅剩已知环境缺失项）。
 
 ## 一、教学目的
 
 - 把整门课的程序主干（数据生产 → 每帧渲染 → 用户交互 → Qt 外壳 → 门禁）串成一条可追踪的链路；
-- 通过一个“从一份 PBF 到屏幕上一条导航路线”的端到端示例，亲眼看到 L2–L14 各自的代码是在主干的哪一环被调用的；
+- 通过一个“从一份 PBF 到屏幕上一条导航路线”的端到端示例，亲眼看到 L1–L13 各自的代码是在主干的哪一环被调用的；
 - 掌握“改 → 测 → 守”闭环：任何改动都要落到 `regress.sh` 的一条判据上，且判据能负向失败；
 - 学会复用已验证路径，不重走被否分支（见第五节“别再试”清单）。
 
@@ -15,13 +15,13 @@
 
 | 阶段 | 对应课次 | 关键文件 / 函数 | 路径与行号区间 |
 |---|---|---|---|
-| 数据生产（PBF→二进制→建图） | L4 / L5 / L6 | `scripts/sync_maps.sh`、`tools/graph_extract.c`（`graph_build`、`nmbin_open`、`rev_write`） | `scripts/sync_maps.sh:1-432`（完整体见第三节）；`tools/graph_extract.c:1-172`（完整体见第三节） |
-| 每帧渲染（视口投影→软件光栅→管线） | L7 / L8 / L9 | `src/ui/offscreen_shot.c`（`offscreen_shot_main`、`render_buffer`、`write_bmp24`、`app_offscreen_audit`）、`map/map_view.c`（`mv_project`、`mv_visible_bbox`） | `src/ui/offscreen_shot.c:194-647`（`offscreen_shot_main` 完整体）；关键段见第三节 |
-| 用户交互（搜索→路由→导航语音） | L10 / L11 / L12 | `tools/route_cli.c`（`router_route_ll`、`maneuver_build`）、`src/ui/window.c`（`app_nav_plan_sync`）、`route/maneuver.c`、`route/voice.c`、`ui/voice_wire.c` | `tools/route_cli.c:46-338`（main 完整体）；`--maneuvers` 块见第三节 |
-| Qt 外壳 | L13 | `src/ui_qt/qt_main.cpp`、`map_canvas.cpp`、`main_window.cpp` | `CMakeLists.txt:496-512`（`navmap_qt` 目标） |
-| 门禁 | L14 | `scripts/regress.sh`、`scripts/check_layers.sh`、`tools/core_no_sdl.c` | `scripts/regress.sh:1-802`（全文为控制篇幅省略，可在 `scripts/regress.sh:1` 查阅） |
+| 数据生产（PBF→二进制→建图） | L3 / L4 / L5 | `scripts/sync_maps.sh`、`tools/graph_extract.c`（`graph_build`、`nmbin_open`、`rev_write`） | `scripts/sync_maps.sh:1-432`（完整体见第三节）；`tools/graph_extract.c:1-172`（完整体见第三节） |
+| 每帧渲染（视口投影→软件光栅→管线） | L6 / L7 / L8 | `src/ui/offscreen_shot.c`（`offscreen_shot_main`、`render_buffer`、`write_bmp24`、`app_offscreen_audit`）、`map/map_view.c`（`mv_project`、`mv_visible_bbox`） | `src/ui/offscreen_shot.c:194-647`（`offscreen_shot_main` 完整体）；关键段见第三节 |
+| 用户交互（搜索→路由→导航语音） | L9 / L10 / L11 | `tools/route_cli.c`（`router_route_ll`、`maneuver_build`）、`src/ui/window.c`（`app_nav_plan_sync`）、`route/maneuver.c`、`route/voice.c`、`ui/voice_wire.c` | `tools/route_cli.c:46-338`（main 完整体）；`--maneuvers` 块见第三节 |
+| Qt 外壳 | L12 | `src/ui_qt/qt_main.cpp`、`map_canvas.cpp`、`main_window.cpp` | `CMakeLists.txt:496-512`（`navmap_qt` 目标） |
+| 门禁 | L13 | `scripts/regress.sh`、`scripts/check_layers.sh`、`tools/core_no_sdl.c` | `scripts/regress.sh:1-802`（全文为控制篇幅省略，可在 `scripts/regress.sh:1` 查阅） |
 
-纯 DAG 底座：`utils ← pbf ← map ← route ← render ← ui ← ui_qt`（L3 平台抽象、L2 坐标系为全程底座）。
+纯 DAG 底座：`utils ← pbf ← map ← route ← render ← ui ← ui_qt`（L2 平台抽象、L1 坐标系为全程底座）。
 
 ## 三、完整实现代码
 
@@ -645,7 +645,7 @@ int main(int argc, char **argv)
 
 ### 3.3 每帧渲染（离屏通道）：`src/ui/offscreen_shot.c` 的 `offscreen_shot_main` 关键段（完整体位于 `offscreen_shot.c:194-647`）
 
-`navmap_qt --shot-offscreen` 调 `offscreen_shot_main()`，是离屏像素审计的**单一可信源**（regress 的全部离屏判据都走它）。它内部用 `app_init` 加载图集、`app_render_to_buf` 渲进内存缓冲、`write_bmp24` 写 24 位 BMP，**零 SDL**。下面展示“进程内算路”这一段（L11 路由结果被直接叠进画面），以及末尾的确定性量审计锚点（L8/L9 的 `areas_dotted`）。
+`navmap_qt --shot-offscreen` 调 `offscreen_shot_main()`，是离屏像素审计的**单一可信源**（regress 的全部离屏判据都走它）。它内部用 `app_init` 加载图集、`app_render_to_buf` 渲进内存缓冲、`write_bmp24` 写 24 位 BMP，**零 SDL**。下面展示“进程内算路”这一段（L10 路由结果被直接叠进画面），以及末尾的确定性量审计锚点（L7/L8 的 `areas_dotted`）。
 
 ```c
     App a;
@@ -751,7 +751,7 @@ int main(int argc, char **argv)
 
 ### 3.4 用户交互（路由 + 转向指令）：`tools/route_cli.c` 的 `--maneuvers` 块（完整体位于 `route_cli.c:280-300`）
 
-`route_cli` 是路由的命令行入口（L11）。`--maneuvers` 调 `maneuver_build` 生成转向指令，并断言“指令里程和 == 总里程”（不变量）。GUI 面板看到的转向指令就是同一份。
+`route_cli` 是路由的命令行入口（L10）。`--maneuvers` 调 `maneuver_build` 生成转向指令，并断言“指令里程和 == 总里程”（不变量）。GUI 面板看到的转向指令就是同一份。
 
 ```c
     if (want_man) {
@@ -782,26 +782,26 @@ int main(int argc, char **argv)
 把上面各段按运行时顺序串起来，得到一条可复现的链路（命令均为真实可用的接口）：
 
 ```sh
-# ① 数据生产（L4 解析 / L5 二进制 / L6 建图）：把 PBF 变成可加载路网
+# ① 数据生产（L3 解析 / L4 二进制 / L5 建图）：把 PBF 变成可加载路网
 cp  ~/Downloads/beijing.osm.pbf  sources/beijing.osm.pbf
 ./scripts/sync_maps.sh                       # 内部调 graph_extract + graph_check + places_build + lmbuild_cli
 #   产物：products/graph/beijing/{nodes,edges,osmid,names,restrictions}.bin + manifest.txt + rev.bin
-#         products/places_auto.db（L10 搜索库）、products/graph/lm.bin（L11 地标表）
+#         products/places_auto.db（L9 搜索库）、products/graph/lm.bin（L10 地标表）
 
-# ② 算一条路 + 转向指令（L11 路由 / L12 导航层）
+# ② 算一条路 + 转向指令（L10 路由 / L11 导航层）
 ./build/route_cli --graph=products/graph --from=39.90,116.40 --to=34.75,113.62 --maneuvers
 #   输出：起终点吸附、总长、绕行系数、预计分钟、转向指令 N 条（里程和==总里程）
 
-# ③ 离屏出一张带路线的图（L7 视口投影 / L8 软件光栅 / L9 渲染管线 / L13 Qt 外壳）
+# ③ 离屏出一张带路线的图（L6 视口投影 / L7 软件光栅 / L8 渲染管线 / L12 Qt 外壳）
 ./build/navmap_qt --shot-offscreen --graph=products/graph/beijing \
     --from=39.90,116.40 --to=34.75,113.62 --fit-route \
     --lat=39.90 --lon=116.40 --zoom=12 --w=1280 --h=800 --out=/tmp/route.bmp
 #   等价于 GUI 里选起终点后看到的画面；offscreen_shot_main 直接调 app_nav_plan_sync 算路并叠画。
 
-# ④ 搜索验收（L10）：离屏也能查 + 画
+# ④ 搜索验收（L9）：离屏也能查 + 画
 ./build/navmap_qt --shot-offscreen --graph=products/graph/beijing --q=中关村 --w=1280 --h=800 --out=/tmp/search.bmp
 
-# ⑤ 门禁（L14）：改完跑全套
+# ⑤ 门禁（L13）：改完跑全套
 ./scripts/regress.sh            # 或 ./scripts/regress.sh --build 先编译
 ./scripts/check_layers.sh       # 纯 DAG 依赖方向 0 违规
 ```
@@ -810,12 +810,12 @@ cp  ~/Downloads/beijing.osm.pbf  sources/beijing.osm.pbf
 
 ## 四、与其他功能之间的联系
 
-- **L2 坐标系 / L3 平台抽象**：全程底座。`utils/geo`（墨卡托投影、`nm_haversine_m`）与 `utils/plat`（线程 / mmap / 临时目录）被 L4–L13 所有模块依赖，是纯 DAG 的最底端叶子，反向绝不被依赖。
-- **L4 PBF 解析 → L5 自描述二进制与图集 → L6 建图**：`graph_extract`（L6）消费 `pbf/pbf_stream`（L4），产出 `nmbin` 自描述二进制（L5），再由 `map/mapset`（L5）在运行时按视口加载。这是 `mapset_set_view`（L7）在视野变化时加载的内容，也是路由（L11）的输入。
-- **L7 视口投影 → L8 软件光栅 → L9 渲染管线**：`mv_visible_bbox`/`mv_project`（L7）决定可见范围，喂给 `paint_areas/roads/lines`（L8），由 `paint_frame`（L9，`offscreen_shot.c` 的 `render_buffer` → `app_render_to_buf` → `paint_frame`）按 9 步编排成一帧。
-- **L10 搜索 → L11 路由 → L12 导航语音**：UI 上触发先后出现；`route_cli`/`app_nav_plan_sync`（L11）出 `RouteResult`，交给 `maneuver`（L12）生成指令，再经 `navsim`/`voice`/`ui/voice_wire`（L12）播报。
-- **L13 Qt 前端**：只是外壳——`qt_main.cpp` 启动事件循环，每帧 `MapCanvas::tick()` 驱动 `paint_frame`；它只链 `navimap_core + Qt Widgets`，不链 SDL。
-- **L14 架构门禁**：守护前面所有课——`check_layers.sh` 把纯 DAG 锁死，`core_no_sdl` 把“L13 不链 SDL”锁死，`regress.sh` 把 L8/L9/L11/L12/L13 的几十个用例串成回归门禁。
+- **L1 坐标系 / L2 平台抽象**：全程底座。`utils/geo`（墨卡托投影、`nm_haversine_m`）与 `utils/plat`（线程 / mmap / 临时目录）被 L3–L12 所有模块依赖，是纯 DAG 的最底端叶子，反向绝不被依赖。
+- **L3 PBF 解析 → L4 自描述二进制与图集 → L5 建图**：`graph_extract`（L5）消费 `pbf/pbf_stream`（L3），产出 `nmbin` 自描述二进制（L4），再由 `map/mapset`（L4）在运行时按视口加载。这是 `mapset_set_view`（L6）在视野变化时加载的内容，也是路由（L10）的输入。
+- **L6 视口投影 → L7 软件光栅 → L8 渲染管线**：`mv_visible_bbox`/`mv_project`（L6）决定可见范围，喂给 `paint_areas/roads/lines`（L7），由 `paint_frame`（L8，`offscreen_shot.c` 的 `render_buffer` → `app_render_to_buf` → `paint_frame`）按 9 步编排成一帧。
+- **L9 搜索 → L10 路由 → L11 导航语音**：UI 上触发先后出现；`route_cli`/`app_nav_plan_sync`（L10）出 `RouteResult`，交给 `maneuver`（L11）生成指令，再经 `navsim`/`voice`/`ui/voice_wire`（L11）播报。
+- **L12 Qt 前端**：只是外壳——`qt_main.cpp` 启动事件循环，每帧 `MapCanvas::tick()` 驱动 `paint_frame`；它只链 `navimap_core + Qt Widgets`，不链 SDL。
+- **L13 架构门禁**：守护前面所有课——`check_layers.sh` 把纯 DAG 锁死，`core_no_sdl` 把“L12 不链 SDL”锁死，`regress.sh` 把 L7/L8/L10/L11/L12 的几十个用例串成回归门禁。
 - **纯 DAG 总结**：`utils ← pbf ← map ← route ← render ← ui ← ui_qt`。`map` 只许依赖 `pbf,utils`；`route` 只许依赖 `map,utils`；`render` 纯光栅、零 ui 依赖；`ui` 依赖 `render` 但绝不被 `render/map/route` 反向依赖；`ui_qt` 只依赖 `map,render,settings,ui,utils`。任何反向依赖会被链接器（第一道）与 `check_layers.sh`（第二道）同时抓出。
 
 ## 五、演示、练习与验收
@@ -825,7 +825,7 @@ cp  ~/Downloads/beijing.osm.pbf  sources/beijing.osm.pbf
   2. 跑 `./build/route_cli --graph=products/graph --from=39.90,116.40 --to=34.75,113.62 --maneuvers`，确认打印里程与转向指令、且 `ASSERT-OK`；
   3. 跑 `./build/navmap_qt --shot-offscreen --graph=products/graph/beijing --from=39.90,116.40 --to=34.75,113.62 --fit-route --out=/tmp/route.bmp`，打开 `/tmp/route.bmp` 应能看到一条红色路线；
   4. 跑 `./scripts/regress.sh`，确认全绿（或仅剩已知环境缺失项，如 beijing 缺 `lanes.bin`）。
-- **练习（改 → 测 → 守 闭环）**：任选 `capstone.md` 原稿四类选题之一（如【中】`AREA_DOT_PX` 4→6）：改 `src/render/paint.h` → 用 `scripts/bmpdiff.py` 量化净损失面积 → 更新档位表并收紧 `regress.sh` 的 `area_lod_tier` 区间 → 跑回归确认被钉住。
+- **练习（改 → 测 → 守 闭环）**：任选 `14_capstone.md` 原稿四类选题之一（如【中】`AREA_DOT_PX` 4→6）：改 `src/render/paint.h` → 用 `scripts/bmpdiff.py` 量化净损失面积 → 更新档位表并收紧 `regress.sh` 的 `area_lod_tier` 区间 → 跑回归确认被钉住。
 - **验收 checklist**：
   - [ ] `./scripts/check_layers.sh` 零违规（无反向 `#include`）；
   - [ ] 改动有对应 `regress.sh` 判据（确定性量优先于时间）；

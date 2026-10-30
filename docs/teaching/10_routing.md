@@ -1,7 +1,7 @@
-# 第 11 课：跨省路由算法（核心）
+# 第 10 课：跨省路由算法（核心）
 
 > 模块：`src/route/{route,st,revidx,lmtable,restr,cost,pqueue,maneuver}.{c,h}`
-> 前置：第 5 课图集、第 6 课 CSR 图、第 7 课瓦片键与 `coord_key_e7`、A* / Dijkstra 基础、优先队列。
+> 前置：第 4 课图集、第 5 课 CSR 图、第 6 课瓦片键与 `coord_key_e7`、A* / Dijkstra 基础、优先队列。
 
 ## 一、教学目的
 
@@ -833,11 +833,11 @@ int maneuver_build(const RouteResult *rr, const MapSet *ms, ManeuverList *out)
 
 ## 四、与其他功能之间的联系
 
-- **上游（L5 图集 / L6 建图 / L7 瓦片键）**：L6 建图产出 `nodes.bin`/`edges.bin`（CSR 出边）是 L11 路由输入；L7 的 `coord_key_e7` 是状态主键，`mapset_query_tile`/`members_of` 按 Z14 瓦片跨省查同坐标。
-- **下游 · L9 渲染管线**：`RouteResult` 经 L9 `navdraw` 绘制路线折线（按 `pts[]`/`seg_m[]`）。
-- **下游 · L10 搜索**：**L10 搜索结果（地名/POI 坐标）即 L11 的起终点**——搜索出点 → `router_route_ll` 吸附算路。
-- **下游 · L12 导航语音**：`RouteResult` 直接喂 `maneuver_build`（本课 §9）与 `navsim_start`；`RouteOpts` 指名初始化约定被 L12/L13 所有调用点遵守。
-- **下游 · L14 架构门禁**：`lm_admissible`（regress.sh）直接验收地标下界；`restr_ab` / `heap_selftest` 是负向对照工具。
+- **上游（L4 图集 / L5 建图 / L6 瓦片键）**：L5 建图产出 `nodes.bin`/`edges.bin`（CSR 出边）是 L10 路由输入；L6 的 `coord_key_e7` 是状态主键，`mapset_query_tile`/`members_of` 按 Z14 瓦片跨省查同坐标。
+- **下游 · L8 渲染管线**：`RouteResult` 经 L8 `navdraw` 绘制路线折线（按 `pts[]`/`seg_m[]`）。
+- **下游 · L9 搜索**：**L9 搜索结果（地名/POI 坐标）即 L10 的起终点**——搜索出点 → `router_route_ll` 吸附算路。
+- **下游 · L11 导航语音**：`RouteResult` 直接喂 `maneuver_build`（本课 §9）与 `navsim_start`；`RouteOpts` 指名初始化约定被 L11/L12 所有调用点遵守。
+- **下游 · L13 架构门禁**：`lm_admissible`（regress.sh）直接验收地标下界；`restr_ab` / `heap_selftest` 是负向对照工具。
 
 ## 五、演示、练习与验收
 

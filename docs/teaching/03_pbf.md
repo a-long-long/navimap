@@ -1,7 +1,7 @@
-# 第 4 课 · PBF 流式解析
+# 第 3 课 · PBF 流式解析
 
 > 模块：`src/pbf/pbf_stream.{c,h}`、`src/pbf/pbf_block.{c,h}`、`proto/osmformat.proto`
-> 前置：第 2 课坐标量化（1e-7 度）、变长整数与 delta 编码概念。
+> 前置：第 1 课坐标量化（1e-7 度）、变长整数与 delta 编码概念。
 > 环境：必须先 `source env.sh`（`libprotobuf-c` 装在 `~/.local`，见 `CMakeLists.txt:51-72`）。
 
 ## 一、教学目的
@@ -343,7 +343,7 @@ const char *pbf_str(PbfBlock *b, uint32_t sid)
 
 ### 4. ★ 边界说明：本模块只暴露 `pbf_to_e7`，DenseNodes 的 delta 累积解码在 `graph_build.c`
 
-`pbf_block.h` 只给了 `pbf_to_e7`，它把"纳米度 × granularity + offset"再除以 100 换算成 1e-7 度（`v*gran + off)/100`，`granularity` 默认 100）。但 DenseNodes 的 `id/lat/lon` 三个数组是 **ZigZag + packed + 增量（delta）编码**：第一个值是绝对值，其后每个值是与前一个的差——这个 running accumulator 的维护**不在** `pbf_block.c`，而落在第 6 课的 `src/map/graph_build.c`。本节课只负责把 block 解出、并给出单个增量值到 e7 坐标的换算。
+`pbf_block.h` 只给了 `pbf_to_e7`，它把"纳米度 × granularity + offset"再除以 100 换算成 1e-7 度（`v*gran + off)/100`，`granularity` 默认 100）。但 DenseNodes 的 `id/lat/lon` 三个数组是 **ZigZag + packed + 增量（delta）编码**：第一个值是绝对值，其后每个值是与前一个的差——这个 running accumulator 的维护**不在** `pbf_block.c`，而落在第 5 课的 `src/map/graph_build.c`。本节课只负责把 block 解出、并给出单个增量值到 e7 坐标的换算。
 
 `graph_build.c:389-402` 的真实解码循环（只展示 delta 累积这一段，全文见该文件）：
 
@@ -364,17 +364,17 @@ const char *pbf_str(PbfBlock *b, uint32_t sid)
             }
 ```
 
-也就是说：`pbf_block.c` 的"边界"是——它产出的是**已经解包、字符串安全**的 `PrimitiveBlock`（`pb->dense->lat[i]` 是增量值），但不替你做 `acc += lat[i]` 的累加；累加和最终换算必须到 `graph_build.c` 调用 `pbf_to_e7` 这一层才闭合。把 delta 解码误放到 `pbf_block` 里，会让第 6 课复用 PBF 的其他消费者（如 `pbfmap.c`）各自重复实现；把它留在 `graph_build.c`，则 `pbf_block` 保持"纯解包、无状态"的清晰边界。
+也就是说：`pbf_block.c` 的"边界"是——它产出的是**已经解包、字符串安全**的 `PrimitiveBlock`（`pb->dense->lat[i]` 是增量值），但不替你做 `acc += lat[i]` 的累加；累加和最终换算必须到 `graph_build.c` 调用 `pbf_to_e7` 这一层才闭合。把 delta 解码误放到 `pbf_block` 里，会让第 5 课复用 PBF 的其他消费者（如 `pbfmap.c`）各自重复实现；把它留在 `graph_build.c`，则 `pbf_block` 保持"纯解包、无状态"的清晰边界。
 
 ## 四、与其他功能之间的联系
 
-- **下游 · 第 5 课（自描述二进制）与第 6 课（建图）**：所有消费 PBF 的工具与建图代码都走同一循环 `while (pbf_stream_next(...)==PBF_OK) { if OSMData: pbf_unpack_block }`：
+- **下游 · 第 4 课（自描述二进制）与第 5 课（建图）**：所有消费 PBF 的工具与建图代码都走同一循环 `while (pbf_stream_next(...)==PBF_OK) { if OSMData: pbf_unpack_block }`：
   - `map/graph_build.c` —— 建路网图（DenseNodes delta 累积 + `pbf_to_e7`，配合 `nm_fast_dist_m` 算边权）。
-  - `map/pbfmap.c` —— 主解码阶段（第 13 课 Qt 前端的显示层数据源）。
-  - `tools/places_build.c` —— 地名/POI（第 10 课）。
+  - `map/pbfmap.c` —— 主解码阶段（第 12 课 Qt 前端的显示层数据源）。
+  - `tools/places_build.c` —— 地名/POI（第 9 课）。
   - `tools/tag_stats.c`、`restr_probe.c`、`pbf_info.c` —— 标签统计与转向限制探测。
-- **与 L3（平台抽象）关系**：`pbf_stream` 只依赖标准 `zlib` 与 `protobuf-c`，与 L3 的平台层无直接耦合；解出的路名经 `StrPool`/NamePool（L3/L5）去重后落 `names.bin`。
-- **与 L2（坐标系）关系**：`pbf_to_e7` 是把 OSM 纳米度坐标归一到第 2 课定义的 1e-7 度整数坐标的关键换算，下游所有几何运算都以 e7 为单位。
+- **与 L2（平台抽象）关系**：`pbf_stream` 只依赖标准 `zlib` 与 `protobuf-c`，与 L2 的平台层无直接耦合；解出的路名经 `StrPool`/NamePool（L2/L4）去重后落 `names.bin`。
+- **与 L1（坐标系）关系**：`pbf_to_e7` 是把 OSM 纳米度坐标归一到第 1 课定义的 1e-7 度整数坐标的关键换算，下游所有几何运算都以 e7 为单位。
 
 ## 五、演示、练习与验收
 

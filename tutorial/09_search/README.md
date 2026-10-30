@@ -1,5 +1,8 @@
 # 第 9 课 · 地名搜索（bigram 倒排索引）
 
+> 📖 配套读源码讲义：[`docs/teaching/09_search.md`](../../docs/teaching/09_search.md)（读源码式讲解，讲清楚“为什么这么写”；与本科小程序同号对应）
+
+
 **累加内容**：用 bigram 倒排索引替代 `LIKE '%x%'` 全表扫描。本课把中文名按 **codepoint**
 （不是字节）切成字 bigram，每个 bigram → 倒排 posting(place_id)；查询时取各 bigram posting 的
 交集，再用【子串复核】过滤掉"bigram 全中但不连续"的误命中。

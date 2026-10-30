@@ -23,24 +23,28 @@
 3. **依赖是纯 DAG**——`utils ← pbf ← map ← route ← render ← ui ← ui_qt`，反向依赖会立刻 `undefined-reference`。`scripts/check_layers.sh` 是守护门禁。
 4. **核心零 SDL**——`navimap_core` 连 SDL 的 include 都不给；SDL 仅残留在两个去 SDL 化对照体（`blend_equiv`/`clip_equiv`）里做"逐像素等价"验证。
 
-### 0.3 课程表（建议 13 课 + 1 个综合项目）
+### 0.3 课程表（建议 15 篇：第 0 课总览 → 第 14 课综合项目，编号与 `tutorial/00–14` 一一对应）
 
-| 课次 | 主题 | 对应模块 | 关键产出 |
-|---|---|---|---|
-| 1 | 世界观与坐标系 | `utils/geo`, `utils/datum` | 经纬度量化、投影、测距 |
-| 2 | 平台抽象层 | `utils/{plat,mem,strpool}` | 跨平台不写 `#ifdef` |
-| 3 | PBF 流式解析 | `pbf/*` | 解出 node/way/relation |
-| 4 | 自描述二进制与图集 | `map/{binfmt,mapset,namepool}` | 读 `*.nmbin` |
-| 5 | 建图：PBF→路网 | `map/{graph_build,road_tags}` | 生成 nodes/edges |
-| 6 | 视口、投影与瓦片键 | `map/{map_view,tileidx}` | 经纬度↔屏幕 |
-| 7 | 软件光栅与性能旋钮 | `render/{raster,paint,navdraw}` | `AREA_DOT_PX` 权衡 |
-| 8 | 渲染管线编排 | `ui/{window,chrome,offscreen_shot,audit}` | `paint_frame` 全貌 |
-| 9 | 地名搜索 | `search/*` | bigram 倒排 |
-| 10 | 路由算法 | `route/*` | 双向加权 A* |
-| 11 | 导航层与语音 | `route/{maneuver,navsim,voice}`, `ui/voice_wire` | 转向指令+播报 |
-| 12 | Qt 前端与边界 | `ui_qt/*` | 渐进式 Qt 化 |
-| 13 | 架构纪律与验收门禁 | `scripts/*` | 防回归 |
-| ★ | 综合项目 | 全程 | 改一个点 + 加一条判据 |
+> 自本版起课程统一编号为 **00–14**：第 0 课是总览（读源码讲义 `docs/teaching/00_overview.md`，与可运行小程序 `tutorial/00_minimal` 配套）；
+> 01–13 为主题课；14 为综合项目。每课都有两份**同号**资料——「读真实源码讲义 `docs/teaching/NN_*.md`」与「可独立编译运行的小程序 `tutorial/NN_*/`」。
+
+| 课次 | 主题 | 对应模块 | 关键产出 | 配套资料 |
+|---|---|---|---|---|
+| 0 | 课程总览与程序运行流程 | 全局 | 程序运行流程图 | `docs/teaching/00_overview.md` + `tutorial/00_minimal` |
+| 1 | 世界观与坐标系 | `utils/geo`, `utils/datum` | 经纬度量化、投影、测距 | `docs/teaching/01_coords.md` + `tutorial/01_coords` |
+| 2 | 平台抽象层 | `utils/{plat,mem,strpool}` | 跨平台不写 `#ifdef` | `docs/teaching/02_platform.md` + `tutorial/02_platform` |
+| 3 | PBF 流式解析 | `pbf/*` | 解出 node/way/relation | `docs/teaching/03_pbf.md` + `tutorial/03_pbf` |
+| 4 | 自描述二进制与图集 | `map/{binfmt,mapset,namepool}` | 读 `*.nmbin` | `docs/teaching/04_binary.md` + `tutorial/04_binary` |
+| 5 | 建图：PBF→路网 | `map/{graph_build,road_tags}` | 生成 nodes/edges | `docs/teaching/05_graph.md` + `tutorial/05_graph` |
+| 6 | 视口、投影与瓦片键 | `map/{map_view,tileidx}` | 经纬度↔屏幕 | `docs/teaching/06_viewport.md` + `tutorial/06_viewport` |
+| 7 | 软件光栅与性能旋钮 | `render/{raster,paint,navdraw}` | `AREA_DOT_PX` 权衡 | `docs/teaching/07_raster.md` + `tutorial/07_raster` |
+| 8 | 渲染管线编排 | `ui/{window,chrome,offscreen_shot,audit}` | `paint_frame` 全貌 | `docs/teaching/08_pipeline.md` + `tutorial/08_pipeline` |
+| 9 | 地名搜索 | `search/*` | bigram 倒排 | `docs/teaching/09_search.md` + `tutorial/09_search` |
+| 10 | 路由算法 | `route/*` | 双向加权 A* | `docs/teaching/10_routing.md` + `tutorial/10_routing` |
+| 11 | 导航层与语音 | `route/{maneuver,navsim,voice}`, `ui/voice_wire` | 转向指令+播报 | `docs/teaching/11_navvoice.md` + `tutorial/11_navvoice` |
+| 12 | Qt 前端与边界 | `ui_qt/*` | 渐进式 Qt 化 | `docs/teaching/12_qt.md` + `tutorial/12_qt` |
+| 13 | 架构纪律与验收门禁 | `scripts/*` | 防回归 | `docs/teaching/13_gates.md` + `tutorial/13_gates` |
+| 14 | 综合项目 | 全程 | 改一个点 + 加一条判据 | `docs/teaching/14_capstone.md` + `tutorial/14_capstone` |
 
 ---
 
@@ -447,7 +451,10 @@ NAVIMAP_TTS_DRYRUN=/tmp/tts.txt ./build_rel/voice_e2e   # 端到端：直接断�
 
 ---
 
-## 三、综合项目（Capstone）
+## 三、综合项目（第 14 课 / Capstone）
+
+> 逐课展开版见 [`docs/teaching/14_capstone.md`](docs/teaching/14_capstone.md)，可运行小程序见 `tutorial/14_capstone/`。
+> 两者同号，配套完成"改一个点 + 加一条判据"的闭环。
 
 **目标**：独立完成"改一个点 + 加一条判据"，体验完整的"改 → 测 → 守"闭环。
 

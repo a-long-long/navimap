@@ -1,7 +1,7 @@
-# 第 9 课：渲染管线编排
+# 第 8 课：渲染管线编排
 
 > 模块：`src/ui/window.c`（`paint_frame`/`app_render_to_buf`）、`src/render/navdraw.{c,h}`、`src/ui/audit.{c,h}`、`src/ui/chrome.{c,h}`
-> 前置：第 8 课 `Raster`/`raster_*` 原语、第 10 课搜索结果（被 chrome 消费）。
+> 前置：第 7 课 `Raster`/`raster_*` 原语、第 9 课搜索结果（被 chrome 消费）。
 
 ## 一、教学目的
 
@@ -779,9 +779,9 @@ void paint_chrome(Raster *rs, App *a)
 
 ## 四、与其他功能之间的联系
 
-- **上游**：第 8 课 `Raster`/`raster_*`（绘制媒介）+ `PaintStats`（回归判据源，如 `areas_dotted`）；第 10 课搜索结果经 `a->su` 被 `paint_search_box`/`paint_search_pin` 消费。
-- **下游 · 第 13 课（Qt 前端）**：`app_render_to_buf` 是 Qt `MapCanvas` 与第 14 课 `offscreen_shot_main` 共用的唯一渲染入口。`qt_ui=1` 时 `paint_frame` 跳过 C 自绘 chrome/搜索框/面板，改由真 Qt 控件承担。
-- **下游 · 第 14 课（架构门禁）**：`PaintStats`/`areas_dotted`/路线像素断言经 `app_offscreen_audit` 守像素等价；`offscreen_shot` 复用 `audit` 模块做验收。
+- **上游**：第 7 课 `Raster`/`raster_*`（绘制媒介）+ `PaintStats`（回归判据源，如 `areas_dotted`）；第 9 课搜索结果经 `a->su` 被 `paint_search_box`/`paint_search_pin` 消费。
+- **下游 · 第 12 课（Qt 前端）**：`app_render_to_buf` 是 Qt `MapCanvas` 与第 13 课 `offscreen_shot_main` 共用的唯一渲染入口。`qt_ui=1` 时 `paint_frame` 跳过 C 自绘 chrome/搜索框/面板，改由真 Qt 控件承担。
+- **下游 · 第 13 课（架构门禁）**：`PaintStats`/`areas_dotted`/路线像素断言经 `app_offscreen_audit` 守像素等价；`offscreen_shot` 复用 `audit` 模块做验收。
 
 ## 五、演示、练习与验收
 

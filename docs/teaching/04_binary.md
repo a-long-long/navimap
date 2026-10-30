@@ -1,7 +1,7 @@
-# 第 5 课 · 自描述二进制与图集
+# 第 4 课 · 自描述二进制与图集
 
 > 模块：`src/map/binfmt.{c,h}`、`src/map/mapset.{c,h}`、`src/map/namepool.{c,h}`、`src/map/coverage.{c,h}`、`src/map/autobuild.{c,h}`、`src/map/road_tags.{c,h}`
-> 前置：第 4 课 PBF 解析、内存映射（mmap）概念、C 结构体对齐与字节序常识。
+> 前置：第 3 课 PBF 解析、内存映射（mmap）概念、C 结构体对齐与字节序常识。
 
 ## 一、教学目的
 
@@ -1092,12 +1092,12 @@ void road_tags_parse(const uint32_t *keys, size_t n_keys,
 
 ## 四、与其他功能之间的联系
 
-- **上游 · 第 6 课（建图）**：`graph_build` 写出 `nodes/edges/… .bin`；`autobuild_repair` 是其损坏兜底（第 14 课架构门禁也复用其判据）。
-- **下游 · 第 9 课（渲染）**：`paint_frame` 经 `mapset` 迭代 `srcs` 取数据画多省；`line_bbox`/`area_bbox` 懒填缓存把每帧白投影从 75% 降到可忽略。
-- **下游 · 第 11 课（路由）**：`sew.c` 经 `mapset_query_tile`（遍历每省 `tiles.bin` 网格，命中 `(tx,ty)` 即回调）取跨省边；`dup_of` 在缝合时被跳过，避免同一路口被展开两次。
-- **下游 · 第 10 课（搜索/地点）**：`coverage_locate` 把"用户现在在哪"反查到省，供地点查询与"该下哪块"提示。
-- **与 L3（平台抽象）关系**：`nmbin_open` 的 `nm_mmap_file`、后台线程 `nm_thread_spawn`、锁 `nm_mutex_create`、进程派生 `nm_spawn_wait` 全部来自 L3，说明自描述格式只是数据布局，IO/并发/进程仍由平台层统一。
-- **与 L2（坐标系）关系**：所有 `bbox`/`bbox[4]` 均为 e7 整数坐标；`mapset_detail_prov` 用 `coord_key_e7` 做坐标键比较。
+- **上游 · 第 5 课（建图）**：`graph_build` 写出 `nodes/edges/… .bin`；`autobuild_repair` 是其损坏兜底（第 13 课架构门禁也复用其判据）。
+- **下游 · 第 8 课（渲染）**：`paint_frame` 经 `mapset` 迭代 `srcs` 取数据画多省；`line_bbox`/`area_bbox` 懒填缓存把每帧白投影从 75% 降到可忽略。
+- **下游 · 第 10 课（路由）**：`sew.c` 经 `mapset_query_tile`（遍历每省 `tiles.bin` 网格，命中 `(tx,ty)` 即回调）取跨省边；`dup_of` 在缝合时被跳过，避免同一路口被展开两次。
+- **下游 · 第 9 课（搜索/地点）**：`coverage_locate` 把"用户现在在哪"反查到省，供地点查询与"该下哪块"提示。
+- **与 L2（平台抽象）关系**：`nmbin_open` 的 `nm_mmap_file`、后台线程 `nm_thread_spawn`、锁 `nm_mutex_create`、进程派生 `nm_spawn_wait` 全部来自 L2，说明自描述格式只是数据布局，IO/并发/进程仍由平台层统一。
+- **与 L1（坐标系）关系**：所有 `bbox`/`bbox[4]` 均为 e7 整数坐标；`mapset_detail_prov` 用 `coord_key_e7` 做坐标键比较。
 
 ## 五、演示、练习与验收
 

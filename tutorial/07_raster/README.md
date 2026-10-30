@@ -1,5 +1,8 @@
 # 第 7 课 · 软件光栅与性能旋钮
 
+> 📖 配套读源码讲义：[`docs/teaching/07_raster.md`](../../docs/teaching/07_raster.md)（读源码式讲解，讲清楚“为什么这么写”；与本科小程序同号对应）
+
+
 **累加内容**：自写光栅的动机，以及"画质 ↔ 帧时间"如何用确定性量来权衡。本课实现 `Raster`
 （像素缓冲 + 裁剪矩形）、`raster_line`（Cohen-Sutherland 裁剪 + Bresenham，int64 中间量防溢出）、
 `raster_px_rgba`（alpha 混合），以及一个面 LOD 旋钮 `AREA_DOT_PX`。

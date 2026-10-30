@@ -1,4 +1,4 @@
-# 第 10 课：地名搜索
+# 第 9 课：地名搜索
 
 > 模块：`src/search/search.{c,h}`（直接吃现成 `places_auto.db`，SQLite + bigram 倒排）
 > 前置：SQL `LIKE`、`GROUP BY ... HAVING COUNT` 交集查询、UTF-8 字符与字节的区别。
@@ -273,10 +273,10 @@ int search_query(SearchDb *d, const char *q,
 
 ## 四、与其他功能之间的联系
 
-- **上游（L5 自描述二进制与图集 / L4 PBF 解析）**：`places_auto.db` 的 `gram`/`place` 表由 `tools/places_build.c` 从 PBF 生成（地名库建库）。
-- **下游 · L9 渲染管线**：搜索结果被 `paint_search_box` / `paint_search_pin`（chrome 步骤 9）消费，经 `a->su` 显示。
-- **下游 · L11 路由**：**L10 搜索结果（地名/POI 坐标）直接作为 L11 路由的起终点**——用户在搜索框选一个点，拿它的经纬度喂给 `router_route_ll` / `router_plan`。
-- **下游 · L13 Qt 前端**：被 Qt 搜索面板直接调用。
+- **上游（L4 自描述二进制与图集 / L3 PBF 解析）**：`places_auto.db` 的 `gram`/`place` 表由 `tools/places_build.c` 从 PBF 生成（地名库建库）。
+- **下游 · L8 渲染管线**：搜索结果被 `paint_search_box` / `paint_search_pin`（chrome 步骤 9）消费，经 `a->su` 显示。
+- **下游 · L10 路由**：**L9 搜索结果（地名/POI 坐标）直接作为 L10 路由的起终点**——用户在搜索框选一个点，拿它的经纬度喂给 `router_route_ll` / `router_plan`。
+- **下游 · L12 Qt 前端**：被 Qt 搜索面板直接调用。
 - **注意**：`search_open` 的 sqlite 连接独立于 `LabelCache` 的连接（`window.h` 注释），避免游标互踩。
 
 ## 五、演示、练习与验收

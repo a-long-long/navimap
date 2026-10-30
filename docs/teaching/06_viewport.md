@@ -1,7 +1,7 @@
-# 第 7 课：视口、投影与瓦片键
+# 第 6 课：视口、投影与瓦片键
 
 > 模块：`src/map/map_view.{c,h}`、`src/map/tileidx.{c,h}`
-> 前置：第 2 课 `nm_mercator`/`nm_mercator_y_fast`、墨卡托世界坐标概念。
+> 前置：第 1 课 `nm_mercator`/`nm_mercator_y_fast`、墨卡托世界坐标概念。
 
 ## 一、教学目的
 
@@ -280,10 +280,10 @@ void nm_tile_of(double lat, double lon, int *tx, int *ty)
 
 ## 四、与其他功能之间的联系
 
-- **上游 · 第 2 课**：`mv_project`/`mv_unproject`/`mv_fit_bbox` 依赖 `nm_mercator`/`nm_mercator_y_fast`/`nm_mercator_inv`；`nm_tile_of` 三版本同样以 `nm_mercator` 为"尺子"。
-- **下游 · 第 8/9 课渲染管线**：`render/paint.c` 在每 pass 开头 `mv_proj_begin`，循环内用 `mv_proj`（`paint.c:265,462,805,927,1038`）；`ui/window.c` 的 `app_update_coverage`/`paint_frame` 用 `mv_proj_begin`/`mv_proj` 统一驱动。
-- **下游 · 第 11 课跨省缝合**：L6 用同样 Z14 切 tile，`nm_tile_of` 在 `coverage.c`/`mapset_detail_prov` 定 tile；`route/sew.c` 经 `mapset_query_tile` 取跨省边，`sew_cb` 用 `coord_key_e7(node lat/lon)`（见 L6 `coordkey.h`）把不同省的同一坐标合成一个图节点，实现 `sew` 缝合。
-- **自检 · 第 14 课架构门禁**：`tile_selftest` 对全图 5228 万真实节点逐点比 `nm_tile_of` vs 精确版，并以 `--expect-diff` 证明 `nm_tile_of_raw` 必须有差异（否则回退是死代码）。
+- **上游 · 第 1 课**：`mv_project`/`mv_unproject`/`mv_fit_bbox` 依赖 `nm_mercator`/`nm_mercator_y_fast`/`nm_mercator_inv`；`nm_tile_of` 三版本同样以 `nm_mercator` 为"尺子"。
+- **下游 · 第 7/8 课渲染管线**：`render/paint.c` 在每 pass 开头 `mv_proj_begin`，循环内用 `mv_proj`（`paint.c:265,462,805,927,1038`）；`ui/window.c` 的 `app_update_coverage`/`paint_frame` 用 `mv_proj_begin`/`mv_proj` 统一驱动。
+- **下游 · 第 10 课跨省缝合**：L5 用同样 Z14 切 tile，`nm_tile_of` 在 `coverage.c`/`mapset_detail_prov` 定 tile；`route/sew.c` 经 `mapset_query_tile` 取跨省边，`sew_cb` 用 `coord_key_e7(node lat/lon)`（见 L5 `coordkey.h`）把不同省的同一坐标合成一个图节点，实现 `sew` 缝合。
+- **自检 · 第 13 课架构门禁**：`tile_selftest` 对全图 5228 万真实节点逐点比 `nm_tile_of` vs 精确版，并以 `--expect-diff` 证明 `nm_tile_of_raw` 必须有差异（否则回退是死代码）。
 
 ## 五、演示、练习与验收
 

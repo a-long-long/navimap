@@ -1,4 +1,4 @@
-# 第 3 课：平台抽象层
+# 第 2 课：平台抽象层
 
 > 模块：`src/utils/plat.{c,h}`、`src/utils/mem.{c,h}`、`src/utils/strpool.{c,h}`
 > 前置：C 多线程（pthread 概念）、跨平台（POSIX vs Windows）差异常识。
@@ -11,7 +11,7 @@
 2. 在 `plat.c` 内新增一个跨平台小工具函数（如 `nm_sleep_ms`），而不触碰任何业务 `.c`。
 3. 说清链接期 `-pthread` 为何由 `navmap_plat` 库统一承载（漏挂会在链接 `tts_selftest` 时报 `pthread_create` 未定义）。
 4. 看懂 `nm_pin_allocator` 钉死 glibc mmap 阈值的根因：避免大数组改走 brk 主堆导致 SIGSEGV。
-5. 掌握 `StrPool` 字符串去重池的设计（id 0 = "无名"），理解它如何支撑 L4 路名去重与 `names.bin` 落盘。
+5. 掌握 `StrPool` 字符串去重池的设计（id 0 = "无名"），理解它如何支撑 L3 路名去重与 `names.bin` 落盘。
 
 ## 二、功能构成
 
@@ -658,10 +658,10 @@ void sp_serialize(StrPool *p, uint8_t **out, size_t *out_len)
 ## 四、与其他功能之间的联系
 
 - **被几乎所有模块使用**：`graph_build.c`/`route.c`/`paint.c`/`ui_qt/*` 只调 `nm_*` 接口。`nm_font_candidates` 被 `render/font.c` 组建字体集；`NmMutex`/`NmCond` 支撑 TTS 后台朗读线程与并发加载；`nm_map_file`（经 `nm_mmap_file`）是所有大文件（nodes.bin / 边表）只读映射的底座。
-- **与 L2 / L4 交汇**：`StrPool` 是 L4 PBF 路名去重后的落盘容器（`names.bin`，`sp_serialize` 输出 `[u32 count][u32 off[count+1]][bytes]`）；`nm_now_ms`/`nm_thread_spawn` 在 L5 / L6 的并行建图与瓦片加载中反复出现。
-- **与 L12 导航语音**：`nm_tts_speak` / `nm_tts_flush` 依赖 `nm_thread_spawn` + `NmMutex`/`NmCond` 实现后台串行朗读线程，调用方（导航每帧推进）绝不被阻塞。
+- **与 L1 / L3 交汇**：`StrPool` 是 L3 PBF 路名去重后的落盘容器（`names.bin`，`sp_serialize` 输出 `[u32 count][u32 off[count+1]][bytes]`）；`nm_now_ms`/`nm_thread_spawn` 在 L4 / L5 的并行建图与瓦片加载中反复出现。
+- **与 L11 导航语音**：`nm_tts_speak` / `nm_tts_flush` 依赖 `nm_thread_spawn` + `NmMutex`/`NmCond` 实现后台串行朗读线程，调用方（导航每帧推进）绝不被阻塞。
 - **链接纪律**：`plat.c` 的线程用 pthread 实现，故 `-pthread` 由 `navmap_plat` 库统一承载（`CMakeLists.txt` 相关目标）。漏挂会在链接 `tts_selftest` 时报 `pthread_create` 未定义。
-- **与 L14 架构门禁**：业务代码零 `#ifdef _WIN32` 是跨平台门禁的验收点之一（`cross-platform-portability-audit` 思路）。
+- **与 L13 架构门禁**：业务代码零 `#ifdef _WIN32` 是跨平台门禁的验收点之一（`cross-platform-portability-audit` 思路）。
 
 ## 五、演示、练习与验收
 

@@ -1,7 +1,7 @@
-# 第 14 课 · 架构纪律与验收门禁
+# 第 13 课 · 架构纪律与验收门禁
 
 > 模块/脚本：`scripts/check_layers.sh`、`scripts/regress.sh`、`CMakeLists.txt`、`tools/core_no_sdl.c`、`tools/blend_equiv.c`、`tools/clip_equiv.c`
-> 前置：第 2–13 课全部内容（本课是“为什么敢改”的门禁总览）。
+> 前置：第 1–12 课全部内容（本课是“为什么敢改”的门禁总览）。
 
 ## 一、教学目的
 
@@ -973,8 +973,8 @@ fi
 
 ## 四、与其他功能之间的联系
 
-- **守卫范围**：门禁覆盖第 2–13 课全部模块——`check_layers.sh` 锁死 DAG 方向（纯 `utils ← pbf ← map ← route ← render ← ui ← ui_qt`），`core_no_sdl` 锁死第 13 课 Qt 不链 SDL，`blend_equiv`/`clip_equiv` 锁死第 8/9 课渲染像素等价，`regress.sh` 把全部用例串成回归门禁。
-- **依赖 L11–L13**：`route_cross/navsim_*/restr_ab/rev_*` 验收第 11 课路由；`app_route/gpx_render/ovl_shot` 经 `navmap_qt --shot-offscreen` 验收第 9/12/13 课；`layer_dirs` 验收含第 13 课 `ui_qt` 的整张依赖图；`core_no_sdl` 验收第 13 课边界。
+- **守卫范围**：门禁覆盖第 1–12 课全部模块——`check_layers.sh` 锁死 DAG 方向（纯 `utils ← pbf ← map ← route ← render ← ui ← ui_qt`），`core_no_sdl` 锁死第 12 课 Qt 不链 SDL，`blend_equiv`/`clip_equiv` 锁死第 7/8 课渲染像素等价，`regress.sh` 把全部用例串成回归门禁。
+- **依赖 L10–L12**：`route_cross/navsim_*/restr_ab/rev_*` 验收第 10 课路由；`app_route/gpx_render/ovl_shot` 经 `navmap_qt --shot-offscreen` 验收第 8/11/12 课；`layer_dirs` 验收含第 12 课 `ui_qt` 的整张依赖图；`core_no_sdl` 验收第 12 课边界。
 - **构建约束（双重防线）**：`CMakeLists.txt` 移除 `--start-group` 是本课硬前提——单趟链接器把“任何反向依赖”变成即时 `undefined reference`（第一道防线），与 `check_layers.sh`（第二道防线）形成双重防线。
 - **纯 DAG 总结**：`utils`/`pbf` 为叶子；`map` 只许依赖 `pbf,utils`；`route` 只许依赖 `map,utils`；`render` 纯光栅、零 ui 依赖；`ui` 依赖 `render` 但不许被 `render/map/route` 反向依赖；`ui_qt` 只依赖 `map,render,settings,ui,utils`。任何新引入的反向依赖都会同时被链接器与 `check_layers.sh` 抓出。
 

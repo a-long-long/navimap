@@ -1,4 +1,4 @@
-# 第 2 课：坐标与大地基准
+# 第 1 课：坐标与大地基准
 
 > 模块：`src/utils/geo.{c,h}`、`src/utils/datum.{c,h}`
 > 前置：经纬度直觉、墨卡托投影、大地基准（datum）概念。
@@ -702,11 +702,11 @@ void datum_gk_inverse(DatumId id, double X, double Y, double lon0_deg,
 
 ## 四、与其他功能之间的联系
 
-- **下游 · 第 7 课视口投影**：`nm_mercator_y_fast` 专供渲染热路径 `mv_project`；`nm_mercator_inv` 用于屏幕坐标↝经纬度反查（鼠标拾取、框选）。
-- **下游 · 第 11 课路由**：`nm_haversine_m` 是 A* 的 admissible 启发式（`route/cost.c`，≈ `÷130km/h`）；`nm_fast_dist_m` 是建图边权与吸附距离（注意它不能做 A* 启发式，会被跨纬度高估，破坏 admissible）。
-- **下游 · UI 坐标网（第 13 课 Qt 前端）**：`datum_wgs84_to` + `datum_gk_forward` 驱动 Qt 前端的经纬网/方里格叠加层与右下角读数；`grid_gk_datum` 决定方里格用哪个基准。
-- **上游 · 第 4 课 PBF 解析**：PBF 落盘量化单位 `1e-7` 度（`NM_DEG_NANO`）正是 `nm_lat_to_i32`/`nm_i32_to_deg` 的语义，L4 解出的节点坐标直接以该 int32 落盘。
-- **下游 · 第 12 课导航语音**：`nm_mercator`/`nm_mercator_y_fast` 决定的屏幕定位，与语音播报的"前方多少米转向"提示在视图上一致。
+- **下游 · 第 6 课视口投影**：`nm_mercator_y_fast` 专供渲染热路径 `mv_project`；`nm_mercator_inv` 用于屏幕坐标↝经纬度反查（鼠标拾取、框选）。
+- **下游 · 第 10 课路由**：`nm_haversine_m` 是 A* 的 admissible 启发式（`route/cost.c`，≈ `÷130km/h`）；`nm_fast_dist_m` 是建图边权与吸附距离（注意它不能做 A* 启发式，会被跨纬度高估，破坏 admissible）。
+- **下游 · UI 坐标网（第 12 课 Qt 前端）**：`datum_wgs84_to` + `datum_gk_forward` 驱动 Qt 前端的经纬网/方里格叠加层与右下角读数；`grid_gk_datum` 决定方里格用哪个基准。
+- **上游 · 第 3 课 PBF 解析**：PBF 落盘量化单位 `1e-7` 度（`NM_DEG_NANO`）正是 `nm_lat_to_i32`/`nm_i32_to_deg` 的语义，L3 解出的节点坐标直接以该 int32 落盘。
+- **下游 · 第 11 课导航语音**：`nm_mercator`/`nm_mercator_y_fast` 决定的屏幕定位，与语音播报的"前方多少米转向"提示在视图上一致。
 
 ## 五、演示、练习与验收
 

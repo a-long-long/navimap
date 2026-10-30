@@ -1,7 +1,7 @@
-# 第 8 课：软件光栅与性能旋钮
+# 第 7 课：软件光栅与性能旋钮
 
 > 模块：`src/render/raster.{c,h}`
-> 前置：第 2 课坐标系、第 7 课 `mv_proj`、Cohen-Sutherland 线段裁剪概念。
+> 前置：第 1 课坐标系、第 6 课 `mv_proj`、Cohen-Sutherland 线段裁剪概念。
 
 ## 一、教学目的
 
@@ -404,9 +404,9 @@ static inline void raster_line(Raster *rs, int x0, int y0, int x1, int y1, uint3
 
 ## 四、与其他功能之间的联系
 
-- **上游 · 第 2 / 7 课**：`raster_*` 只接收屏幕坐标 `(x, y)`；这些坐标由第 7 课 `mv_proj` 把 `lat/lon` 投影而来。光栅层本身不做任何地理换算。
-- **下游 · 第 9 课（渲染管线）**：`paint_areas/roads/lines/contours` 与 `navdraw` 全部把 `Raster *rs` 当绘制目标，经 `paint_frame` 组织成每帧。
-- **下游 · 第 14 课（架构门禁）**：`raster_clip_line` 由 `tools/clip_equiv.c` 门禁（20 万随机线段比 `SDL_IntersectRectAndLine` 端点逐位相同）；`blend_ch` 由 `tools/blend_equiv.c` 门禁（36 组颜色 × 4096 像素 0 差异）。"与 SDL 软渲染逐像素等价"是硬要求，不是"看着差不多"。
+- **上游 · 第 1 / 6 课**：`raster_*` 只接收屏幕坐标 `(x, y)`；这些坐标由第 6 课 `mv_proj` 把 `lat/lon` 投影而来。光栅层本身不做任何地理换算。
+- **下游 · 第 8 课（渲染管线）**：`paint_areas/roads/lines/contours` 与 `navdraw` 全部把 `Raster *rs` 当绘制目标，经 `paint_frame` 组织成每帧。
+- **下游 · 第 13 课（架构门禁）**：`raster_clip_line` 由 `tools/clip_equiv.c` 门禁（20 万随机线段比 `SDL_IntersectRectAndLine` 端点逐位相同）；`blend_ch` 由 `tools/blend_equiv.c` 门禁（36 组颜色 × 4096 像素 0 差异）。"与 SDL 软渲染逐像素等价"是硬要求，不是"看着差不多"。
 
 ## 五、演示、练习与验收
 

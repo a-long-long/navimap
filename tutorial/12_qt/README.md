@@ -1,5 +1,8 @@
 # 第 12 课 · Qt 前端与边界原则
 
+> 📖 配套读源码讲义：[`docs/teaching/12_qt.md`](../../docs/teaching/12_qt.md)（读源码式讲解，讲清楚“为什么这么写”；与本科小程序同号对应）
+
+
 **累加内容**：遗留 C 系统如何渐进式 Qt 化——C 渲染核心一行不动，只把像素缓冲包成 `QImage`。
 本课用 Qt 的 `QImage` 直接"接住"一块 `0xFFRRGGBB` 的 C 缓冲（与 `offscreen_shot.c` 同约定），
 并存成 PNG 验证"Qt 只是缓冲的搬运工"。

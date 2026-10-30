@@ -1,7 +1,11 @@
-# 第 1 课 · 课程总览与程序运行流程
+# 第 0 课 · 课程总览与程序运行流程
 
-> 模块：全局（本目录 14 课 + 综合项目）
+> 模块：全局（本目录 15 篇讲义，第 0 课总览 → 第 14 课综合项目，编号与 `tutorial/00–14` 一一对应）
 > 前置：无。本课是整门课的"地图"，先建立总览，再按**程序运行流程**逐课深入。
+>
+> **与 `tutorial/` 的关系**：本目录是"读真实源码"式讲义（讲清楚"为什么这么写"）；`tutorial/NN_xxx`
+> 是同名编号、可独立编译运行的小程序（看"怎么跑起来"）。两者同号对应，建议对照阅读——
+> 其中 `00_overview`（概念总览）与 `tutorial/00_minimal`（最小框架动手热身）是第 0 课的"概念 / 动手"一对。
 
 ## ① 教学目的
 
@@ -64,24 +68,24 @@ flowchart TD
 ASCII 版（同一张图，便于无 mermaid 渲染时阅读）：
 
 ```
-qt_main main()                       ┐ 程序入口（第 13 课）
+qt_main main()                       ┐ 程序入口（第 12 课）
   └─ QApplication + MainWindow + MapCanvas
        └─ Qt 事件循环
             └─ MapCanvas::tick() 每帧
                  └─ renderNow() → paintEvent()
                       └─ app_render_to_buf()         ┐ 唯一渲染入口
-                           └─ paint_frame() 9 步      ┘ （第 9 课）
-                                ② mv_visible_bbox   → 视口投影（第 7 课）
-                                ③ mapset_set_view   → 需要 图集（第 5 课）
-                                   └─ 数据来自：PBF→二进制→建图（第 4/5/6 课）
-                                ⑤ paint_areas/...    → 需要 Raster（第 8 课）
-                                   └─ 依赖：坐标系 + 墨卡托（第 2 课）
+                           └─ paint_frame() 9 步      ┘ （第 8 课）
+                                ② mv_visible_bbox   → 视口投影（第 6 课）
+                                ③ mapset_set_view   → 需要 图集（第 4 课）
+                                   └─ 数据来自：PBF→二进制→建图（第 3/4/5 课）
+                                ⑤ paint_areas/...    → 需要 Raster（第 7 课）
+                                   └─ 依赖：坐标系 + 墨卡托（第 1 课）
                                 ⑦ 叠加层：route/gpx/车头
                                 ⑧ chrome 自绘界面（含搜索框）
-            └─ 用户输入：搜索（第 10 课）/ 选起终点路由（第 11 课）
-                            └─ RouteResult → maneuver → navsim → voice（第 12 课）
-   全程底座：坐标系（第 2 课）、平台抽象层（第 3 课：线程 / mmap）
-   全程守护：架构纪律与验收门禁（第 14 课）
+            └─ 用户输入：搜索（第 9 课）/ 选起终点路由（第 10 课）
+                            └─ RouteResult → maneuver → navsim → voice（第 11 课）
+   全程底座：坐标系（第 1 课）、平台抽象层（第 2 课：线程 / mmap）
+   全程守护：架构纪律与验收门禁（第 13 课）
 ```
 
 ### 为什么按这个顺序排课（而非按依赖表）
@@ -89,15 +93,15 @@ qt_main main()                       ┐ 程序入口（第 13 课）
 依赖表 `utils←pbf←map←route←render←ui←ui_qt` 告诉我们"谁不许依赖谁"；而**运行流程**告诉我们
 "程序真正跑起来时，先做什么、后做什么"。本课程以运行流程为主轴：
 
-1. **底座先讲**（第 2–3 课）：坐标系、平台抽象层。它们是读任何运行时代码都绕不开的前提。
-2. **数据生产流**（第 4–6 课）：PBF 解析 → 自描述二进制 / 图集 → 建图。这正是 `mapset_set_view`
+1. **底座先讲**（第 1–2 课）：坐标系、平台抽象层。它们是读任何运行时代码都绕不开的前提。
+2. **数据生产流**（第 3–5 课）：PBF 解析 → 自描述二进制 / 图集 → 建图。这正是 `mapset_set_view`
    在视野变化时加载的内容，也是路由的输入。
-3. **每帧渲染流**（第 7–9 课）：视口投影（决定可见范围）→ 软件光栅（画像素）→ 渲染管线编排
+3. **每帧渲染流**（第 6–8 课）：视口投影（决定可见范围）→ 软件光栅（画像素）→ 渲染管线编排
    （把前两者与数据编织成一帧）。这条线直接对应 `paint_frame` 的内部步骤顺序。
-4. **用户交互流**（第 10–12 课）：搜索、路由、导航与语音——按 UI 上触发的先后出现。
-5. **外壳与守护**（第 13–14 课）：Qt 前端（程序入口 `main`/事件循环）放在最后，是因为它只是外壳——
-   它启动的事件循环每帧调用的 `paint_frame`（第 9 课）所依赖的数据 / 投影 / 光栅都已在前面的课讲完；
-   架构门禁（第 14 课）则守护前面所有课。
+4. **用户交互流**（第 9–11 课）：搜索、路由、导航与语音——按 UI 上触发的先后出现。
+5. **外壳与守护**（第 12–13 课）：Qt 前端（程序入口 `main`/事件循环）放在最后，是因为它只是外壳——
+   它启动的事件循环每帧调用的 `paint_frame`（第 8 课）所依赖的数据 / 投影 / 光栅都已在前面的课讲完；
+   架构门禁（第 13 课）则守护前面所有课。
 
 > 注：严格按 `main()` 的"第一个被调用的函数"来说，Qt 入口应排最前。但那样会导致"还没讲
 > 投影 / 光栅 / 数据，就看不懂 paint_frame 在干什么"。因此把入口外壳后置，先夯实它调用的每一个
@@ -111,27 +115,27 @@ qt_main main()                       ┐ 程序入口（第 13 课）
 
 ## 课程表（按运行流程排序）
 
-| 文件 | 课次 | 主题 | 核心模块 |
-|---|---|---|---|
-| [lesson-01-overview.md](lesson-01-overview.md) | 1 | 课程总览与程序运行流程 | 全局 |
-| [lesson-02-coords.md](lesson-02-coords.md) | 2 | 坐标系与大地基准 | `utils/geo`, `utils/datum` |
-| [lesson-03-platform.md](lesson-03-platform.md) | 3 | 平台抽象层 | `utils/{plat,mem,strpool}` |
-| [lesson-04-pbf.md](lesson-04-pbf.md) | 4 | PBF 流式解析 | `pbf/*` |
-| [lesson-05-binmap.md](lesson-05-binmap.md) | 5 | 自描述二进制与图集 | `map/{binfmt,mapset,namepool}` |
-| [lesson-06-graph.md](lesson-06-graph.md) | 6 | 建图：PBF→路网 | `map/{graph_build,road_tags}` |
-| [lesson-07-viewport.md](lesson-07-viewport.md) | 7 | 视口、投影与瓦片键 | `map/{map_view,tileidx}` |
-| [lesson-08-raster.md](lesson-08-raster.md) | 8 | 软件光栅与性能旋钮 | `render/{raster,paint,navdraw}` |
-| [lesson-09-pipeline.md](lesson-09-pipeline.md) | 9 | 渲染管线编排 | `ui/{window,chrome,offscreen_shot,audit}` |
-| [lesson-10-search.md](lesson-10-search.md) | 10 | 地名搜索 | `search/*` |
-| [lesson-11-routing.md](lesson-11-routing.md) | 11 | 跨省路由算法 | `route/*` |
-| [lesson-12-navvoice.md](lesson-12-navvoice.md) | 12 | 导航层与语音 | `route/{maneuver,navsim,voice}`, `ui/voice_wire` |
-| [lesson-13-qt.md](lesson-13-qt.md) | 13 | Qt 前端与边界 | `ui_qt/*` |
-| [lesson-14-gates.md](lesson-14-gates.md) | 14 | 架构纪律与验收门禁 | `scripts/*`, `tools/*` |
-| [capstone.md](capstone.md) | ★ | 综合项目 | 全程 |
+| 文件 | 课次 | 主题 | 核心模块 | 配套 `tutorial/` |
+|---|---|---|---|---|
+| [00_overview.md](00_overview.md) | 0 | 课程总览与程序运行流程 | 全局 | `00_minimal` |
+| [01_coords.md](01_coords.md) | 1 | 坐标系与大地基准 | `utils/geo`, `utils/datum` | `01_coords` |
+| [02_platform.md](02_platform.md) | 2 | 平台抽象层 | `utils/{plat,mem,strpool}` | `02_platform` |
+| [03_pbf.md](03_pbf.md) | 3 | PBF 流式解析 | `pbf/*` | `03_pbf` |
+| [04_binary.md](04_binary.md) | 4 | 自描述二进制与图集 | `map/{binfmt,mapset,namepool}` | `04_binary` |
+| [05_graph.md](05_graph.md) | 5 | 建图：PBF→路网 | `map/{graph_build,road_tags}` | `05_graph` |
+| [06_viewport.md](06_viewport.md) | 6 | 视口、投影与瓦片键 | `map/{map_view,tileidx}` | `06_viewport` |
+| [07_raster.md](07_raster.md) | 7 | 软件光栅与性能旋钮 | `render/{raster,paint,navdraw}` | `07_raster` |
+| [08_pipeline.md](08_pipeline.md) | 8 | 渲染管线编排 | `ui/{window,chrome,offscreen_shot,audit}` | `08_pipeline` |
+| [09_search.md](09_search.md) | 9 | 地名搜索 | `search/*` | `09_search` |
+| [10_routing.md](10_routing.md) | 10 | 跨省路由算法 | `route/*` | `10_routing` |
+| [11_navvoice.md](11_navvoice.md) | 11 | 导航层与语音 | `route/{maneuver,navsim,voice}`, `ui/voice_wire` | `11_navvoice` |
+| [12_qt.md](12_qt.md) | 12 | Qt 前端与边界 | `ui_qt/*` | `12_qt` |
+| [13_gates.md](13_gates.md) | 13 | 架构纪律与验收门禁 | `scripts/*`, `tools/*` | `13_gates` |
+| [14_capstone.md](14_capstone.md) | 14 | 综合项目（改一个点 + 加一条判据） | 全程 | `14_capstone` |
 
 ## 阅读建议
 
-- 顺序即运行流程：第 1 课总览 → 第 2–3 课底座 → 第 4–6 课数据 → 第 7–9 课渲染 → 第 10–12 课交互
-  → 第 13 课外壳 → 第 14 课门禁。
+- 顺序即运行流程：第 0 课总览 → 第 1–2 课底座 → 第 3–5 课数据 → 第 6–8 课渲染 → 第 9–11 课交互
+  → 第 12 课外壳 → 第 13 课门禁。
 - 每课"④ 与其他功能的联系"一节都标了上游与下游，建议对照本课的流程图一起读。
 - 先读本课流程图，建立"主干"；再逐课下钻"枝叶"。
