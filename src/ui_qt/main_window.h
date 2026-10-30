@@ -34,9 +34,13 @@
 extern "C" {
 #include "ui/window.h"
 }
+#include "i18n/i18n.h"
 
 class QLineEdit;
 class QListWidget;
+class QPushButton;
+class QLabel;
+class QToolButton;
 class QLabel;
 class QTimer;
 class QToolButton;
@@ -92,6 +96,10 @@ public:
     void cycleDayNight();
     void applyDayNight();
 
+    /* 多语言：切换语言后重画所有常驻 Qt 控件文字（窗口标题/菜单/按钮/提示…）。
+     * C 核心自绘部分由 i18n_tr 在每帧渲染时按当前语言取串，无需此处处理。 */
+    void retranslateUi();
+
     /* 无头 UI 自检（--ui-test 用）：断言"搜索按钮→点击→输入框出现→Esc 收起"
      * 这条交互链，以及每个按钮都有悬停提示。
      * 全部通过返回 0，任一条不符返回非 0（并在 stderr 打印失败项）。
@@ -140,6 +148,8 @@ protected:
 
 private:
     void buildMenus();
+    void clearMenus();                    /* 清空 m_menuMain 等子菜单（语言切换后重建） */
+    void rebuildGridCtx();                /* 重建「坐标网」右键菜单（多语言文本） */
     void buildSearchOverlay();            /* 左上角：搜索按钮 + 搜索框浮层 */
     void buildRightCol();
     void buildStepsDock();
@@ -195,10 +205,29 @@ private:
     QWidget      *m_viaRows    = nullptr;   /* 滚动区里的行容器（每个途经点一行） */
     QToolButton  *m_viaBtn     = nullptr;   /* 右栏「途经点」按钮（可勾选，亮起=面板开/拾取模式） */
     bool          m_viaPanelOpen = false;   /* 途经点面板是否"逻辑上打开" */
+    /* 常驻文字引用（retranslateUi 重设）：轨迹/途经点面板的标题、按钮、提示 */
+    QLabel      *m_trackCap = nullptr;
+    QPushButton *m_trackImp = nullptr;
+    QPushButton *m_trackExp = nullptr;
+    QPushButton *m_trackFav = nullptr;
+    QLabel      *m_viaCap   = nullptr;
+    QLabel      *m_viaHint  = nullptr;
+    QPushButton *m_viaClr   = nullptr;
     QString       m_lastPick;            /* 最近一次选中的地点（按钮提示用） */
     int           m_step_count = -1;     /* 步骤面板增量刷新哨兵 */
     DownloadDialog *m_dlDlg = nullptr;    /* 下载地图对话框（懒创建） */
     bool          m_covPrompted = false; /* 区域外提示是否已弹过（回到有图才复位）*/
+
+    /* 右栏按钮（retranslateUi 需要重设悬停提示，故留引用） */
+    QToolButton  *m_zin = nullptr;
+    QToolButton  *m_zout = nullptr;
+    QToolButton  *m_loc = nullptr;
+    QToolButton  *m_dayBtn = nullptr;
+    QToolButton  *m_menuBtn = nullptr;
+    /* 语言子菜单动作（retranslateUi 同步勾选态） */
+    QAction      *m_langZAct = nullptr;
+    QAction      *m_langEAct = nullptr;
+    int           m_lang = 0;            /* 当前语言（0=中文 1=English），tick 监测变化 */
 };
 
 #endif

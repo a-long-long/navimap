@@ -224,7 +224,11 @@ endif()
 # 叶子库 2：navmap_geo（src/utils/geo.c + datum.c，纯叶子）
 add_library(navmap_geo STATIC src/utils/geo.c src/utils/datum.c)
 target_include_directories(navmap_geo PUBLIC ${CMAKE_SOURCE_DIR}/src)
-target_link_libraries(navmap_geo PUBLIC ${NM_LEAF_SYS_LIBS})
+target_link_libraries(navmap_geo PUBLIC ${NM_LEAF_SYS_LIBS} navmap_i18n)
+
+# 叶子库：navmap_i18n（极简多语言：以中文为原文，查表出英文，缺译回退中文）
+add_library(navmap_i18n STATIC src/i18n/i18n.c)
+target_include_directories(navmap_i18n PUBLIC ${CMAKE_SOURCE_DIR}/src)
 if(WIN32)
     target_compile_options(navmap_geo PUBLIC -Wno-format)
 endif()
@@ -317,7 +321,7 @@ target_include_directories(navmap_ui PUBLIC
     ${PROTOC_INCLUDE_DIRS} ${PROTOC_REAL_INCLUDE_DIR})
 target_link_libraries(navmap_ui PUBLIC
     navmap_render navmap_route navmap_search navmap_map navmap_settings
-    navmap_geo navmap_strpool navmap_plat navmap_mem)
+    navmap_geo navmap_strpool navmap_plat navmap_mem navmap_i18n)
 
 # navmap_settings：完整设置系统（极简 INI 存读 + 设置清单），依赖仅 plat。
 add_library(navmap_settings STATIC src/settings/settings.c)

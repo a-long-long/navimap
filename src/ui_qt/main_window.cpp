@@ -6,7 +6,11 @@
 #include "utils/datum.h"   /* 坐标系（大地基准）：枚举与标签 */
 #include "settings/settings.h"  /* settings_set_int：切基准后落盘 */
 #include "download_dialog.h"     /* 下载地图对话框（全球 Geofabrik 列表） */
+#include "i18n/i18n.h"            /* 多语言：i18n_tr / i18n_set_lang / I18nLang */
 #include <QMessageBox>
+
+/* 多语言便捷封装：以中文为 key，按当前语言返回串（默认中文原样返回）。 */
+static QString trc(const char *zh) { return QString::fromUtf8(i18n_tr(zh)); }
 #include <QDir>
 
 #include <QMenuBar>
@@ -87,7 +91,7 @@ static double pointSegM(double plat, double plon,
 MainWindow::MainWindow(App *a, QWidget *parent)
     : QMainWindow(parent), m_a(a)
 {
-    setWindowTitle(QStringLiteral("跑路了"));
+    setWindowTitle(trc("跑路了"));
     m_canvas = new MapCanvas(a, this);
     setCentralWidget(m_canvas);
 
@@ -834,23 +838,60 @@ static QAction *addAct(QMenu *m, const QString &text, QKeySequence sc,
     return act;
 }
 
-void MainWindow::buildMenus()
+void MainWindow::clearMenus()
 {
-    m_menuMain = new QMenu(QStringLiteral("菜单(&M)"), this);
-    addAct(m_menuMain, QStringLiteral("搜索地点"),
+    m_datumActs.clear();
+    m_gridTypeActs.clear();
+    m_gridDatumActs.clear();
+    if (m_gridCtx) { delete m_gridCtx; m_gridCtx = nullptr; m_gridShowAct = nullptr; }
+    if (m_menuMain) {
+        menuBar()->removeAction(m_menuMain->menuAction());
+        delete m_menuMain;
+        m_menuMain = nullptr;
+    }
+    m_setMenu = nullptr;
+    m_langZAct = m_langEAct = nullptr;
+}
+
+void MainWindow::rebuildGridCtx()
+{
+    if (!m_gridCtx) m_gridCtx = new QMenu(this);
+    m_gridCtx->clear();
+    m_gridDatumActs.clear();
+    m_gridShowAct = m_gridCtx->addAction(trc("显示坐标网"));
+    m_gridShowAct->setCheckable(true);
+    connect(m_gridShowAct, &QAction::triggered, this, [this]() {
+        if (m_canvas) m_canvas->setShowGrid(!m_canvas->isGridOn());
+    });
+    m_gridCtx->addSeparator();
+    QMenu *md = m_gridCtx->addMenu(trc("坐标系"));
+    for (int i = 0; i < (int)DATUM_COUNT; i++) {
+        QAction *a = md->addAction(QString::fromUtf8(datum_label((DatumId)i)));
+        a->setCheckable(true);
+        a->setData(i);
+        connect(a, &QAction::triggered, this, [this, i]() { setDatum(i); });
+        m_gridDatumActs.append(a);
+    }
+}
+
+void MainWindow::buildMenus()
+{    clearMenus();
+
+    m_menuMain = new QMenu(trc("菜单(&M)"), this);
+    addAct(m_menuMain, trc("搜索地点"),
            QKeySequence(Qt::CTRL | Qt::Key_F), this, [this]() {
                showSearch();                       /* 按钮触发式：先展开输入框 */
            });
-    addAct(m_menuMain, QStringLiteral("清除路线"), QKeySequence(Qt::Key_C), this,
+    addAct(m_menuMain, trc("清除路线"), QKeySequence(Qt::Key_C), this,
            [this]() { app_nav_clear(m_a); m_a->need_redraw = 1; });
-    addAct(m_menuMain, QStringLiteral("缩放到路线"), QKeySequence(Qt::Key_F), this,
+    addAct(m_menuMain, trc("缩放到路线"), QKeySequence(Qt::Key_F), this,
            [this]() { app_nav_fit(m_a); m_a->need_redraw = 1; });
-    addAct(m_menuMain, QStringLiteral("跟随车头"), QKeySequence(Qt::Key_T), this,
+    addAct(m_menuMain, trc("跟随车头"), QKeySequence(Qt::Key_T), this,
            [this]() { app_nav_sim_follow(m_a); });
-    addAct(m_menuMain, QStringLiteral("下载地图…"), QKeySequence(), this,
+    addAct(m_menuMain, trc("下载地图…"), QKeySequence(), this,
            [this]() { showDownloadDialog(); });
     m_menuMain->addSeparator();
-    addAct(m_menuMain, QStringLiteral("退出"), QKeySequence(Qt::CTRL | Qt::Key_Q), this,
+    addAct(m_menuMain, trc("退出"), QKeySequence(Qt::CTRL | Qt::Key_Q), this,
            [this]() { m_a->quit = 1; close(); });
     menuBar()->addMenu(m_menuMain);
     /* ★ 取消可见菜单栏：保留 menuBar 对象以便键盘快捷键（Ctrl+F/G/N/0-4 等）
@@ -859,33 +900,33 @@ void MainWindow::buildMenus()
     menuBar()->setVisible(false);
     menuBar()->setFixedHeight(0);
 
-    QMenu *msim = new QMenu(QStringLiteral("模拟导航(&S)"), this);
-    addAct(msim, QStringLiteral("开始 / 停止"), QKeySequence(Qt::Key_G), this,
+    QMenu *msim = new QMenu(trc("模拟导航(&S)"), this);
+    addAct(msim, trc("开始 / 停止"), QKeySequence(Qt::Key_G), this,
            [this]() { app_nav_sim_toggle(m_a); });
-    addAct(msim, QStringLiteral("注入偏航（触发重算）"), QKeySequence(Qt::Key_N), this,
+    addAct(msim, trc("注入偏航（触发重算）"), QKeySequence(Qt::Key_N), this,
            [this]() { app_nav_sim_deviate(m_a); });
-    addAct(msim, QStringLiteral("加速"), QKeySequence(Qt::Key_Period), this,
+    addAct(msim, trc("加速"), QKeySequence(Qt::Key_Period), this,
            [this]() { app_nav_sim_speed(m_a, 1); });
-    addAct(msim, QStringLiteral("减速"), QKeySequence(Qt::Key_Comma), this,
+    addAct(msim, trc("减速"), QKeySequence(Qt::Key_Comma), this,
            [this]() { app_nav_sim_speed(m_a, -1); });
 
-    QMenu *mview = new QMenu(QStringLiteral("视图(&V)"), this);
+    QMenu *mview = new QMenu(trc("视图(&V)"), this);
     for (int k = 0; k <= 4; k++) {
-        addAct(mview, QString::asprintf("道路细节 LOD %d", k), QKeySequence(), this,
+        addAct(mview, QString::asprintf(i18n_tr("道路细节 LOD %d"), k), QKeySequence(), this,
                [this, k]() { m_a->max_class = k; m_a->need_redraw = 1; });
     }
     mview->addSeparator();
-    addAct(mview, QStringLiteral("字号增大"), QKeySequence(Qt::Key_BracketRight), this,
+    addAct(mview, trc("字号增大"), QKeySequence(Qt::Key_BracketRight), this,
            [this]() { app_set_font_size(m_a, m_a->font_size + 1); m_a->need_redraw = 1; });
-    addAct(mview, QStringLiteral("字号减小"), QKeySequence(Qt::Key_BracketLeft), this,
+    addAct(mview, trc("字号减小"), QKeySequence(Qt::Key_BracketLeft), this,
            [this]() { app_set_font_size(m_a, m_a->font_size - 1); m_a->need_redraw = 1; });
     mview->addSeparator();
-    addAct(mview, QStringLiteral("浮层透明度…"), QKeySequence(), this,
+    addAct(mview, trc("浮层透明度…"), QKeySequence(), this,
            [this]() { showOverlayAlphaDialog(); });
 
     /* 坐标系（大地基准）：切基准后经纬网与读数按该基准呈现。勾选态与右栏
      * 坐标网按钮悬停提示里的"当前坐标系"同步（右栏没有下拉框了）。 */
-    QMenu *mdatum = new QMenu(QStringLiteral("坐标系(&C)"), this);
+    QMenu *mdatum = new QMenu(trc("坐标系(&C)"), this);
     for (int i = 0; i < DATUM_COUNT; i++) {
         QAction *act = mdatum->addAction(QString::fromUtf8(datum_label((DatumId)i)));
         act->setCheckable(true);
@@ -896,25 +937,25 @@ void MainWindow::buildMenus()
     }
 
     /* 轨迹 / 收藏：导入 GPX、导出全部、收藏中心点。 */
-    QMenu *mgpx = new QMenu(QStringLiteral("轨迹(&K)"), this);
-    addAct(mgpx, QStringLiteral("导入 GPX…"), QKeySequence(Qt::CTRL | Qt::Key_I), this,
+    QMenu *mgpx = new QMenu(trc("轨迹(&K)"), this);
+    addAct(mgpx, trc("导入 GPX…"), QKeySequence(Qt::CTRL | Qt::Key_I), this,
            [this]() { importGpx(); });
-    addAct(mgpx, QStringLiteral("导出全部为 GPX…"), QKeySequence(Qt::CTRL | Qt::Key_E), this,
+    addAct(mgpx, trc("导出全部为 GPX…"), QKeySequence(Qt::CTRL | Qt::Key_E), this,
            [this]() { exportGpx(); });
-    addAct(mgpx, QStringLiteral("收藏视口中心"), QKeySequence(Qt::CTRL | Qt::Key_D), this,
+    addAct(mgpx, trc("收藏视口中心"), QKeySequence(Qt::CTRL | Qt::Key_D), this,
            [this]() { favCenter(); });
-    addAct(mgpx, QStringLiteral("轨迹 / 收藏面板"), QKeySequence(), this,
+    addAct(mgpx, trc("轨迹 / 收藏面板"), QKeySequence(), this,
            [this]() { toggleTrackPanel(); });
 
     /* 地图信息显示 / 播报开关：原 SDL 设置面板承载的开关，#88 拆 SDL 壳后由 Qt 菜单接管。
      * 全部收进「设置」子菜单——等高线从「视图」移入、昼夜模式从主菜单移入，统一集散。
      * 均可勾选，勾选态与对应快捷键（语音=V 键、等高线=O 键、昼夜=D 键）同步。
      * 字段由 app_persist_settings 在退出时落盘，这里只切运行时值 + 请求重绘。 */
-    QMenu *mset = new QMenu(QStringLiteral("设置(&P)"), this);
+    QMenu *mset = new QMenu(trc("设置(&P)"), this);
     /* —— 地图信息显示开关（统一收进「设置」） —— */
     /* 坐标网细分刻度线：每格 5 等分，依附网格开关（网格关时不画）。 */
     {
-        QAction *act = mset->addAction(QStringLiteral("网格细分刻度"));
+        QAction *act = mset->addAction(trc("网格细分刻度"));
         act->setCheckable(true);
         act->setChecked(m_a->grid_subdiv);
         connect(act, &QAction::triggered, this, [this, act]() {
@@ -926,10 +967,10 @@ void MainWindow::buildMenus()
     /* 网格类型（与坐标系解耦）：经纬网 / 方里格，默认经纬网（WGS84）。
      * 两个 radio 动作，勾选态随 m_a->grid_type 同步；点击走 setGridType（持久化+重绘）。 */
     {
-        QMenu *mg = mset->addMenu(QStringLiteral("网格类型"));
+        QMenu *mg = mset->addMenu(trc("网格类型"));
         const char *names[2] = { "经纬网（度）", "方里格（公里）" };
         for (int i = 0; i < 2; i++) {
-            QAction *act = mg->addAction(QString::fromUtf8(names[i]));
+            QAction *act = mg->addAction(trc(names[i]));
             act->setCheckable(true);
             act->setChecked(m_a->grid_type == i);
             connect(act, &QAction::triggered, this, [this, i]() {
@@ -942,7 +983,7 @@ void MainWindow::buildMenus()
         }
     }
     {
-        QAction *act = mset->addAction(QStringLiteral("POI 图标"));
+        QAction *act = mset->addAction(trc("POI 图标"));
         act->setCheckable(true);
         act->setChecked(m_a->show_poi);
         connect(act, &QAction::triggered, this, [this, act]() {
@@ -952,7 +993,7 @@ void MainWindow::buildMenus()
         m_poiAct = act;
     }
     {
-        QAction *act = mset->addAction(QStringLiteral("地名标注"));
+        QAction *act = mset->addAction(trc("地名标注"));
         act->setCheckable(true);
         act->setChecked(m_a->show_labels);
         connect(act, &QAction::triggered, this, [this, act]() {
@@ -963,7 +1004,7 @@ void MainWindow::buildMenus()
     }
     /* 等高线：从「视图」菜单移入「设置」，勾选态与 O 键同步 */
     {
-        QAction *act = mset->addAction(QStringLiteral("等高线"));
+        QAction *act = mset->addAction(trc("等高线"));
         act->setCheckable(true);
         act->setChecked(m_a->show_contours);
         connect(act, &QAction::triggered, this, [this, act]() {
@@ -978,7 +1019,7 @@ void MainWindow::buildMenus()
      * 勾自动 → 运行时按视口中心+本地时间算昼/夜（核心每帧刷新）；勾夜间 → 强制夜间。
      * 都不勾 → 白天。勾选态与 D 键、右栏昼/夜按钮同步（见 applyDayNight）。 */
     {
-        QAction *act = mset->addAction(QStringLiteral("夜间模式"));
+        QAction *act = mset->addAction(trc("夜间模式"));
         act->setCheckable(true);
         act->setChecked(m_a->day_night_mode == 1);
         connect(act, &QAction::triggered, this, [this, act]() {
@@ -987,7 +1028,7 @@ void MainWindow::buildMenus()
         });
         m_dayNightAct = act;
 
-        QAction *aauto = mset->addAction(QStringLiteral("自动（日出日落）"));
+        QAction *aauto = mset->addAction(trc("自动（日出日落）"));
         aauto->setCheckable(true);
         aauto->setChecked(m_a->day_night_mode == 2);
         connect(aauto, &QAction::triggered, this, [this, aauto]() {
@@ -1001,7 +1042,7 @@ void MainWindow::buildMenus()
     mset->addSeparator();
     /* 语音播报：与 V 键同步 */
     {
-        QAction *act = mset->addAction(QStringLiteral("语音播报"));
+        QAction *act = mset->addAction(trc("语音播报"));
         act->setCheckable(true);
         act->setChecked(m_a->voice_on);
         connect(act, &QAction::triggered, this, [this, act]() {
@@ -1009,6 +1050,26 @@ void MainWindow::buildMenus()
             m_a->need_redraw = 1;
         });
         m_voiceAct = act;
+    }
+    /* 语言：在「设置」菜单里选（持久化到 settings.ini 的 lang 键）。 */
+    {
+        QMenu *mlang = mset->addMenu(trc("语言"));
+        m_langZAct = mlang->addAction(trc("中文"));
+        m_langZAct->setCheckable(true);
+        m_langZAct->setData(0);
+        m_langEAct = mlang->addAction(trc("English"));
+        m_langEAct->setCheckable(true);
+        m_langEAct->setData(1);
+        connect(mlang, &QMenu::triggered, this, [this](QAction *a) {
+            int v = a->data().toInt();
+            settings_set_int(m_a->cfg, "lang", v);
+            i18n_set_lang((I18nLang)v);
+            app_persist_settings(m_a);
+            m_lang = v;
+            /* 延到下一事件循环再重画：此刻正在 emit 语言菜单的 triggered，
+             * 直接 retranslateUi 会当场 delete 掉这个还在发信号的菜单，不安全。 */
+            QTimer::singleShot(0, this, [this]() { retranslateUi(); });
+        });
     }
     m_setMenu = mset;
 
@@ -1069,13 +1130,13 @@ void MainWindow::buildSearchOverlay()
      *   按钮用 IconButton：QToolButton::setIcon 的图标尺寸由 style 决定，
      *   会把图标画到按钮一角（实测只剩左上角）。 */
     IconButton *sbtn = new IconButton(Qt::IconKind::Search,
-                                      QStringLiteral("搜索地点或道路（Ctrl+F）"),
+                                      trc("搜索地点或道路（Ctrl+F）"),
                                       m_searchOverlay);
-    sbtn->setText(QStringLiteral("搜索"));
+    sbtn->setText(trc("搜索"));
     sbtn->setToolButtonStyle(Qt::ToolButtonTextBesideIcon);
     /* 带文字时按内容定宽（IconButton 默认是固定 36×36 的纯图标尺寸） */
     sbtn->setFixedHeight(IconButton::kSize);
-    sbtn->setFixedWidth(sbtn->fontMetrics().horizontalAdvance(QStringLiteral("搜索"))
+    sbtn->setFixedWidth(sbtn->fontMetrics().horizontalAdvance(trc("搜索"))
                         + IconButton::kIcon + 14 + 16);
     m_searchBtn = sbtn;
     connect(m_searchBtn, &QToolButton::clicked, this, [this]() { showSearch(); });
@@ -1083,7 +1144,7 @@ void MainWindow::buildSearchOverlay()
 
     /* --- 搜索输入框（默认隐藏，点按钮才显示）--- */
     m_search = new QLineEdit(m_searchOverlay);
-    m_search->setPlaceholderText(QStringLiteral("搜索地点、道路…"));
+    m_search->setPlaceholderText(trc("搜索地点、道路…"));
     m_search->setClearButtonEnabled(true);
     /* 输入框浮在地图上，宽度按画布比例给：窄屏时也不能挤到画布外 */
     m_search->setFixedWidth(320);
@@ -1136,8 +1197,8 @@ void MainWindow::hideSearch()
     m_search->clear();          /* clear() 会触发 textChanged → doSearch("") 收结果 */
     m_searchBtn->show();
     m_searchBtn->setToolTip(m_lastPick.isEmpty()
-        ? QStringLiteral("搜索地点或道路（Ctrl+F）")
-        : QStringLiteral("搜索地点或道路（Ctrl+F）\n最近选择：") + m_lastPick);
+        ? trc("搜索地点或道路（Ctrl+F）")
+        : trc("搜索地点或道路（Ctrl+F）\n最近选择：") + m_lastPick);
     layoutOverlays();       /* 输入框收起后浮层变窄 → 重新贴位 */
 }
 
@@ -1220,23 +1281,23 @@ void MainWindow::buildRightCol()
         return b;
     };
 
-    QToolButton *zin  = bigbtn(Qt::IconKind::ZoomIn,  QStringLiteral("放大"));
-    QToolButton *zout = bigbtn(Qt::IconKind::ZoomOut, QStringLiteral("缩小"));
-    QToolButton *loc  = bigbtn(Qt::IconKind::Locate,  QStringLiteral("定位到关注点"));
-    QToolButton *day  = bigbtn(Qt::IconKind::DayNight, QStringLiteral("昼 / 夜 切换"));
+    m_zin  = bigbtn(Qt::IconKind::ZoomIn,  trc("放大"));
+    m_zout = bigbtn(Qt::IconKind::ZoomOut, trc("缩小"));
+    m_loc  = bigbtn(Qt::IconKind::Locate,  trc("定位到关注点"));
+    m_dayBtn = bigbtn(Qt::IconKind::DayNight, trc("昼 / 夜 切换"));
 
-    connect(zin, &QToolButton::clicked, this, [this]() {
+    connect(m_zin, &QToolButton::clicked, this, [this]() {
         mv_zoom_at(&m_a->view, 0.5, m_a->view.w / 2, m_a->view.h / 2);
         mv_clamp_zoom(&m_a->view, 3.0, 19.0);
         m_a->need_redraw = 1;
     });
-    connect(zout, &QToolButton::clicked, this, [this]() {
+    connect(m_zout, &QToolButton::clicked, this, [this]() {
         mv_zoom_at(&m_a->view, -0.5, m_a->view.w / 2, m_a->view.h / 2);
         mv_clamp_zoom(&m_a->view, 3.0, 19.0);
         m_a->need_redraw = 1;
     });
-    connect(loc, &QToolButton::clicked, this, [this]() { locate(); });
-    connect(day, &QToolButton::clicked, this, [this]() {
+    connect(m_loc, &QToolButton::clicked, this, [this]() { locate(); });
+    connect(m_dayBtn, &QToolButton::clicked, this, [this]() {
         cycleDayNight();
     });
 
@@ -1245,20 +1306,20 @@ void MainWindow::buildRightCol()
      * 丢失了坐标系切换入口，J 先生指出的回归）；右键弹出菜单可**精确选坐标系** +
      * 开关网格。网格类型（经纬网/方里格，默认方里格）与坐标系已解耦，仍由「设置」菜单选。
      * 按钮只显示图标（不写"关"或坐标系名，避免遮挡右栏），状态由悬停提示承载。 */
-    m_gridBtn = bigbtn(Qt::IconKind::Grid, QStringLiteral("坐标网"));
+    m_gridBtn = bigbtn(Qt::IconKind::Grid, trc("坐标网"));
     m_gridBtn->setCheckable(false);   /* 左键是"循环切换"不是勾选开关 */
     m_gridBtn->setToolButtonStyle(Qt::ToolButtonIconOnly);
     m_gridBtn->setFixedSize(IconButton::kSize, IconButton::kSize);
     connect(m_gridBtn, &QToolButton::clicked, this, &MainWindow::cycleGridDatum);
     /* 右键菜单：恢复"精确切换坐标系 + 开关网格"入口 */
     m_gridCtx = new QMenu(this);
-    m_gridShowAct = m_gridCtx->addAction(QStringLiteral("显示坐标网"));
+    m_gridShowAct = m_gridCtx->addAction(trc("显示坐标网"));
     m_gridShowAct->setCheckable(true);
     connect(m_gridShowAct, &QAction::triggered, this, [this]() {
         if (m_canvas) m_canvas->setShowGrid(!m_canvas->isGridOn());
     });
     m_gridCtx->addSeparator();
-    QMenu *md = m_gridCtx->addMenu(QStringLiteral("坐标系"));
+    QMenu *md = m_gridCtx->addMenu(trc("坐标系"));
     for (int i = 0; i < (int)DATUM_COUNT; i++) {
         QAction *a = md->addAction(QString::fromUtf8(datum_label((DatumId)i)));
         a->setCheckable(true);
@@ -1280,7 +1341,7 @@ void MainWindow::buildRightCol()
 
     /* 轨迹 / 收藏面板开关（可勾选：亮起 = 面板开着）。
      * 和缩放/定位/昼夜那组"操作地图"的分开，与坐标网之间空一档。 */
-    m_trackBtn = bigbtn(Qt::IconKind::Track, QStringLiteral("轨迹 / 收藏（导入 GPX）"));
+    m_trackBtn = bigbtn(Qt::IconKind::Track, trc("轨迹 / 收藏（导入 GPX）"));
     m_trackBtn->setCheckable(true);
     connect(m_trackBtn, &QToolButton::toggled, this, [this](bool) {
         toggleTrackPanel();
@@ -1288,7 +1349,7 @@ void MainWindow::buildRightCol()
 
     /* 途经点面板开关（可勾选：亮起 = 面板开着 = 拾取模式开，点地图即加途经点）。
      * 与轨迹面板同一套路：浮层贴在右栏左边，避免遮挡地图主体。 */
-    m_viaBtn = bigbtn(Qt::IconKind::Via, QStringLiteral("途经点（面板开着时点地图添加）"));
+    m_viaBtn = bigbtn(Qt::IconKind::Via, trc("途经点（面板开着时点地图添加）"));
     m_viaBtn->setCheckable(true);
     connect(m_viaBtn, &QToolButton::toggled, this, [this](bool) {
         toggleViaPanel();
@@ -1297,25 +1358,25 @@ void MainWindow::buildRightCol()
     /* 菜单按钮：弹出与菜单栏同一份 QMenu。
        Qt 5.11 的 popup 只有 (pos, at) 两参，用 sizeHint 把菜单定位到按钮左侧，
        避免从最底钮向下弹出超出屏幕。 */
-    QToolButton *menu = bigbtn(Qt::IconKind::Menu, QStringLiteral("主菜单"));
-    connect(menu, &QToolButton::clicked, this, [this, menu]() {
+    m_menuBtn = bigbtn(Qt::IconKind::Menu, trc("主菜单"));
+    connect(m_menuBtn, &QToolButton::clicked, this, [this]() {
         if (!m_menuMain) return;
-        QPoint p = menu->mapToGlobal(menu->rect().topLeft());
+        QPoint p = m_menuBtn->mapToGlobal(m_menuBtn->rect().topLeft());
         p.rx() -= m_menuMain->sizeHint().width();
         m_menuMain->popup(p);
     });
 
-    vl->addWidget(zin);
-    vl->addWidget(zout);
+    vl->addWidget(m_zin);
+    vl->addWidget(m_zout);
     vl->addSpacing(6);
-    vl->addWidget(loc);
-    vl->addWidget(day);
+    vl->addWidget(m_loc);
+    vl->addWidget(m_dayBtn);
     vl->addSpacing(6);
     vl->addWidget(m_gridBtn);
     vl->addSpacing(6);
     vl->addWidget(m_trackBtn);
     vl->addWidget(m_viaBtn);
-    vl->addWidget(menu);
+    vl->addWidget(m_menuBtn);
 
     /* 外观：底板/边框/悬停高亮全部由 IconButton::paintEvent 自绘
        （所以这里**不设样式表** —— 样式表会盖掉自绘的底板）。 */
@@ -1483,12 +1544,12 @@ void MainWindow::updateDatumTip()
     const int gt = m_a ? m_a->grid_type : GRID_GK;
     const bool on = m_canvas && m_canvas->isGridOn();
     QString tip;
-    tip += QStringLiteral("坐标网：%1\n")
-               .arg(on ? QStringLiteral("开") : QStringLiteral("关"));
-    tip += QStringLiteral("坐标系：%1    网格：%2\n")
+    tip += trc("坐标网：%1\n")
+               .arg(on ? trc("开") : trc("关"));
+    tip += trc("坐标系：%1    网格：%2\n")
                .arg(QString::fromUtf8(datum_label(id)))
-               .arg(gt == GRID_GK ? QStringLiteral("方里格") : QStringLiteral("经纬网"));
-    tip += QStringLiteral("左键循环切换 · 右键菜单");
+               .arg(gt == GRID_GK ? trc("方里格") : trc("经纬网"));
+    tip += trc("左键循环切换 · 右键菜单");
     m_gridBtn->setToolTip(tip);
 }
 
@@ -1634,7 +1695,7 @@ void MainWindow::applyOverlayAlpha()
 void MainWindow::showOverlayAlphaDialog()
 {
     QDialog dlg(this);
-    dlg.setWindowTitle(QStringLiteral("浮层透明度"));
+    dlg.setWindowTitle(trc("浮层透明度"));
     QVBoxLayout *vlay = new QVBoxLayout(&dlg);
 
     QList<QSlider *> sliders;
@@ -1644,7 +1705,7 @@ void MainWindow::showOverlayAlphaDialog()
         QHBoxLayout *row = new QHBoxLayout();
         QString name = QString::fromUtf8(ovl_label(id));
         const bool inQt = (ovl_frontends(id) & OVL_FE_QT) != 0;
-        if (!inQt) name += QStringLiteral("（C 核心）");
+        if (!inQt) name += trc("（C 核心）");
         QLabel *lab = new QLabel(name);
         lab->setFixedWidth(150);
         QSlider *sl = new QSlider(Qt::Horizontal);
@@ -1655,7 +1716,7 @@ void MainWindow::showOverlayAlphaDialog()
         sl->setEnabled(inQt);
         QLabel *val = new QLabel(QString::number(m_a->ovl_alpha[i]) + QStringLiteral("%"));
         val->setFixedWidth(48);
-        QPushButton *def = new QPushButton(QStringLiteral("默认"));
+        QPushButton *def = new QPushButton(trc("默认"));
         def->setFixedWidth(52);
         connect(sl, &QSlider::valueChanged, this, [this, id, val](int v) {
             app_ovl_alpha_set(m_a, id, v);
@@ -1673,8 +1734,8 @@ void MainWindow::showOverlayAlphaDialog()
     }
 
     QHBoxLayout *foot = new QHBoxLayout();
-    QPushButton *resetAll = new QPushButton(QStringLiteral("全部恢复默认（75%）"));
-    QPushButton *close = new QPushButton(QStringLiteral("关闭"));
+    QPushButton *resetAll = new QPushButton(trc("全部恢复默认（75%）"));
+    QPushButton *close = new QPushButton(trc("关闭"));
     connect(resetAll, &QPushButton::clicked, this, [this, &sliders](bool) {
         app_ovl_alpha_reset(m_a);
         for (int i = 0; i < sliders.size(); i++) {
@@ -1717,9 +1778,9 @@ void MainWindow::toggleTrackPanel()
         QVBoxLayout *vl = new QVBoxLayout(m_trackPanel);
         vl->setContentsMargins(8, 8, 8, 8);
         vl->setSpacing(6);
-        QLabel *cap = new QLabel(QStringLiteral("轨迹 / 收藏"), m_trackPanel);
-        QFont f = cap->font(); f.setBold(true); cap->setFont(f);
-        vl->addWidget(cap);
+        m_trackCap = new QLabel(trc("轨迹 / 收藏"), m_trackPanel);
+        QFont f = m_trackCap->font(); f.setBold(true); m_trackCap->setFont(f);
+        vl->addWidget(m_trackCap);
 
         QScrollArea *sa = new QScrollArea(m_trackPanel);
         sa->setWidgetResizable(true);
@@ -1738,16 +1799,16 @@ void MainWindow::toggleTrackPanel()
         vl->addWidget(sa, 1);
 
         QHBoxLayout *hb = new QHBoxLayout();
-        QPushButton *bimp = new QPushButton(QStringLiteral("导入 GPX…"), m_trackPanel);
-        QPushButton *bexp = new QPushButton(QStringLiteral("导出全部…"), m_trackPanel);
-        QPushButton *bfav = new QPushButton(QStringLiteral("收藏中心点"), m_trackPanel);
-        hb->addWidget(bimp); hb->addWidget(bexp);
-        hb->addWidget(bfav);
+        m_trackImp = new QPushButton(trc("导入 GPX…"), m_trackPanel);
+        m_trackExp = new QPushButton(trc("导出全部…"), m_trackPanel);
+        m_trackFav = new QPushButton(trc("收藏中心点"), m_trackPanel);
+        hb->addWidget(m_trackImp); hb->addWidget(m_trackExp);
+        hb->addWidget(m_trackFav);
         hb->addStretch(1);
         vl->addLayout(hb);
-        connect(bimp, &QPushButton::clicked, this, [this]() { importGpx(); });
-        connect(bexp, &QPushButton::clicked, this, [this]() { exportGpx(); });
-        connect(bfav, &QPushButton::clicked, this, [this]() { favCenter(); });
+        connect(m_trackImp, &QPushButton::clicked, this, [this]() { importGpx(); });
+        connect(m_trackExp, &QPushButton::clicked, this, [this]() { exportGpx(); });
+        connect(m_trackFav, &QPushButton::clicked, this, [this]() { favCenter(); });
         m_trackPanel->hide();
     }
     /* ★ 用 m_trackPanelOpen 记"逻辑上开没开"，而不是问 isVisible()：
@@ -1813,9 +1874,9 @@ void MainWindow::refreshTrackPanel()
         hl->addWidget(lb, 1);
         /* 轨迹行（kind==0）多一个"贴合"按钮：把这条轨迹吸附到道路网（GPX 贴合路线） */
         if (kind == 0) {
-            QPushButton *snap = new QPushButton(QString::fromUtf8("贴合"), row);
+            QPushButton *snap = new QPushButton(QString::fromUtf8(i18n_tr("贴合")), row);
             snap->setFixedWidth(40);
-            snap->setToolTip(QString::fromUtf8("把这条轨迹吸附到道路网（贴合路线）"));
+            snap->setToolTip(QString::fromUtf8(i18n_tr("把这条轨迹吸附到道路网（贴合路线）")));
             QObject::connect(snap, &QPushButton::clicked, this, [this, idx]() {
                 int rc = app_gpx_snap(m_a, idx);
                 if (rc == 0) refreshTrackPanel();   /* 让面板状态（如提示）刷新 */
@@ -1824,7 +1885,7 @@ void MainWindow::refreshTrackPanel()
         }
         QPushButton *del = new QPushButton(QString::fromUtf8("×"), row);
         del->setFixedWidth(24);
-        del->setToolTip(QString::fromUtf8("删除这一条"));
+        del->setToolTip(QString::fromUtf8(i18n_tr("删除这一条")));
         QObject::connect(del, &QPushButton::clicked, this, [this, kind, idx]() {
             if (kind == 0) gpxDelTrack(idx); else gpxDelFav(idx);
         });
@@ -1839,22 +1900,21 @@ void MainWindow::refreshTrackPanel()
         const GpxTrack *t = &g->trk[i];
         QColor c(t->r, t->g, t->b);
         add_row(0, i,
-                QStringLiteral("%1  (%2 点)")
-                    .arg(QString::fromUtf8(t->name[0] ? t->name : "(未命名轨迹)"))
+                trc("%1  (%2 点)")
+                    .arg(QString::fromUtf8(t->name[0] ? t->name : i18n_tr("(未命名轨迹)")))
                     .arg(t->n),
-                QString::fromUtf8("双击定位到这条轨迹的起点"), &c);
+                QString::fromUtf8(i18n_tr("双击定位到这条轨迹的起点")), &c);
     }
     for (int i = 0; i < g->n_wpt; i++) {
         const GpxWpt *w = &g->wpt[i];
         add_row(1, i,
                 QString::fromUtf8("★ ") +
-                    QString::fromUtf8(w->name[0] ? w->name : "(未命名)"),
-                QString::fromUtf8("双击定位到这个收藏点"), nullptr);
+                    QString::fromUtf8(w->name[0] ? w->name : i18n_tr("(未命名)")),
+                QString::fromUtf8(i18n_tr("双击定位到这个收藏点")), nullptr);
     }
     if (g->n_trk == 0 && g->n_wpt == 0) {
         QLabel *hint = new QLabel(
-            QString::fromUtf8("（还没有轨迹：点「导入 GPX…」选一个 .gpx 文件，"
-                              "或用 Ctrl+D 收藏视口中心）"),
+            QString::fromUtf8(i18n_tr("（还没有轨迹：点「导入 GPX…」选一个 .gpx 文件，或用 Ctrl+D 收藏视口中心）")),
             m_trackRows);
         hint->setObjectName(QStringLiteral("trkempty"));
         hint->setWordWrap(true);
@@ -1906,14 +1966,14 @@ void MainWindow::toggleViaPanel()
         QVBoxLayout *vl = new QVBoxLayout(m_viaPanel);
         vl->setContentsMargins(8, 8, 8, 8);
         vl->setSpacing(6);
-        QLabel *cap = new QLabel(QStringLiteral("途经点"), m_viaPanel);
-        QFont f = cap->font(); f.setBold(true); cap->setFont(f);
-        vl->addWidget(cap);
-        QLabel *hint = new QLabel(
-            QStringLiteral("面板开着时，点地图即可按顺序添加途经点；路线会依次经过它们。"),
+        m_viaCap = new QLabel(trc("途经点"), m_viaPanel);
+        QFont f = m_viaCap->font(); f.setBold(true); m_viaCap->setFont(f);
+        vl->addWidget(m_viaCap);
+        m_viaHint = new QLabel(
+            trc("面板开着时，点地图即可按顺序添加途经点；路线会依次经过它们。"),
             m_viaPanel);
-        hint->setWordWrap(true);
-        vl->addWidget(hint);
+        m_viaHint->setWordWrap(true);
+        vl->addWidget(m_viaHint);
 
         QScrollArea *sa = new QScrollArea(m_viaPanel);
         sa->setWidgetResizable(true);
@@ -1929,13 +1989,13 @@ void MainWindow::toggleViaPanel()
         sa->setWidget(m_viaRows);
         vl->addWidget(sa, 1);
 
-        QPushButton *bclr = new QPushButton(QStringLiteral("清空"), m_viaPanel);
-        connect(bclr, &QPushButton::clicked, this, [this]() {
+        m_viaClr = new QPushButton(trc("清空"), m_viaPanel);
+        connect(m_viaClr, &QPushButton::clicked, this, [this]() {
             app_nav_clear_via(m_a);
             if (m_a->pick_a.have && m_a->pick_b.have) nav_request(m_a);
             refreshViaPanel();
         });
-        vl->addWidget(bclr);
+        vl->addWidget(m_viaClr);
         m_viaPanel->hide();
     }
     /* 用 m_viaPanelOpen 记"逻辑上开没开"，不靠 isVisible()（同轨迹面板）。 */
@@ -1978,12 +2038,12 @@ void MainWindow::refreshViaPanel()
         hl->addWidget(num);
         QLabel *lb = new QLabel(
             QStringLiteral("%1, %2").arg(p->lat, 0, 'f', 4).arg(p->lon, 0, 'f', 4), row);
-        lb->setToolTip(QStringLiteral("途经点 %1：%2, %3")
+        lb->setToolTip(trc("途经点 %1：%2, %3")
                            .arg(i + 1).arg(p->lat, 0, 'f', 5).arg(p->lon, 0, 'f', 5));
         hl->addWidget(lb, 1);
         QPushButton *del = new QPushButton(QString::fromUtf8("×"), row);
         del->setFixedWidth(24);
-        del->setToolTip(QString::fromUtf8("删除这个途经点"));
+        del->setToolTip(QString::fromUtf8(i18n_tr("删除这个途经点")));
         connect(del, &QPushButton::clicked, this, [this, i]() {
             app_nav_del_via(m_a, i);
             if (m_a->pick_a.have && m_a->pick_b.have) nav_request(m_a);
@@ -1994,7 +2054,7 @@ void MainWindow::refreshViaPanel()
     }
     if (n == 0) {
         QLabel *hint = new QLabel(
-            QStringLiteral("（还没有途经点：面板开着时点地图即可添加；也可先设好起点和终点）"),
+            trc("（还没有途经点：面板开着时点地图添加；也可先设好起点和终点）"),
             m_viaRows);
         hint->setObjectName(QStringLiteral("viaempty"));
         hint->setWordWrap(true);
@@ -2003,7 +2063,7 @@ void MainWindow::refreshViaPanel()
     /* 末尾若有路线，显示全程里程（途经点模式只给单方案，全程里程即 rr.total_m）。 */
     if (m_a->have_rr && m_a->rr.n > 1) {
         QLabel *tot = new QLabel(
-            QStringLiteral("全程约 %1 km").arg(m_a->rr.total_m / 1000.0, 0, 'f', 1), m_viaRows);
+            trc("全程约 %1 km").arg(m_a->rr.total_m / 1000.0, 0, 'f', 1), m_viaRows);
         tot->setObjectName(QStringLiteral("viatotal"));
         rl->addWidget(tot);
     }
@@ -2143,8 +2203,8 @@ void MainWindow::locateGpxRow(int kind, int idx)
 void MainWindow::importGpx()
 {
     QString path = QFileDialog::getOpenFileName(
-        this, QStringLiteral("导入 GPX 文件"), QString(),
-        QStringLiteral("GPX 轨迹 (*.gpx);;所有文件 (*)"));
+        this, trc("导入 GPX 文件"), QString(),
+        QString(trc("GPX 轨迹") + " (*.gpx);;" + trc("所有文件") + " (*)"));
     if (path.isEmpty()) return;
     int n = app_gpx_import(m_a, path.toUtf8().constData());
     if (n < 0)
@@ -2163,8 +2223,8 @@ void MainWindow::importGpx()
 void MainWindow::exportGpx()
 {
     QString path = QFileDialog::getSaveFileName(
-        this, QStringLiteral("导出全部为 GPX"), QStringLiteral("navimap-tracks.gpx"),
-        QStringLiteral("GPX 轨迹 (*.gpx);;所有文件 (*)"));
+        this, trc("导出全部为 GPX"), QStringLiteral("navimap-tracks.gpx"),
+        QString(trc("GPX 轨迹") + " (*.gpx);;" + trc("所有文件") + " (*)"));
     if (path.isEmpty()) return;
     if (!path.endsWith(QStringLiteral(".gpx"), Qt::CaseInsensitive))
         path += QStringLiteral(".gpx");
@@ -2200,7 +2260,7 @@ void MainWindow::gpxDelFav(int idx)
 void MainWindow::buildStepsDock()
 {
     m_steps = new QListWidget(this);
-    QDockWidget *dock = new QDockWidget(QStringLiteral("转向指令"), this);
+    QDockWidget *dock = new QDockWidget(trc("转向指令"), this);
     dock->setWidget(m_steps);
     dock->setFeatures(QDockWidget::NoDockWidgetFeatures);
     dock->setFixedWidth(280);
@@ -2252,6 +2312,73 @@ void MainWindow::tick()
     } else if (!outside) {
         m_covPrompted = false;
     }
+
+    /* 外部（如 C 核心自绘设置面板 / 直接改 settings）改了语言 → 同步刷新 Qt 控件。
+     * 正常路径（≡菜单「设置 ▸ 语言」）由 handler 自己走 retranslateUi；这里只兜底。 */
+    if ((int)i18n_lang() != m_lang) {
+        m_lang = (int)i18n_lang();
+        retranslateUi();
+    }
+}
+
+void MainWindow::retranslateUi()
+{
+    i18n_set_lang((I18nLang)m_lang);   /* 与 m_lang 对齐（外部改过也以它为准） */
+    setWindowTitle(trc("跑路了"));
+
+    /* 主菜单 / 各子菜单全部重建（buildMenus 内已统一走 trc）。
+     * clearMenus 会删掉坐标网右键菜单，故下面 rebuildGridCtx 一并重建。 */
+    buildMenus();
+    rebuildGridCtx();
+
+    /* 右栏按钮：仅图标 + 悬停提示，重设提示 */
+    if (m_zin)     m_zin->setToolTip(trc("放大"));
+    if (m_zout)    m_zout->setToolTip(trc("缩小"));
+    if (m_loc)     m_loc->setToolTip(trc("定位到关注点"));
+    if (m_dayBtn)  m_dayBtn->setToolTip(trc("昼 / 夜 切换"));
+    if (m_menuBtn) m_menuBtn->setToolTip(trc("主菜单"));
+    updateDatumTip();   /* 坐标网按钮提示随语言刷新 */
+
+    /* 搜索浮层 */
+    if (m_searchBtn) {
+        m_searchBtn->setText(trc("搜索"));
+        m_searchBtn->setFixedWidth(m_searchBtn->fontMetrics().horizontalAdvance(trc("搜索"))
+                                   + IconButton::kIcon + 14 + 16);
+        m_searchBtn->setToolTip(m_lastPick.isEmpty()
+            ? trc("搜索地点或道路（Ctrl+F）")
+            : trc("搜索地点或道路（Ctrl+F）\n最近选择：") + m_lastPick);
+    }
+    if (m_search) m_search->setPlaceholderText(trc("搜索地点、道路…"));
+
+    /* 轨迹 / 收藏、途经点 面板：仅当已打开时重画（避免凭空创建隐藏面板）。
+     * 静态标题/按钮用保存的引用重设，动态行由 refresh* 用 trc 重建。 */
+    if (m_trackPanelOpen && m_trackPanel) {
+        if (m_trackCap)  m_trackCap->setText(trc("轨迹 / 收藏"));
+        if (m_trackImp)  m_trackImp->setText(trc("导入 GPX…"));
+        if (m_trackExp)  m_trackExp->setText(trc("导出全部…"));
+        if (m_trackFav)  m_trackFav->setText(trc("收藏中心点"));
+        refreshTrackPanel();
+    }
+    if (m_viaPanelOpen && m_viaPanel) {
+        if (m_viaCap)   m_viaCap->setText(trc("途经点"));
+        if (m_viaHint)  m_viaHint->setText(trc("面板开着时，点地图即可按顺序添加途经点；路线会依次经过它们。"));
+        if (m_viaClr)   m_viaClr->setText(trc("清空"));
+        refreshViaPanel();
+    }
+
+    /* 转向指令侧栏标题 */
+    if (m_steps) {
+        if (QWidget *p = m_steps->parentWidget())
+            if (QDockWidget *d = qobject_cast<QDockWidget *>(p))
+                d->setWindowTitle(trc("转向指令"));
+    }
+
+    /* 下载对话框若开着，一并刷新 */
+    if (m_dlDlg) m_dlDlg->retranslateUi();
+
+    /* 语言勾选态 */
+    if (m_langZAct) m_langZAct->setChecked(m_lang == 0);
+    if (m_langEAct) m_langEAct->setChecked(m_lang == 1);
 }
 
 void MainWindow::showDownloadDialog()

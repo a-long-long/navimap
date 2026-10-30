@@ -8,6 +8,7 @@
 
 /* ---- 可编辑设置清单（面板按此渲染；顺序即显示顺序） ---- */
 const SettingMeta SETTINGS_SCHEMA[] = {
+    { "lang",        "语言",       ST_INT,  0, 0, 1, 1, "中文\0English\0" },
     { "day_night",   "昼夜模式",   ST_INT,  2, 0, 2, 1, "白天\0夜间\0自动(日出日落)\0" },
     { "show_panel",  "导航面板",   ST_BOOL, 1, 0, 1, 1, NULL },
     { "show_poi",    "POI 图标",   ST_BOOL, 1, 0, 1, 1, NULL },

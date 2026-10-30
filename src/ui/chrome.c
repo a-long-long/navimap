@@ -10,6 +10,7 @@
 #include "route/maneuver.h"
 #include "map/coverage.h"
 #include "settings/settings.h"
+#include "i18n/i18n.h"
 
 /* ===================== 前向声明 ===================== */
 static int  settings_hit(App *a, int x, int y);
@@ -40,6 +41,18 @@ typedef struct {
 
 #define IN(r,x,y) ((x) >= (r).x && (x) < (r).x + (r).w && \
                    (y) >= (r).y && (y) < (r).y + (r).h)
+
+/* 取 opts（'\0' 分隔）里的第 n 个串（通用，支持 >2 项枚举如坐标系四选）。 */
+static const char *opt_at(const char *opts, int n)
+{
+    int i = 0;
+    while (opts && *opts) {
+        if (i == n) return opts;
+        opts += strlen(opts) + 1;
+        i++;
+    }
+    return "";
+}
 
 static void layout(App *a, CLay *L)
 {
@@ -818,21 +831,21 @@ static void draw_settings_panel(Raster *rs, App *a)
     rfill(rs, panel.x, panel.y, panel.w, panel.h, 250, 251, 253, 252);
     rstroke(rs, panel.x, panel.y, panel.w, panel.h, 120, 128, 144, 255);
     if (!a->font) return;
-    rtext(a->font, rs, panel.x + 14, panel.y + 12, "设置", 30, 36, 48, 0);
+    rtext(a->font, rs, panel.x + 14, panel.y + 12, i18n_tr("设置"), 30, 36, 48, 0);
 
     for (int i = 0; i < SETTINGS_SCHEMA_N; i++) {
         const SettingMeta *m = &SETTINGS_SCHEMA[i];
         RectI row; settings_row_rect(&panel, i, &row);
         int ry = row.y + 6;
-        rtext(a->font, rs, row.x + 4, ry, m->label, 40, 46, 60, 0);
+        rtext(a->font, rs, row.x + 4, ry, i18n_tr(m->label), 40, 46, 60, 0);
 
         RectI l, r; settings_control_rects(&row, m->type == ST_BOOL, &l, &r);
         if (m->type == ST_BOOL) {
             int on = settings_get_bool(a->cfg, m->key, (int)m->def);
             rfill(rs, l.x, l.y, l.w, l.h, on ? 200 : 96, on ? 205 : 150, on ? 215 : 160, 255);
             rfill(rs, r.x, r.y, r.w, r.h, on ? 96 : 200, on ? 150 : 205, on ? 160 : 215, 255);
-            rtext(a->font, rs, l.x + l.w/2 - 8,  l.y + 5, "关", on?140:255, on?140:255, on?140:255, 0);
-            rtext(a->font, rs, r.x + r.w/2 - 8,  r.y + 5, "开", on?255:140, on?255:140, on?255:140, 0);
+            rtext(a->font, rs, l.x + l.w/2 - 8,  l.y + 5, i18n_tr("关"), on?140:255, on?140:255, on?140:255, 0);
+            rtext(a->font, rs, r.x + r.w/2 - 8,  r.y + 5, i18n_tr("开"), on?255:140, on?255:140, on?255:140, 0);
         } else {
             int cur = settings_get_int(a->cfg, m->key, (int)m->def);
             rfill(rs, l.x, l.y, l.w, l.h, 150, 160, 175, 255);
@@ -840,8 +853,7 @@ static void draw_settings_panel(Raster *rs, App *a)
             rtext(a->font, rs, l.x + 9, l.y + 4, "-", 40, 40, 40, 0);
             rtext(a->font, rs, r.x + 8, r.y + 4, "+", 40, 40, 40, 0);
             char val[64];
-            if (m->opts) snprintf(val, sizeof(val), "%s",
-                                  m->opts + (cur ? (int)strlen(m->opts) + 1 : 0));
+            if (m->opts) snprintf(val, sizeof(val), "%s", i18n_tr(opt_at(m->opts, cur)));
             else         snprintf(val, sizeof(val), "%d", cur);
             rtext(a->font, rs, l.x + l.w + 8, ry, val, 40, 46, 60, 0);
         }
@@ -851,17 +863,17 @@ static void draw_settings_panel(Raster *rs, App *a)
      * 16 个浮层塞进主面板会把面板撑到 800+ px（小窗口直接出屏）⇒ 单独开一页。 */
     {
         RectI row; settings_row_rect(&panel, SETTINGS_SCHEMA_N, &row);
-        rtext(a->font, rs, row.x + 4, row.y + 6, "浮层透明度…", 40, 46, 60, 0);
+        rtext(a->font, rs, row.x + 4, row.y + 6, i18n_tr("浮层透明度…"), 40, 46, 60, 0);
         RectI l, r; settings_control_rects(&row, 0, &l, &r);
         rfill(rs, l.x - 44, l.y, 108, l.h, 90, 130, 210, 255);
-        rtext(a->font, rs, l.x - 44 + 30, l.y + 4, "逐个设置", 255, 255, 255, 0);
+        rtext(a->font, rs, l.x - 44 + 30, l.y + 4, i18n_tr("逐个设置"), 255, 255, 255, 0);
     }
 
     RectI reset, close; settings_footer_rects(&panel, &reset, &close);
     rfill(rs, reset.x, reset.y, reset.w, reset.h, 220, 90, 80, 255);
     rfill(rs, close.x, close.y, close.w, close.h, 90, 130, 210, 255);
-    rtext(a->font, rs, reset.x + reset.w/2 - 24, reset.y + 7, "重置全部", 255, 255, 255, 0);
-    rtext(a->font, rs, close.x + close.w/2 - 16, close.y + 7, "关闭",    255, 255, 255, 0);
+    rtext(a->font, rs, reset.x + reset.w/2 - 24, reset.y + 7, i18n_tr("重置全部"), 255, 255, 255, 0);
+    rtext(a->font, rs, close.x + close.w/2 - 16, close.y + 7, i18n_tr("关闭"),    255, 255, 255, 0);
 }
 
 /* 设置面板命中：settings_open 时优先处理面板，吞掉地图平移。 */

@@ -33,6 +33,10 @@ public:
     DownloadDialog(const QString &sourcesDir, const QString &repoRoot,
                    QWidget *parent = nullptr);
 
+    /* 语言切换后重设所有常驻文字（标题/表头/按钮/勾选框），并刷新整棵树
+     * （叶子/枝名 + ✓/· 后缀跟随当前语言）。MainWindow::retranslateUi 在切语言时调用。 */
+    void retranslateUi();
+
     /* 预选一个地区（按 Geofabrik 叶子名，如 "hebei"）：展开祖先、选中叶子并滚动到
      * 可见处。供"浏览到无图区 → 反查省 → 一键下载该地区"使用。
      * 返回是否找到；找不到时对话框保持原样（调用方据此决定提示语）。 */

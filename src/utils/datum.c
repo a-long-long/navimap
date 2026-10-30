@@ -73,6 +73,7 @@
  */
 
 #include "utils/datum.h"
+#include "i18n/i18n.h"
 
 #include <math.h>
 #include <stdio.h>
@@ -335,10 +336,10 @@ void datum_wgs84_to(DatumId id, double lat, double lon, double h,
 const char *datum_short(DatumId id)
 {
     switch (id) {
-        case DATUM_WGS84:    return "WGS84";
-        case DATUM_CGCS2000: return "CGCS2000";
-        case DATUM_BJ54:     return "北京54";
-        case DATUM_XA80:     return "西安80";
+        case DATUM_WGS84:    return i18n_tr("WGS84");
+        case DATUM_CGCS2000: return i18n_tr("CGCS2000");
+        case DATUM_BJ54:     return i18n_tr("北京54");
+        case DATUM_XA80:     return i18n_tr("西安80");
         default:             return "?";
     }
 }
@@ -346,10 +347,10 @@ const char *datum_short(DatumId id)
 const char *datum_label(DatumId id)
 {
     switch (id) {
-        case DATUM_WGS84:    return "WGS84（默认）";
-        case DATUM_CGCS2000: return "CGCS2000（2000国家大地坐标系）";
-        case DATUM_BJ54:     return "北京 1954";
-        case DATUM_XA80:     return "西安 1980";
+        case DATUM_WGS84:    return i18n_tr("WGS84（默认）");
+        case DATUM_CGCS2000: return i18n_tr("CGCS2000（2000国家大地坐标系）");
+        case DATUM_BJ54:     return i18n_tr("北京 1954");
+        case DATUM_XA80:     return i18n_tr("西安 1980");
         default:             return "?";
     }
 }

@@ -17,6 +17,7 @@
 #include "utils/datum.h"
 #include "utils/plat.h"
 #include "settings/settings.h"
+#include "i18n/i18n.h"
 
 /* ---- 模拟导航 ----
  * 倍速档：为什么要分档而不是随便填——软件渲染一帧几百毫秒，倍速太大时
@@ -58,6 +59,7 @@ int app_init(App *a, const char *graph_dir, int w, int h,
        从而满足"命令行与环境变量优先级高于配置文件"。 */
     a->cfg = settings_create();
     if (a->cfg) settings_load(a->cfg, NULL);
+    i18n_set_lang((I18nLang)settings_get_int(a->cfg, "lang", 0));
     a->max_class = settings_get_int(a->cfg, "max_class", 4);
     a->need_redraw = 1;
     a->show_panel = settings_get_bool(a->cfg, "show_panel", 1);
@@ -301,6 +303,7 @@ int app_set_font_size(App *a, int size)
 void app_apply_settings(App *a)
 {
     if (!a || !a->cfg) return;
+    i18n_set_lang((I18nLang)settings_get_int(a->cfg, "lang", 0));
     {
         int dm = settings_get_int(a->cfg, "day_night", 2);
         a->day_night_mode = (dm >= 0 && dm <= 2) ? dm : 2;
