@@ -505,6 +505,16 @@ if(QT)
         src/ui_qt/qt_icons.cpp
         src/ui_qt/main_window.cpp
         src/ui_qt/download_dialog.cpp)
+    # 应用图标：作为 Qt 资源嵌入二进制（资源路径 :/app_icon.png），由
+    # qt_main.cpp 的 QApplication::setWindowIcon 挂到所有窗口/任务栏。
+    # Qt5/Qt6 各自提供对应的资源编译宏，这里按 QT 实测选择。
+    set(NAVIMAP_QT_QRC ${CMAKE_CURRENT_SOURCE_DIR}/src/ui_qt/resources.qrc)
+    if(QT STREQUAL "Qt6")
+        qt_add_resources(NAVIMAP_QT_RC_GEN ${NAVIMAP_QT_QRC})
+    else()
+        qt5_add_resources(NAVIMAP_QT_RC_GEN ${NAVIMAP_QT_QRC})
+    endif()
+    target_sources(navmap_qt PRIVATE ${NAVIMAP_QT_RC_GEN})
     target_link_libraries(navmap_qt PRIVATE navimap_core ${QT}::Widgets ${QT}::Network Threads::Threads)
     message(STATUS "Qt 前端: 启用 (${QT} ${${QT}Widgets_VERSION})")
 else()

@@ -19,6 +19,7 @@
 #include <QFileDialog>
 #include <QMessageBox>
 #include <QDir>
+#include <QIcon>
 
 #include <cstdio>
 #include <cstring>
@@ -207,7 +208,10 @@ int main(int argc, char **argv)
     }
 
     QApplication app(argc, argv);
-    app.setApplicationName(QStringLiteral("NavMap"));
+    app.setApplicationName(QStringLiteral("跑路了"));
+    /* 应用图标（嵌入为 Qt 资源 :/app_icon.png，见 src/ui_qt/resources.qrc）。
+     * 挂在 QApplication 上即对所有顶层窗口/任务栏生效。 */
+    app.setWindowIcon(QIcon(QStringLiteral(":/app_icon.png")));
 
     /* ★ Qt 控件的中文字体：Qt 自己画控件文字，走 Qt 的字体系统；地图上的文字
      *   是 C 侧 stb_truetype 画的（两套互不相干）。不显式给 Qt 中文字体的话，
@@ -269,7 +273,7 @@ int main(int argc, char **argv)
             }
         }
         if (chosen.isEmpty()) {
-            QMessageBox::critical(nullptr, QStringLiteral("NavMap"),
+            QMessageBox::critical(nullptr, QStringLiteral("跑路了"),
                 QStringLiteral("未找到地图数据。请用 start.bat 启动，或在命令行加 --graph=<地图目录>。"));
             return 1;
         }
@@ -285,7 +289,7 @@ int main(int argc, char **argv)
      * 跳过自绘 chrome（由 Qt 控件承担）。 */
     App a;
     if (app_init(&a, resolved, w, h, font, font_size, &ab) != 0) {
-        QMessageBox::critical(nullptr, QStringLiteral("NavMap"),
+        QMessageBox::critical(nullptr, QStringLiteral("跑路了"),
             QString::fromUtf8(resolved) +
             QStringLiteral("\n地图加载失败，请检查路径与数据完整性（需含 nodes.bin 或省子目录）。"));
         return 1;

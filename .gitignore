@@ -31,6 +31,8 @@ docs/shots/
 *.bmp
 *.png
 !docs/**/*.png
+# 应用图标是源码资源（被 resources.qrc 嵌入二进制），不受上面的 *.png 忽略影响
+!src/ui_qt/app_icon.png
 
 # ===== 编译中间件 =====
 *.o

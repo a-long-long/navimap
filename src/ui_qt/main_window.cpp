@@ -87,7 +87,7 @@ static double pointSegM(double plat, double plon,
 MainWindow::MainWindow(App *a, QWidget *parent)
     : QMainWindow(parent), m_a(a)
 {
-    setWindowTitle(QStringLiteral("NavMap"));
+    setWindowTitle(QStringLiteral("跑路了"));
     m_canvas = new MapCanvas(a, this);
     setCentralWidget(m_canvas);
 
