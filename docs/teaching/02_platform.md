@@ -30,7 +30,7 @@
 | `strpool.h` | `StrPool` 不透明类型与接口声明 | `strpool.h:9-23` |
 | `strpool.c` | `struct StrPool`、`fnv1a`、`sp_intern` / `sp_get` / `sp_serialize` | `strpool.c:7-17,19-24,72-110,117-121,126-137` |
 
-> 注：`nm_proc_spawn`、`nm_tts_speak` 本课只展示其**声明**（见 3.1），完整实现（常驻子进程 + 管道、离线 TTS 队列与后台朗读线程）为控制篇幅未全文展示，可在 `src/utils/plat.c:587` 与 `src/utils/plat.c:1127` 查阅。
+> 注：`nm_proc_spawn`、`nm_tts_speak` 的**声明**见 3.1；其完整实现（常驻子进程 + 管道、离线 TTS 队列与后台朗读线程，对应 `plat.c:587-1185`）见 3.2 节末尾的完整源码。
 
 ## 三、完整实现代码
 
@@ -454,7 +454,609 @@ const char *const *nm_font_candidates(size_t *n)
 }
 ```
 
-> 注：`nm_proc_spawn`、`nm_tts_speak`（常驻子进程 + 管道、离线 TTS 队列与后台朗读线程，约 `plat.c:587-1185`）为控制篇幅仅展示声明，可在 `src/utils/plat.c` 按行号查阅。
+> 完整源码 · `src/utils/plat.c:587-1185`（常驻子进程 + 管道、离线 TTS 队列与后台朗读线程）
+
+```c
+NmProc *nm_proc_spawn(const char *exe, char *const argv[])
+{
+    if (!exe || !argv || !argv[0]) return NULL;
+#ifdef _WIN32
+    /* CreateProcess 要一整条可写的命令行；路径可能带空格（用户目录）。 */
+    char cmd[32768];
+    size_t off = 0;
+    for (int i = 0; argv[i]; i++) {
+        int quote = (strpbrk(argv[i], " \t") != NULL);
+        int k = snprintf(cmd + off, sizeof(cmd) - off, "%s%s%s%s",
+                         (i ? " " : ""), (quote ? "\"" : ""), argv[i], (quote ? "\"" : ""));
+        if (k < 0 || (size_t)k >= sizeof(cmd) - off) return NULL;
+        off += (size_t)k;
+    }
+
+    SECURITY_ATTRIBUTES sa;
+    memset(&sa, 0, sizeof sa);
+    sa.nLength = sizeof sa;
+    sa.bInheritHandle = TRUE;
+
+    HANDLE rd = NULL, wr = NULL;
+    if (!CreatePipe(&rd, &wr, &sa, 0)) return NULL;
+    /* ★ 读端 rd **必须可继承** —— 它要作为子进程的 hStdInput 传下去
+     *   （设成不可继承的话，子进程拿到的是无效 stdin ⇒ 立刻读到 EOF 退出，
+     *   父进程随后 WriteFile 得 ERROR_NO_DATA(232)）。
+     *   写端 wr 反过来必须**不可继承**：否则子进程里也有一份写端，
+     *   管道永远不会收到 EOF，子进程的读循环就永远等不到结束。 */
+    SetHandleInformation(wr, HANDLE_FLAG_INHERIT, 0);
+
+    /* 子进程的 stdout/stderr 接到 NUL：防止管道写满造成死锁。
+     * ★ NUL 也必须**不可继承**（bInheritHandle=FALSE）—— 它不是标准句柄，
+     *   继承它只是泄漏句柄。 */
+    HANDLE nul = CreateFileA("NUL", GENERIC_WRITE, FILE_SHARE_WRITE | FILE_SHARE_READ,
+                              NULL, OPEN_EXISTING, 0, NULL);
+
+    STARTUPINFOA si;
+    PROCESS_INFORMATION pi;
+    memset(&si, 0, sizeof si); si.cb = sizeof si;
+    memset(&pi, 0, sizeof pi);
+    si.dwFlags = STARTF_USESTDHANDLES;
+    si.hStdInput = rd;
+    si.hStdOutput = nul;
+    si.hStdError  = nul;
+
+    if (!CreateProcessA(exe, cmd, NULL, NULL, TRUE, 0, NULL, NULL, &si, &pi)) {
+        CloseHandle(rd); CloseHandle(wr);
+        if (nul != INVALID_HANDLE_VALUE) CloseHandle(nul);
+        return NULL;
+    }
+    /* 父进程不需要读端与 nul；子进程也不需要写端。 */
+    CloseHandle(rd);
+    if (nul != INVALID_HANDLE_VALUE) CloseHandle(nul);
+
+    NmProc *p = (NmProc *)malloc(sizeof *p);
+    if (!p) { CloseHandle(pi.hProcess); CloseHandle(pi.hThread); CloseHandle(wr); return NULL; }
+    p->hProc = pi.hProcess;
+    p->hThread = pi.hThread;
+    p->hIn = wr;
+    p->closed = 0;
+    p->code = 0;
+    return p;
+#else
+    int fds[2];
+    if (pipe(fds) != 0) return NULL;
+    fflush(NULL);
+    pid_t pid = fork();
+    if (pid < 0) { close(fds[0]); close(fds[1]); return NULL; }
+    if (pid == 0) {
+        close(fds[1]);
+        dup2(fds[0], STDIN_FILENO);
+        close(fds[0]);
+        /* stdout/stderr 丢到 /dev/null：防止管道写满造成死锁。 */
+        int dn = open("/dev/null", O_WRONLY);
+        if (dn >= 0) { dup2(dn, STDOUT_FILENO); dup2(dn, STDERR_FILENO); close(dn); }
+        execv(exe, argv);
+        _exit(127);
+    }
+    close(fds[0]);
+    NmProc *p = (NmProc *)malloc(sizeof *p);
+    if (!p) { close(fds[1]); kill(pid, SIGKILL); waitpid(pid, NULL, 0); return NULL; }
+    p->pid = pid;
+    p->fd = fds[1];
+    p->closed = 0;
+    p->status = 0;
+    return p;
+#endif
+}
+
+int nm_proc_write(NmProc *p, const char *text)
+{
+    if (!p || !text || p->closed) return -1;
+#ifdef _WIN32
+    DWORD n = 0;
+    if (!WriteFile(p->hIn, text, (DWORD)strlen(text), &n, NULL)) return -1;
+    return (int)n;
+#else
+    size_t len = strlen(text);
+    size_t off = 0;
+    while (off < len) {
+        ssize_t k = write(p->fd, text + off, len - off);
+        if (k <= 0) return -1;
+        off += (size_t)k;
+    }
+    return (int)off;
+#endif
+}
+
+int nm_proc_alive(NmProc *p)
+{
+    if (!p) return 0;
+#ifdef _WIN32
+    if (p->closed) return 0;
+    return WaitForSingleObject(p->hProc, 0) == WAIT_TIMEOUT ? 1 : 0;
+#else
+    if (p->closed) return 0;
+    int st = 0;
+    pid_t r = waitpid(p->pid, &st, WNOHANG);
+    return (r == 0) ? 1 : 0;
+#endif
+}
+
+int nm_proc_close(NmProc *p)
+{
+    if (!p) return -1;
+#ifdef _WIN32
+    if (!p->closed) { CloseHandle(p->hIn); p->hIn = NULL; p->closed = 1; }
+    WaitForSingleObject(p->hProc, INFINITE);
+    DWORD code = 0;
+    if (!GetExitCodeProcess(p->hProc, &code)) code = (DWORD)-1;
+    CloseHandle(p->hProc);
+    CloseHandle(p->hThread);
+    p->code = (int)code;
+    int rc = (int)code;
+    free(p);
+    return rc;
+#else
+    if (!p->closed) { close(p->fd); p->fd = -1; p->closed = 1; }
+    int status = 0;
+    while (waitpid(p->pid, &status, 0) < 0 && errno == EINTR) { }
+    p->status = status;
+    int rc = WIFEXITED(status) ? WEXITSTATUS(status) : -1;
+    free(p);
+    return rc;
+#endif
+}
+
+uint64_t nm_now_ms(void)
+{
+#ifdef _WIN32
+    static LARGE_INTEGER freq;
+    static int freq_ok = -1;
+    if (freq_ok < 0) freq_ok = QueryPerformanceFrequency(&freq) ? 1 : 0;
+    if (!freq_ok) return (uint64_t)GetTickCount64();
+    LARGE_INTEGER c;
+    QueryPerformanceCounter(&c);
+    return (uint64_t)((c.QuadPart * 1000) / freq.QuadPart);
+#else
+    struct timespec ts;
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    return (uint64_t)ts.tv_sec * 1000u + (uint64_t)(ts.tv_nsec / 1000000u);
+#endif
+}
+
+uint64_t nm_now_us(void)
+{
+#ifdef _WIN32
+    static LARGE_INTEGER freq;
+    static int freq_ok = -1;
+    if (freq_ok < 0) freq_ok = QueryPerformanceFrequency(&freq) ? 1 : 0;
+    if (!freq_ok) return (uint64_t)GetTickCount64() * 1000u;
+    LARGE_INTEGER c;
+    QueryPerformanceCounter(&c);
+    return (uint64_t)((c.QuadPart * 1000000) / freq.QuadPart);
+#else
+    struct timespec ts;
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    return (uint64_t)ts.tv_sec * 1000000u + (uint64_t)(ts.tv_nsec / 1000u);
+#endif
+}
+
+void nm_sleep_ms(unsigned ms)
+{
+#ifdef _WIN32
+    Sleep(ms);
+#else
+    struct timespec ts;
+    ts.tv_sec  = (time_t)(ms / 1000u);
+    ts.tv_nsec = (long)(ms % 1000u) * 1000000L;
+    nanosleep(&ts, NULL);
+#endif
+}
+
+double nm_peak_rss_mb(void)
+{
+#ifdef _WIN32
+    PROCESS_MEMORY_COUNTERS pmc;
+    if (!GetProcessMemoryInfo(GetCurrentProcess(), &pmc, sizeof(pmc))) return 0;
+    return (double)pmc.PeakWorkingSetSize / (1024.0 * 1024.0);
+#elif defined(__APPLE__)
+    struct rusage ru;                   /* macOS 的 ru_maxrss 是字节 */
+    if (getrusage(RUSAGE_SELF, &ru) != 0) return 0;
+    return (double)ru.ru_maxrss / (1024.0 * 1024.0);
+#else
+    struct rusage ru;                   /* Linux 的 ru_maxrss 是 KB */
+    if (getrusage(RUSAGE_SELF, &ru) != 0) return 0;
+    return (double)ru.ru_maxrss / 1024.0;
+#endif
+}
+
+/* ======================= 语音播报（离线 TTS） =======================
+ *
+ * 抄写自 OsmAnd：nav-desktop/src/main/osmand/nav/route/Speech.java（2026-10-25）。
+ *
+ * ★ 为什么必须改成"常驻会话"：原来的实现每播一句就**新起一个 powershell.exe**，
+ *   实测启动开销 0.5~1.5 秒。导航播报是**有 deadlines 的**（"前方 200 米左转"
+ *   必须在车到路口前说出来），等 1 秒才出声，车早开过去了 —— 播报等于没有。
+ *   OsmAnd 的做法是：起**一个**常驻 PowerShell 会话，之后逐行把文本喂给它的
+ *   stdin，由它循环 Speak。这样每句的实际延迟只有合成时间（几十毫秒）。
+ *
+ * 结构（对齐 OsmAnd）：
+ *   · 队列：所有文本先入队，后台线程**串行**朗读（OsmAnd: LinkedBlockingQueue）。
+ *     串行很重要：两句同时播会互相盖掉，听感是"半句叠半句"。
+ *   · 后端探测顺序抄 OsmAnd：Windows → SAPI 常驻会话；
+ *     POSIX → spd-say > espeak-ng > espeak > pico2wave > festival。
+ *   · 会话起不来 ⇒ 自动回退"每句一个进程"的旧模式（OsmAnd: sessionBroken）。
+ *   · 任何异常都不往上传：导航照常工作，只是不出声（OsmAnd: catch Throwable）。
+ * ------------------------------------------------------------------ */
+
+/* ---- DRYRUN：无头自测用，把"发声"重定向到文件（确定性） ---- */
+static int tts_dryrun_write(const char *text)
+{
+    const char *dry = getenv("NAVIMAP_TTS_DRYRUN");
+    if (!dry || !*dry) return 0;
+    FILE *f = fopen(dry, "ab");
+    if (!f) return 0;
+    fputs(text, f);
+    fputc('\n', f);
+    fclose(f);
+    return 1;
+}
+
+/* ---- 单句模式（回退路径）：Windows 走临时 .ps1，POSIX 走命令行 TTS ---- */
+static void tts_speak_once(const char *text)
+{
+#ifdef _WIN32
+    char ps[1024];
+    if (nm_find_in_path("powershell.exe", ps, sizeof(ps)) != 0) return;
+    char tmpl[1024];
+    int k = snprintf(tmpl, sizeof(tmpl), "%s/navimap_tts_%d_%llu.ps1",
+                     nm_temp_dir(), (int)nm_get_pid(),
+                     (unsigned long long)nm_now_ms());
+    if (k < 0 || (size_t)k >= sizeof(tmpl)) return;
+    FILE *f = fopen(tmpl, "wb");
+    if (!f) return;
+    static const unsigned char bom[3] = { 0xEF, 0xBB, 0xBF };
+    fwrite(bom, 1, 3, f);
+    fputs("Add-Type -AssemblyName System.Speech\n", f);
+    fputs("$s = New-Object System.Speech.Synthesis.SpeechSynthesizer\n", f);
+    fputs("$s.Speak('", f);
+    for (const char *p = text; *p; p++) {       /* 单引号转义为两个单引号 */
+        if (*p == '\'') fputs("''", f);
+        else            fputc(*p, f);
+    }
+    fputs("')\n", f);
+    fclose(f);
+    char *argv[] = { ps, "-NoProfile", "-NonInteractive", "-File", tmpl, NULL };
+    int code = 0;
+    nm_spawn_wait(ps, argv, &code);
+    nm_unlink(tmpl);
+#else
+    char exe[1024];
+    if (nm_find_in_path("spd-say", exe, sizeof(exe)) == 0) {
+        char *argv[] = { exe, "-l", "zh", "-t", (char *)text, NULL };
+        int c = 0; nm_spawn_wait(exe, argv, &c); return;
+    }
+    if (nm_find_in_path("espeak-ng", exe, sizeof(exe)) == 0) {
+        char *argv[] = { exe, "-v", "zh", "-s", "160", (char *)text, NULL };
+        int c = 0; nm_spawn_wait(exe, argv, &c); return;
+    }
+    if (nm_find_in_path("espeak", exe, sizeof(exe)) == 0) {
+        char *argv[] = { exe, "-v", "zh", "-s", "160", (char *)text, NULL };
+        int c = 0; nm_spawn_wait(exe, argv, &c); return;
+    }
+    if (nm_find_in_path("say", exe, sizeof(exe)) == 0) {
+        char *argv[] = { exe, (char *)text, NULL };
+        int c = 0; nm_spawn_wait(exe, argv, &c); return;
+    }
+#endif
+    /* 没有任何引擎：静默（无头环境不报错） */
+}
+
+/* ---- 常驻会话（Windows）：一个 powershell 进程，逐行喂文本 ---- */
+#ifdef _WIN32
+static NmProc *g_sapi = NULL;      /* 常驻会话（NULL = 还没起或已坏） */
+static char     g_sapi_script[1024]; /* 脚本文件路径（NULL 串 = 还没写） */
+
+/* ★ 为什么用 `-File <脚本>` 而不是 `-Command <脚本>`：
+ *   `-Command` 模式下 PowerShell **引擎自己也在读 stdin**（它要知道命令还有没有
+ *   下一行），与脚本里的 `[Console]::In.ReadLine()` 抢同一个流 ⇒ 实测第一句能播、
+ *   第二句卡死（引擎把第二行吞了）。
+ *   `-File` 模式下引擎从**文件**读脚本，stdin 完全归脚本自己用 ⇒ 不抢。
+ *   （OsmAnd 用的是 `-Command -`，它能工作是因为它的脚本是一行 while，
+ *     引擎读脚本时只取一行；但那个写法仍然依赖引擎的读取时机，不稳。）
+ *
+ * 脚本内容抄 OsmAnd 的 SapiBackend.ensureSession：
+ *   设 UTF8 编码（否则中文进管道按 ANSI 码页解码成乱码）、
+ *   建 SpeechSynthesizer、选 zh-CN 声音、循环 ReadLine + Speak。 */
+static const char *sapi_script_body(void)
+{
+    return
+        "[Console]::InputEncoding = [System.Text.Encoding]::UTF8\n"
+        "[Console]::OutputEncoding = [System.Text.Encoding]::UTF8\n"
+        "Add-Type -AssemblyName System.Speech\n"
+        "$v = New-Object System.Speech.Synthesis.SpeechSynthesizer\n"
+        "$v.Rate = 1\n"
+        "try { $v.SelectVoiceByHints([System.Speech.Synthesis.VoiceGender]::NotSet,"
+        "[System.Speech.Synthesis.VoiceAge]::NotSet,0,"
+        "[System.Globalization.CultureInfo]::new('zh-CN')) } catch { }\n"
+        "while ($true) {\n"
+        "  $l = [Console]::In.ReadLine()\n"
+        "  if ($null -eq $l) { break }\n"
+        "  if ($l -ne '') { try { $v.Speak($l) } catch { } }\n"
+        "}\n";
+}
+
+/* 写脚本文件（UTF-8 BOM，否则 PowerShell 按 ANSI 读脚本本身也会乱）。 */
+static int sapi_script_write(void)
+{
+    if (g_sapi_script[0]) return 1;
+    int k = snprintf(g_sapi_script, sizeof g_sapi_script,
+                     "%s/navimap_tts_session_%d.ps1", nm_temp_dir(), (int)nm_get_pid());
+    if (k < 0 || (size_t)k >= sizeof g_sapi_script) { g_sapi_script[0] = '\0'; return 0; }
+    FILE *f = fopen(g_sapi_script, "wb");
+    if (!f) { g_sapi_script[0] = '\0'; return 0; }
+    static const unsigned char bom[3] = { 0xEF, 0xBB, 0xBF };
+    fwrite(bom, 1, 3, f);
+    fputs(sapi_script_body(), f);
+    fclose(f);
+    return 1;
+}
+
+static int sapi_session_start(void)
+{
+    if (g_sapi && nm_proc_alive(g_sapi)) return 1;
+    if (g_sapi) { nm_proc_close(g_sapi); g_sapi = NULL; }
+
+    char ps[1024];
+    if (nm_find_in_path("powershell.exe", ps, sizeof(ps)) != 0) return 0;
+    if (!sapi_script_write()) return 0;
+
+    char *argv[] = { ps, "-NoProfile", "-NonInteractive", "-File", g_sapi_script, NULL };
+    g_sapi = nm_proc_spawn(ps, argv);
+    if (!g_sapi) return 0;
+    /* 探测会话是否真的起来了：写一行空行，若管道已断则写失败。 */
+    if (nm_proc_write(g_sapi, "\n") < 0) {
+        nm_proc_close(g_sapi);
+        g_sapi = NULL;
+        return 0;
+    }
+    return 1;
+}
+#endif /* _WIN32 */
+
+/* ---- POSIX 常驻会话：festival 从 stdin 读文本；其余是一次性的 ---- */
+#ifndef _WIN32
+static NmProc *g_festival = NULL;
+
+static int festival_session_start(void)
+{
+    if (g_festival && nm_proc_alive(g_festival)) return 1;
+    if (g_festival) { nm_proc_close(g_festival); g_festival = NULL; }
+    char exe[1024];
+    if (nm_find_in_path("festival", exe, sizeof(exe)) != 0) return 0;
+    char *argv[] = { exe, "--tts", NULL };
+    g_festival = nm_proc_spawn(exe, argv);
+    return g_festival != NULL;
+}
+#endif
+
+/* ---- 后端：发一句话 ---- */
+static void tts_backend_speak(const char *text)
+{
+#ifdef _WIN32
+    if (sapi_session_start()) {
+        /* 逐行喂：一行一句。文本里的换行会把它拆成两句 ⇒ 先压成空格。 */
+        char buf[1024];
+        size_t k = 0;
+        for (const char *p = text; *p && k + 1 < sizeof buf; p++) {
+            buf[k++] = (*p == '\n' || *p == '\r') ? ' ' : *p;
+        }
+        buf[k] = '\0';
+        if (nm_proc_write(g_sapi, buf) > 0 && nm_proc_write(g_sapi, "\n") > 0) return;
+        /* 写失败 ⇒ 会话坏了 ⇒ 回退单句模式（OsmAnd: sessionBroken） */
+        nm_proc_close(g_sapi);
+        g_sapi = NULL;
+    }
+    tts_speak_once(text);
+#else
+    /* festival 会话是常驻进程：没起来就先尝试启动（无 festival 可执行文件时
+     * 返回 0、g_festival 仍为 NULL，行为与原来一致，静默退回单句引擎）。
+     * 原先漏了这步调用 ⇒ festival_session_start 成了死函数、且 Linux 下
+     * festival 路径永远走不到（g_festival 恒为 NULL）。 */
+    if (!g_festival) festival_session_start();
+    if (g_festival && nm_proc_alive(g_festival)) {
+        if (nm_proc_write(g_festival, text) > 0 && nm_proc_write(g_festival, "\n") > 0) return;
+        nm_proc_close(g_festival);
+        g_festival = NULL;
+    }
+    tts_speak_once(text);
+#endif
+}
+
+/* ---- 队列 + 后台朗读线程（抄 OsmAnd 的 LinkedBlockingQueue + worker） ---- */
+#define TTS_QUEUE_MAX 32
+
+typedef struct TtsItem {
+    char *text;
+    struct TtsItem *next;
+} TtsItem;
+
+static struct {
+    NmMutex *lock;
+    NmCond  *not_empty;     /* 有文本可取 */
+    NmCond  *not_full;      /* 队列有空间 */
+    TtsItem *head, *tail;
+    int      count;
+    int      running;       /* worker 是否已起 */
+    int      stop;
+    int      offered;       /* 累计受理句数（观测口，见下） */
+    int      delivered;     /* 累计已交付引擎句数（观测口，见下） */
+    int      inflight;      /* worker 正在处理的那一句（0=无） */
+} g_tts;
+
+/* ★ 受理计数：计数点放在**入队之前**、调用线程内、无竞争。
+ *   不能读队列长度 —— 后台线程会异步喝空队列，"入队后立刻读 size()"是
+ *   与活消费者赛跑（OsmAnd 踩过同一个坑，见 Speech.OFFERED 的注释）。 */
+int nm_tts_offered_count(void) { return g_tts.offered; }
+
+/* ★ 已交付引擎计数：计数点在**把文本交给引擎之后**、后台线程内。
+ *   与"受理"配对可断言"队列真的被消费了"—— 只看受理数证明不了 worker
+ *   真的在跑（可能线程没起来）。
+ *   ★ 注意它**不等于"已播完"**：常驻会话下"写入管道"就返回了，合成还在
+ *     子进程那边进行中。要等真正播完用 nm_tts_flush()。 */
+int nm_tts_delivered_count(void) { return g_tts.delivered; }
+
+/* ★ 等待"已受理的句子全部播完"。实现：关掉常驻会话的写端 ⇒ 子进程读到
+ *   EOF ⇒ 循环退出 ⇒ 子进程退出前会把当前句说完。于是"子进程退出"
+ *   就是精确的"全部播完"边界。
+ *   返回 0 = 已排空并播完；-1 = 没有会话可关（无引擎）。
+ *   ★ 这是判定"播报真的出声了"的唯一可靠手段：常驻会话下写入即返回，
+ *     看写入返回证明不了合成完成。 */
+int nm_tts_flush(void)
+{
+    if (!g_tts.running) return -1;
+    /* 先等队列排空（worker 把最后一句也交给引擎） */
+    for (int i = 0; i < 2000; i++) {
+        nm_mutex_lock(g_tts.lock);
+        int empty = (g_tts.count == 0 && g_tts.inflight == 0);
+        nm_mutex_unlock(g_tts.lock);
+        if (empty) break;
+        nm_sleep_ms(5);
+    }
+#ifdef _WIN32
+    if (g_sapi) {
+        nm_proc_close(g_sapi);      /* 关写端 ⇒ 子进程读到 EOF ⇒ 说完当前句后退出 */
+        g_sapi = NULL;
+    }
+#else
+    if (g_festival) {
+        nm_proc_close(g_festival);
+        g_festival = NULL;
+    }
+#endif
+    return 0;
+}
+
+static void tts_queue_push(char *text)
+{
+    TtsItem *it = (TtsItem *)malloc(sizeof *it);
+    if (!it) { free(text); return; }
+    it->text = text;
+    it->next = NULL;
+    if (g_tts.tail) g_tts.tail->next = it;
+    else            g_tts.head = it;
+    g_tts.tail = it;
+    g_tts.count++;
+}
+
+static char *tts_queue_pop(void)
+{
+    TtsItem *it = g_tts.head;
+    if (!it) return NULL;
+    g_tts.head = it->next;
+    if (!g_tts.head) g_tts.tail = NULL;
+    g_tts.count--;
+    char *t = it->text;
+    free(it);
+    return t;
+}
+
+static void tts_worker(void *p)
+{
+    (void)p;
+    for (;;) {
+        nm_mutex_lock(g_tts.lock);
+        while (g_tts.count == 0 && !g_tts.stop)
+            nm_cond_wait(g_tts.not_empty, g_tts.lock);
+        if (g_tts.count == 0 && g_tts.stop) { nm_mutex_unlock(g_tts.lock); break; }
+        char *text = tts_queue_pop();
+        g_tts.inflight = 1;          /* 取走即算"在飞"（flush 据此判断没排空） */
+        nm_cond_signal(g_tts.not_full);
+        nm_mutex_unlock(g_tts.lock);
+
+        if (text) {
+            tts_backend_speak(text);
+            free(text);
+            nm_mutex_lock(g_tts.lock);
+            g_tts.delivered++;
+            g_tts.inflight = 0;
+            nm_cond_signal(g_tts.not_full);
+            nm_mutex_unlock(g_tts.lock);
+        }
+    }
+}
+
+static int tts_queue_init(void)
+{
+    if (g_tts.running) return 1;
+    g_tts.lock      = nm_mutex_create();
+    g_tts.not_empty = nm_cond_create();
+    g_tts.not_full  = nm_cond_create();
+    if (!g_tts.lock || !g_tts.not_empty || !g_tts.not_full) return 0;
+    g_tts.head = g_tts.tail = NULL;
+    g_tts.count = 0;
+    g_tts.stop = 0;
+    g_tts.running = 1;
+    if (nm_thread_spawn(tts_worker, NULL) != 0) { g_tts.running = 0; return 0; }
+    return 1;
+}
+
+int nm_tts_speak(const char *text)
+{
+    if (!text || !*text) return 0;
+
+    /* DRYRUN 同步写，避免起线程（自测要确定性） */
+    if (tts_dryrun_write(text)) return 1;
+
+    /* 本机没有可用引擎就不受理（无头环境静默） */
+    if (!nm_tts_available()) return 0;
+
+    if (!tts_queue_init()) {
+        /* 起不了队列（内存不足等极端情况）⇒ 退回"每句一个进程"的旧行为。
+         * 宁可慢也别不播：这是导航功能。 */
+        tts_speak_once(text);
+        return 1;
+    }
+
+    char *copy = nm_strdup(text);
+    if (!copy) return 0;
+    nm_mutex_lock(g_tts.lock);
+    g_tts.offered++;
+    /* 队列满 ⇒ 丢掉最老的（导航播报宁可少一句也不要延迟堆积） */
+    while (g_tts.count >= TTS_QUEUE_MAX) {
+        char *old = tts_queue_pop();
+        if (!old) break;
+        free(old);
+    }
+    tts_queue_push(copy);
+    nm_cond_signal(g_tts.not_empty);
+    nm_mutex_unlock(g_tts.lock);
+    return 1;
+}
+
+int nm_tts_available(void)
+{
+#ifdef _WIN32
+    char exe[1024];
+    return nm_find_in_path("powershell.exe", exe, sizeof(exe)) == 0 ? 1 : 0;
+#else
+    char exe[1024];
+    if (nm_find_in_path("spd-say", exe, sizeof(exe)) == 0) return 1;
+    if (nm_find_in_path("espeak-ng", exe, sizeof(exe)) == 0) return 1;
+    if (nm_find_in_path("espeak",   exe, sizeof(exe)) == 0) return 1;
+    if (nm_find_in_path("festival", exe, sizeof(exe)) == 0) return 1;
+    if (nm_find_in_path("say",      exe, sizeof(exe)) == 0) return 1;
+    return 0;
+#endif
+}
+
+/* 旧的固定两级阈值（60m / 300m）。
+ * ★ **已弃用**：导航播报改走 route/voice.c 的"速度 × 秒数"模型
+ *   （抄 OsmAnd 的 AnnounceTimeDistances），高速上固定 300 m 会来不及。
+ *   这里保留是为了不破坏外部调用方与既有自测，新代码不要再用。 */
+int nm_tts_tier_for_distance(double to_go_m)
+{
+    if (to_go_m <= 60.0)  return 2;   /* 立即层：即将转向 */
+    if (to_go_m <= 300.0) return 1;   /* 接近层：提前预告 */
+    return 0;
+}
+```
 
 ### 3.3 `mem.h` 与 `mem.c`（钉死 glibc 分配器）
 

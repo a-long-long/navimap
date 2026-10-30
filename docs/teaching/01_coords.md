@@ -181,7 +181,61 @@ double nm_mercator_y_fast(double lat)
 }
 ```
 
-`nm_sun_is_night`（日出日落判夜，含极区恒昼/恒夜处理）声明见 `geo.h:41`，为控制篇幅省略完整体，可在 `src/utils/geo.c:121` 查阅。
+> 完整源码 · `src/utils/geo.c` (约 L121)（`nm_sun_is_night`：日出日落判夜，含极区恒昼/恒夜）
+
+```c
+/* ------------------------------------------------------------------ */
+/* 日出日落（太阳高度角）                                              */
+/*                                                                     */
+/* 标准周期项公式（赤纬 + 时差），算本地太阳时下的太阳天顶距；天顶距   */
+/* > 90.833°（含大气折射修正）即判为夜间。纬度 lat、经度 lon 单位度，   */
+/* 东经/北纬为正。utc 为 time_t 秒。                                   */
+/* 极区：cos_zen 被夹到 [-1,1]，天顶距恒 >90 即恒夜、恒 <90 即恒昼，   */
+/* 公式自然成立，不会除零或越界。                                     */
+/* ------------------------------------------------------------------ */
+
+int nm_sun_is_night(double lat, double lon, time_t utc)
+{
+    struct tm t;
+#if defined(_WIN32)
+    gmtime_s(&t, &utc);
+#else
+    gmtime_r(&utc, &t);
+#endif
+    int year  = t.tm_year + 1900;
+    int month = t.tm_mon + 1;
+    int day   = t.tm_mday;
+    double utc_hours = t.tm_hour + t.tm_min / 60.0 + t.tm_sec / 3600.0;
+
+    /* 一年中的第几天（1..366），闰年 2 月后 +1 */
+    static const int cum[12] = { 0, 31, 59, 90, 120, 151, 181, 212, 243, 273, 304, 334 };
+    int doy = cum[month - 1] + day;
+    if (month > 2 && ((year % 4 == 0 && year % 100 != 0) || year % 400 == 0)) doy++;
+
+    double rad = M_PI / 180.0;
+    double gamma = 2.0 * M_PI / 365.0 * (doy - 1.0 + (utc_hours - 12.0) / 24.0);
+
+    /* 时差（分钟） */
+    double eqtime = 229.18 * (0.000075
+                   + 0.001868 * cos(gamma) - 0.032077 * sin(gamma)
+                   - 0.014615 * cos(2 * gamma) - 0.040849 * sin(2 * gamma));
+    /* 赤纬（弧度） */
+    double decl = 0.006918 - 0.399912 * cos(gamma) + 0.070257 * sin(gamma)
+                  - 0.006758 * cos(2 * gamma) + 0.000907 * sin(2 * gamma)
+                  - 0.002697 * cos(3 * gamma) + 0.001480 * sin(3 * gamma);
+    /* 真太阳时（分钟）= UTC 分钟 + 时差 + 经度修正（每度 4 分钟，东经为正） */
+    double tst = utc_hours * 60.0 + eqtime + 4.0 * lon;
+    /* 时角（度）：正午为 0，每小时 15° */
+    double ha = tst / 4.0 - 180.0;
+
+    double cos_zen = sin(lat * rad) * sin(decl)
+                   + cos(lat * rad) * cos(decl) * cos(ha * rad);
+    if (cos_zen >  1.0) cos_zen =  1.0;
+    if (cos_zen < -1.0) cos_zen = -1.0;
+    double zen = acos(cos_zen) / rad;
+    return zen > 90.833 ? 1 : 0;
+}
+```
 
 ### 3.3 `datum.h` 关键类型与声明
 
@@ -698,7 +752,400 @@ void datum_gk_inverse(DatumId id, double X, double Y, double lon0_deg,
 }
 ```
 
-> 注：`datum.c` 顶部（约 1–73 行）是一段关于参数来源、局限与"为何不做多组参数"的长注释，以及 `datum_short`/`datum_label`/`datum_note`/`datum_count`/`datum_by_index`/`datum_translation`/`datum_ellipsoid`/`datum_get_seven_param`/`datum_set_seven_param`/`datum_reset_params`/`datum_set_local_offset`/`grid_sample`/`shift_by_meters`/`datum_grid_set`/`datum_grid_clear`/`datum_grid_active`/`datum_grid_load` 等函数。本课聚焦七参数与方里格链路，上述辅助函数与其长注释为控制篇幅未逐一全文展示，可在 `src/utils/datum.c`、`src/utils/datum.h` 按行号查阅。
+> `datum.c` 顶部（约 1–73 行）关于参数来源、局限与“为何不做多组参数”的长注释，及下列辅助函数，此前仅以声明/表格列出、未附完整源码，现补全其完整、逐字、可编译源码：
+
+> 完整源码 · `src/utils/datum.c:1`（顶部长注释：参数来源、局限与“为何不做多组参数”）
+
+```c
+/* 坐标系（大地基准）变换：WGS84 / CGCS2000 / 北京1954 / 西安1980。
+ *
+ * 数学：经纬度 ⇄ ECEF（地心地固直角坐标）在各自椭球上互算，再用 7 参数
+ * 赫尔默特（Helmert）变换在 ECEF 空间里把"本地基准"对齐到 WGS84。
+ * 本项目只用平移 3 参数（旋转/尺度=0），旋转/尺度字段保留以便将来接精确 7 参数。
+ *
+ * 参数来源（★ 只登记"有出处"的值，宁可退化为椭球变换也不放编造的常数）：
+ *   - WGS84：恒等。
+ *   - CGCS2000：a 与 WGS84 完全相同，f 仅末位不同；框架差亚米级。
+ *     ⇒ 平移取 0（与 EPSG/PROJ 对 CGCS2000↔WGS84 的处理一致）。
+ *   - 北京 1954：EPSG:15921「Beijing 1954 to WGS 84 (4)」，地心三参数
+ *     (dX,dY,dZ) = (+15.8, −154.4, −82.3) m，标称精度 1 m，
+ *     适用区 China – Tarim。**全国通用近似值**，其它地区残差可达数十米。
+ *   - 西安 1980：★ EPSG 数据集**没有登记** XA80 ↔ WGS84 的任何变换
+ *     （PROJ/GDAL 因此退化为"仅换椭球、基准平移按 0 处理"，精度标 unknown）。
+ *     ⇒ 但**公开文献有**：赵玉明等《西安1980坐标转换为WGS1984坐标的3参数近似估算
+ *       方法》（中国水土保持科学 2013, 11(3)）用全国 10 省 14 片区 61 个样点拟合出
+ *       全国统一 3 参数 (−104.57, −45.94, +5.30) m，方向为 [XYZ]84 = [XYZ]80 + Δ
+ *       （即本表的"基准→WGS84"语义，与 +towgs84 一致）。
+ *       精度：分区参数平均经/纬向误差 < 10 m；全国统一参数平均经向 8.20 m、
+ *       纬向 4.21 m，最大 14.73 m / 9.23 m。
+ *     ⇒ **独立交叉验证**：国家测绘地理信息局《2000国家大地坐标系与现行坐标系关系》
+ *       公布"1980西安坐标系转换到 2000 系，图幅平移量 X −9~+43 m、Y +76~+119 m"
+ *       （56°N~16°N / 72°E~135°E，X=北向、Y=东向）。本参数在泾阳大地原点附近
+ *       算得北向 +9.7 m、东向 +113.8 m，**两项都落在该区间内** ⇒ 数值与方向都可信。
+ *
+ * ★ 局限（必须让用户知道）：BJ54/XA80 的基准平移本质是**区域拟合量**，不存在
+ *   全国唯一的正确常数。本模块提供的是"量级正确、可复现"的近似，用于经纬网/
+ *   读数的基准呈现；工程测量请用当地测绘部门公布的参数替换 DATUMS 表。
+ *
+ * ★ 官方的正解（比本模块高一个量级，但**数据不公开**，这里做不到）：
+ *   《国土资源数据 2000 国家大地坐标系转换技术要求》（国土资源部 / 国家测绘
+ *   地理信息局，2017-02）规定：
+ *     - 1:5 万及更小比例尺：用国家测绘地理信息局提供的「1:5 万 XA80→CGCS2000
+ *       **图幅改正量**」，点位按**双线性内插**逐点改正（附录 B/C）；
+ *     - 1:1 万：同上用 1:1 万改正量，或按 **2°×3° 分区**逐区解算转换参数；
+ *     - 重合点法：用两坐标系下的重合点作控制点解参数（附录 A）；
+ *     - 北京54：**两步法** —— BJ54 → XA80 → CGCS2000，改正量叠加
+ *       （本模块 BJ54 是直接一步到 WGS84，没有走这条链）。
+ *   图幅改正量由测绘部门按图幅/按县分发、不公开下载 ⇒ 没有它只能退到三参数。
+ *
+ * ★ 论文的 7 分区参数（Table 4）**评估后否决**，理由是有数据支撑的：
+ *   分区值确实更准（平均经/纬向 4.59/3.05 m vs 全国值 8.20/4.21 m），但
+ *   **选错分区的代价是 15.8~27.0 m**（9 个城市实测：各分区参数算出的位移相对
+ *   全国值的最大偏差），**大于全国值本身的最大误差 14.7 m**；而论文只说
+ *   "按经纬度相似和行政分区方便"划 7 区，**没有给出分区边界**，任何 bbox 都是
+ *   我们自己发明的 ⇒ 分区判定一错就适得其反。故只用全国统一值。
+ *   （分区数值备查，将来若拿到可靠的分区判据可直接替换：
+ *     东北 −96.51/−61.41/−10.13 华北 −99.71/−50.78/−3.57 华中 −106.67/−58.25/−4.55
+ *     华南 −117.54/−49.79/+13.87 西南 −112.03/−33.68/+3.30 西北 −107.61/−45.58/+8.40
+ *     西部 −91.95/−22.06/+29.77）
+ *
+ * ★★ 为什么不做成"多组参数 + 下拉选择"（全球惯例与演进路径，2026-10-25 查证）：
+ *   "一个基准配多组区域变换"是全球常态——最典型的是北美 NAD27：EPSG 注册了
+ *   **85 条** NAD27→WGS84 变换（78 条在用），没有唯一全国值：若干全国性条目
+ *   （15851 NADCON 网格 5 m、加拿大 NTv2 1693 2 m、7 个 HARN 全国 1.5 m）
+ *   + 大量州/省级区域参数（43 条精度 1.5 m）。BJ54 在 EPSG 有 6 条、全是油气
+ *   局部参数；XA80 零条。XA80 之所以没有区域变换：它是**过渡性基准**
+ *   （EPSG:4610 remarks: "Replaces Beijing 1954. Replaced by CGCS2000"，
+ *    1980 起用、2008 后全国转 CGCS2000）⇒ 没人投入做全国区域变换测量。
+ *   而美国能有 85 条，根因是它有海量控制点（每州 HARN 站）——区域参数的
+ *   精度是用测量堆出来的，不是拟合出来的。
+ *   ★ 但看美国的最终答案：它**没有停在"多组参数让人选"，而是演进到格网**
+ *   （NADCON/NTv2，全国 5 m / 州级 1.5 m）——与中国官方方案（1:5万图幅改正量
+ *   + 双线性内插）是同一条路径：参数法 → 格网法。原因是"多组让人选"有个死结：
+ *   **谁来选？** 用户往往不知道自己所在的拟合分区，而选错的代价
+ *   （15.8~27.0 m）比用全国值本身的最大误差（14.7 m）还大。格网没有这个死结：
+ *   按坐标自动取值、边界就是格网间隔、无选择歧义，格网够密时就是连续改正量场，
+ *   精度天然高于分区常数。
+ *   ⇒ 本项目对应设计：**单组全国参数（~15 m）+ 入口②格网接口**（等数据）。
+ *     若将来拿到的是"某省 7 参数"而非格网，入口①/③ 也能装，但优先级建议
+ *     格网 > 分区参数：前者无歧义、后者要靠人选。
+ */
+```
+
+> 完整源码 · `src/utils/datum.c:253`（`grid_sample`：双线性内插取改正量）
+
+```c
+static int grid_sample(const DatumGrid *g, double lat, double lon,
+                       double *dn, double *de)
+{
+    double v = (lat - g->lat0) / g->dlat;   /* 行方向（纬度） */
+    double u = (lon - g->lon0) / g->dlon;   /* 列方向（经度） */
+    if (u < 0.0) u = 0.0; else if (u > (double)(g->ncols - 1)) u = (double)(g->ncols - 1);
+    if (v < 0.0) v = 0.0; else if (v > (double)(g->nrows - 1)) v = (double)(g->nrows - 1);
+
+    int i0 = (int)floor(v), j0 = (int)floor(u);
+    double tv = v - i0, tu = u - j0;
+    if (i0 > g->nrows - 2) { i0 = g->nrows - 1; tv = 0.0; }
+    if (j0 > g->ncols - 2) { j0 = g->ncols - 1; tu = 0.0; }
+    if (i0 < 0) { i0 = 0; tv = 0.0; }
+    if (j0 < 0) { j0 = 0; tu = 0.0; }
+    const int i1 = (i0 + 1 <= g->nrows - 1) ? i0 + 1 : i0;
+    const int j1 = (j0 + 1 <= g->ncols - 1) ? j0 + 1 : j0;
+
+    const size_t r0 = (size_t)i0 * (size_t)g->ncols, r1 = (size_t)i1 * (size_t)g->ncols;
+    const double n0 = g->dn[r0 + (size_t)j0] * (1.0 - tu) + g->dn[r0 + (size_t)j1] * tu;
+    const double n1 = g->dn[r1 + (size_t)j0] * (1.0 - tu) + g->dn[r1 + (size_t)j1] * tu;
+    const double e0 = g->de[r0 + (size_t)j0] * (1.0 - tu) + g->de[r0 + (size_t)j1] * tu;
+    const double e1 = g->de[r1 + (size_t)j0] * (1.0 - tu) + g->de[r1 + (size_t)j1] * tu;
+    *dn = n0 * (1.0 - tv) + n1 * tv;
+    *de = e0 * (1.0 - tv) + e1 * tv;
+    return 0;
+}
+```
+
+> 完整源码 · `src/utils/datum.c:281`（`shift_by_meters`：沿北/东平移米）
+
+```c
+static void shift_by_meters(double lat, double lon, double dn, double de,
+                            double *olat, double *olon)
+{
+    const Ellipsoid *e = &DATUMS[DATUM_WGS84].ell;
+    const double e2 = e->f * (2.0 - e->f);
+    const double la = lat * M_PI / 180.0;
+    const double sl = sin(la), cl = cos(la);
+    const double W = sqrt(1.0 - e2 * sl * sl);
+    const double N = e->a / W;                       /* 卯酉圈曲率半径 */
+    const double M = e->a * (1.0 - e2) / (W * W * W);/* 子午圈曲率半径 */
+    double den = N * cl;
+    if (fabs(den) < 1e-6) den = (den >= 0) ? 1e-6 : -1e-6;   /* 极点保护 */
+    *olat = lat + (dn / M) * (180.0 / M_PI);
+    *olon = lon + (de / den) * (180.0 / M_PI);
+}
+```
+
+> 完整源码 · `src/utils/datum.c:335`（`datum_short`）
+
+```c
+const char *datum_short(DatumId id)
+{
+    switch (id) {
+        case DATUM_WGS84:    return "WGS84";
+        case DATUM_CGCS2000: return "CGCS2000";
+        case DATUM_BJ54:     return "北京54";
+        case DATUM_XA80:     return "西安80";
+        default:             return "?";
+    }
+}
+```
+
+> 完整源码 · `src/utils/datum.c:346`（`datum_label`）
+
+```c
+const char *datum_label(DatumId id)
+{
+    switch (id) {
+        case DATUM_WGS84:    return "WGS84（默认）";
+        case DATUM_CGCS2000: return "CGCS2000（2000国家大地坐标系）";
+        case DATUM_BJ54:     return "北京 1954";
+        case DATUM_XA80:     return "西安 1980";
+        default:             return "?";
+    }
+}
+```
+
+> 完整源码 · `src/utils/datum.c:357`（`datum_note`）
+
+```c
+const char *datum_note(DatumId id)
+{
+    switch (id) {
+        case DATUM_WGS84:
+            return "OSM 原生基准，恒等（不换算）";
+        case DATUM_CGCS2000:
+            return "与 WGS84 近等：椭球 a 相同、f 仅末位不同，差异亚米级";
+        case DATUM_BJ54:
+            return "克拉索夫斯基椭球 + EPSG:4214 默认 TOWGS84 (+15.8,−154.4,−82.3)"
+                   "（PROJ/GDAL 同款）。⚠ 适用区是塔里木盆地西南（BGP 1994 年油气参数），"
+                   "华北用北向会偏 60~95 m（北京实测水平 63.5 m）；"
+                   "官方要求 BJ54→西安80→CGCS2000 两步走，本模块一步到 WGS84";
+        case DATUM_XA80:
+            return "IAG-75 椭球 + 公开文献拟合的全国统一 3 参数 "
+                   "(−104.57,−45.94,+5.30)（赵玉明等，中国水土保持科学 2013, 11(3)）。"
+                   "已双向交叉验证：国测局图幅平移量区间六点全中 + 与国标《2000国家大地"
+                   "坐标系转换技术要求》附录B改正量公式等价（9 点差 0.001 m）。精度约 15 m；"
+                   "官方正解是 1:5万图幅改正量+双线性内插（数据由测绘部门提供，不公开）";
+        default:
+            return "";
+    }
+}
+```
+
+> 完整源码 · `src/utils/datum.c:380`（`datum_count`）
+
+```c
+int datum_count(void) { return DATUM_COUNT; }
+```
+
+> 完整源码 · `src/utils/datum.c:381`（`datum_by_index`）
+
+```c
+DatumId datum_by_index(int i)
+{
+    if (i < 0 || i >= DATUM_COUNT) return DATUM_WGS84;
+    return (DatumId)i;
+}
+```
+
+> 完整源码 · `src/utils/datum.c:387`（`datum_translation`）
+
+```c
+void datum_translation(DatumId id, double *dx, double *dy, double *dz)
+{
+    if (id < 0 || id >= DATUM_COUNT) id = DATUM_WGS84;
+    if (dx) *dx = DATUMS[id].dx;
+    if (dy) *dy = DATUMS[id].dy;
+    if (dz) *dz = DATUMS[id].dz;
+}
+```
+
+> 完整源码 · `src/utils/datum.c:395`（`datum_ellipsoid`）
+
+```c
+void datum_ellipsoid(DatumId id, double *a, double *f)
+{
+    if (id < 0 || id >= DATUM_COUNT) id = DATUM_WGS84;
+    if (a) *a = DATUMS[id].ell.a;
+    if (f) *f = DATUMS[id].ell.f;
+}
+```
+
+> 完整源码 · `src/utils/datum.c:406`（`datum_get_seven_param`）
+
+```c
+void datum_get_seven_param(DatumId id, DatumSevenParam *out)
+{
+    if (!out) return;
+    if (id < 0 || id >= DATUM_COUNT) id = DATUM_WGS84;
+    const DatumDef *d = &DATUMS[id];
+    out->dx = d->dx; out->dy = d->dy; out->dz = d->dz;
+    out->rx = d->rx; out->ry = d->ry; out->rz = d->rz;
+    out->ds = d->ds;
+}
+```
+
+> 完整源码 · `src/utils/datum.c:416`（`datum_set_seven_param`）
+
+```c
+int datum_set_seven_param(DatumId id, const DatumSevenParam *p)
+{
+    if (!p || id < 0 || id >= DATUM_COUNT) return -1;
+    if (id == DATUM_WGS84) return -1;   /* WGS84 是恒等基准，不许改 */
+    DatumDef *d = &DATUMS[id];
+    d->dx = p->dx; d->dy = p->dy; d->dz = p->dz;
+    d->rx = p->rx; d->ry = p->ry; d->rz = p->rz;
+    d->ds = p->ds;
+    return 0;
+}
+```
+
+> 完整源码 · `src/utils/datum.c:427`（`datum_reset_params`）
+
+```c
+void datum_reset_params(DatumId id)
+{
+    if (id < 0 || id >= DATUM_COUNT) return;
+    DATUMS[id] = DATUMS_FACTORY[id];
+}
+```
+
+> 完整源码 · `src/utils/datum.c:437`（`datum_set_local_offset`：北/东偏移反算地心三参数）
+
+```c
+int datum_set_local_offset(DatumId id, double lat, double lon,
+                           double dnorth, double deast)
+{
+    if (id < 0 || id >= DATUM_COUNT) return -1;
+    if (id == DATUM_WGS84) return -1;
+    const double la = lat * M_PI / 180.0, lo = lon * M_PI / 180.0;
+    const double sl = sin(la), cl = cos(la), slo = sin(lo), clo = cos(lo);
+    const double ex = -slo,          ey = clo,           ez = 0.0;
+    const double nx = -sl * clo,     ny = -sl * slo,     nz = cl;
+    DatumDef *d = &DATUMS[id];
+    d->dx = deast * ex + dnorth * nx;
+    d->dy = deast * ey + dnorth * ny;
+    d->dz = deast * ez + dnorth * nz;
+    d->rx = d->ry = d->rz = d->ds = 0.0;
+    return 0;
+}
+```
+
+> 完整源码 · `src/utils/datum.c:564`（`datum_grid_set`）
+
+```c
+int datum_grid_set(DatumId id, const DatumGridDesc *g)
+{
+    if (!g || id < 0 || id >= DATUM_COUNT) return -1;
+    if (g->nrows < 1 || g->ncols < 1 || g->dlat <= 0.0 || g->dlon <= 0.0) return -1;
+    if (!g->dn || !g->de) return -1;
+    const size_t cnt = (size_t)g->nrows * (size_t)g->ncols;
+    float *ndn = (float *)malloc(cnt * sizeof(float));
+    float *nde = (float *)malloc(cnt * sizeof(float));
+    if (!ndn || !nde) { free(ndn); free(nde); return -2; }
+    memcpy(ndn, g->dn, cnt * sizeof(float));
+    memcpy(nde, g->de, cnt * sizeof(float));
+
+    DatumGrid *G = &GRIDS[id];
+    free(G->dn);
+    free(G->de);
+    G->dn = ndn;
+    G->de = nde;
+    G->lat0 = g->lat0; G->lon0 = g->lon0;
+    G->dlat = g->dlat; G->dlon = g->dlon;
+    G->nrows = g->nrows; G->ncols = g->ncols;
+    G->active = 1;
+    return 0;
+}
+```
+
+> 完整源码 · `src/utils/datum.c:588`（`datum_grid_clear`）
+
+```c
+void datum_grid_clear(DatumId id)
+{
+    if (id < 0 || id >= DATUM_COUNT) return;
+    DatumGrid *G = &GRIDS[id];
+    free(G->dn);
+    free(G->de);
+    G->dn = NULL;
+    G->de = NULL;
+    G->active = 0;
+}
+```
+
+> 完整源码 · `src/utils/datum.c:599`（`datum_grid_active`）
+
+```c
+int datum_grid_active(DatumId id)
+{
+    if (id < 0 || id >= DATUM_COUNT) return 0;
+    return GRIDS[id].active;
+}
+```
+
+> 完整源码 · `src/utils/datum.c:605`（`datum_grid_load`）
+
+```c
+int datum_grid_load(DatumId id, const char *path)
+{
+    if (id < 0 || id >= DATUM_COUNT) return -5;
+    if (!path) return -1;
+    FILE *f = fopen(path, "r");
+    if (!f) return -1;
+
+    double lat0 = 0, lon0 = 0, dlat = 0, dlon = 0;
+    int nrows = 0, ncols = 0, hdr = 0;
+    long need = 0, got = 0;
+    float *dn = NULL, *de = NULL;
+    char line[512];
+    int rc = 0;
+
+    while (fgets(line, (int)sizeof line, f)) {
+        char *s = line;
+        while (*s == ' ' || *s == '\t') s++;
+        if (*s == '#' || *s == '\n' || *s == '\r' || *s == '\0') continue;
+        if (!hdr) {
+            if (sscanf(s, "%lf %lf %lf %lf %d %d", &lat0, &lon0, &dlat, &dlon,
+                       &nrows, &ncols) != 6) { rc = -2; break; }
+            if (nrows <= 0 || ncols <= 0 || dlat <= 0.0 || dlon <= 0.0) { rc = -2; break; }
+            need = (long)nrows * (long)ncols;
+            dn = (float *)malloc((size_t)need * sizeof(float));
+            de = (float *)malloc((size_t)need * sizeof(float));
+            if (!dn || !de) { rc = -4; break; }
+            hdr = 1;
+            continue;
+        }
+        if (got >= need) break;
+        float a = 0, b = 0;
+        if (sscanf(s, "%f %f", &a, &b) != 2) { rc = -3; break; }
+        dn[got] = a;
+        de[got] = b;
+        got++;
+    }
+    fclose(f);
+
+    if (rc == 0 && !hdr) rc = -2;
+    if (rc == 0 && got < need) rc = -3;
+    if (rc == 0) {
+        DatumGridDesc gd;
+        gd.lat0 = lat0; gd.lon0 = lon0; gd.dlat = dlat; gd.dlon = dlon;
+        gd.nrows = nrows; gd.ncols = ncols; gd.dn = dn; gd.de = de;
+        rc = datum_grid_set(id, &gd);
+    }
+    free(dn);
+    free(de);
+    return rc;
+}
+```
 
 ## 四、与其他功能之间的联系
 

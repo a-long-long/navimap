@@ -30,7 +30,7 @@ int search_query(SearchDb *d, const char *q,
 int search_bigrams(const char *q, char grams[][16], int max_grams, int *chars); /* 切词可见入口（测试用） */
 ```
 
-**`search.c` 内部函数一览**（签名 + 一行说明 + 行号，本节只完整展示 `search_bigrams` / `search_open` / `search_query`，其余为控制篇幅仅列签名）：
+**`search.c` 内部函数一览**（签名 + 一行说明 + 行号；`search_bigrams` / `search_open` / `search_query` 的完整实现见下方 §2~§4，其余内部函数在 §2.5 逐一给出逐字完整实现）：
 
 | 函数 | 位置 | 说明 |
 |---|---|---|
@@ -45,6 +45,177 @@ int search_bigrams(const char *q, char grams[][16], int max_grams, int *chars); 
 | `contains_ci` | `search.c:203-219` | 大小写不敏感子串复核（只对 ASCII 生效，UTF-8 多字节不动） |
 | `search_open` | `search.c:221-235` | 以 `SQLITE_OPEN_READONLY` 打开，预编译取详情语句 |
 | `search_query` | `search.c:245-330` | 查询主流程（五步，见下） |
+
+### 2.5 其余内部函数（完整实现）
+
+> 以下函数按 `src/search/search.c` 真实行号逐字摘录，与源码可编译一致（仅去除文件头 include / 宏定义等外围，函数体一字未改）。
+
+**`u8_next`** —— UTF-8 字符步进（返回下一字符起点，非法字节按 1 字节推进避免死循环）：`src/search/search.c:33-42`
+
+```c
+static const char *u8_next(const char *p, const char *end)
+{
+    unsigned char c = (unsigned char)*p;
+    int n = 1;
+    if      (c >= 0xF0) n = 4;
+    else if (c >= 0xE0) n = 3;
+    else if (c >= 0xC0) n = 2;
+    const char *q = p + n;
+    return q > end ? end : q;
+}
+```
+
+**`like_literal`** —— 把 `\` `%` `_` 转义成字面量，防用户输入通配符：`src/search/search.c:76-88`
+
+```c
+static void like_literal(const char *s, char *out, size_t n)
+{
+    size_t o = 0;
+    for (size_t i = 0; s[i] && o + 3 < n; i++) {
+        if (s[i] == '\\' || s[i] == '%' || s[i] == '_') {
+            out[o++] = '\\';
+            out[o++] = s[i];
+        } else {
+            out[o++] = s[i];
+        }
+    }
+    out[o] = '\0';
+}
+```
+
+**`ids_push`** —— 候选 id 动态数组 push，到 `CAND_MAX` 上限丢弃：`src/search/search.c:94-106`
+
+```c
+static int ids_push(IdList *l, uint32_t id)
+{
+    if (l->n >= l->cap) {
+        int nc = l->cap ? l->cap * 2 : 512;
+        if (nc > CAND_MAX) nc = CAND_MAX;
+        if (l->n >= nc) return 0;              /* 到上限就丢弃（后面还有更好的？没有，但保住了耗时） */
+        uint32_t *nv = realloc(l->v, (size_t)nc * sizeof(uint32_t));
+        if (!nv) return -1;
+        l->v = nv; l->cap = nc;
+    }
+    l->v[l->n++] = id;
+    return 0;
+}
+```
+
+**`ids_by_grams`** —— 交集查询：含全部 gram 的 `place_id`：`src/search/search.c:109-131`
+
+```c
+static int ids_by_grams(SearchDb *d, char grams[][GRAM_BYTES], int ng, IdList *out)
+{
+    char sql[1536];
+    int pos = snprintf(sql, sizeof(sql),
+                       "SELECT place_id FROM gram WHERE gram IN (");
+    for (int i = 0; i < ng; i++)
+        pos += snprintf(sql + pos, sizeof(sql) - (size_t)pos, "%s?", i ? "," : "");
+    pos += snprintf(sql + pos, sizeof(sql) - (size_t)pos,
+                    ") GROUP BY place_id HAVING COUNT(DISTINCT gram)=%d", ng);
+    if (pos < 0 || (size_t)pos >= sizeof(sql)) return -1;
+
+    sqlite3_stmt *st = NULL;
+    if (sqlite3_prepare_v2(d->db, sql, -1, &st, NULL) != SQLITE_OK) return -1;
+    for (int i = 0; i < ng; i++)
+        sqlite3_bind_text(st, i + 1, grams[i], -1, SQLITE_TRANSIENT);
+
+    while (sqlite3_step(st) == SQLITE_ROW) {
+        if (ids_push(out, (uint32_t)sqlite3_column_int64(st, 0)) != 0) break;
+        if (out->n >= CAND_MAX) break;
+    }
+    sqlite3_finalize(st);
+    return 0;
+}
+```
+
+**`ids_by_prefix`** —— 单字回退：gram 前缀 `LIKE 'X%'`（仍走索引），同 place 去重：`src/search/search.c:134-157`
+
+```c
+static int ids_by_prefix(SearchDb *d, const char *q, IdList *out)
+{
+    char pat[GRAM_BYTES + 8];
+    char lit[GRAM_BYTES];
+    like_literal(q, lit, sizeof(lit));
+    snprintf(pat, sizeof(pat), "%s%%", lit);
+
+    sqlite3_stmt *st = NULL;
+    if (sqlite3_prepare_v2(d->db,
+            "SELECT place_id FROM gram WHERE gram LIKE ?1 ESCAPE '\\' LIMIT 4000",
+            -1, &st, NULL) != SQLITE_OK) return -1;
+    sqlite3_bind_text(st, 1, pat, -1, SQLITE_TRANSIENT);
+    while (sqlite3_step(st) == SQLITE_ROW) {
+        uint32_t id = (uint32_t)sqlite3_column_int64(st, 0);
+        /* 同一个 place 可能有多个以该字开头的 gram，去重 */
+        int dup = 0;
+        for (int i = 0; i < out->n; i++) if (out->v[i] == id) { dup = 1; break; }
+        if (dup) continue;
+        if (ids_push(out, id) != 0) break;
+        if (out->n >= CAND_MAX) break;
+    }
+    sqlite3_finalize(st);
+    return 0;
+}
+```
+
+**`ids_by_scan`** —— 兜底：全表 `name LIKE '%X%'`，只在前面都没结果时触发：`src/search/search.c:160-178`
+
+```c
+static int ids_by_scan(SearchDb *d, const char *q, IdList *out)
+{
+    char pat[160];
+    char lit[128];
+    like_literal(q, lit, sizeof(lit));
+    snprintf(pat, sizeof(pat), "%%%s%%", lit);
+
+    sqlite3_stmt *st = NULL;
+    if (sqlite3_prepare_v2(d->db,
+            "SELECT id FROM place WHERE name LIKE ?1 ESCAPE '\\' LIMIT 2000",
+            -1, &st, NULL) != SQLITE_OK) return -1;
+    sqlite3_bind_text(st, 1, pat, -1, SQLITE_TRANSIENT);
+    while (sqlite3_step(st) == SQLITE_ROW) {
+        if (ids_push(out, (uint32_t)sqlite3_column_int64(st, 0)) != 0) break;
+        if (out->n >= CAND_MAX) break;
+    }
+    sqlite3_finalize(st);
+    return 0;
+}
+```
+
+**`cmp_cand`** —— 排序键比较（score 升序；相同则按 weight 降序、name）：`src/search/search.c:192-199`
+
+```c
+static int cmp_cand(const void *pa, const void *pb)
+{
+    const Cand *a = (const Cand *)pa, *b = (const Cand *)pb;
+    if (a->score < b->score) return -1;
+    if (a->score > b->score) return 1;
+    if (a->h.weight != b->h.weight) return b->h.weight - a->h.weight;
+    return strcmp(a->h.name, b->h.name);
+}
+```
+
+**`contains_ci`** —— 大小写不敏感子串复核（只对 ASCII 生效，UTF-8 多字节不动）：`src/search/search.c:203-219`
+
+```c
+static int contains_ci(const char *hay, const char *needle)
+{
+    if (strstr(hay, needle)) return 1;
+    size_t n = strlen(hay), m = strlen(needle);
+    if (m == 0 || m > n) return 0;
+    for (size_t i = 0; i + m <= n; i++) {
+        size_t k = 0;
+        for (; k < m; k++) {
+            int ca = (unsigned char)hay[i + k], cb = (unsigned char)needle[k];
+            if (ca >= 'A' && ca <= 'Z') ca += 32;
+            if (cb >= 'A' && cb <= 'Z') cb += 32;
+            if (ca != cb) break;
+        }
+        if (k == m) return 1;
+    }
+    return 0;
+}
+```
 
 ## 三、完整实现代码
 

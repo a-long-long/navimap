@@ -19,7 +19,7 @@
 | 每帧渲染（视口投影→软件光栅→管线） | L6 / L7 / L8 | `src/ui/offscreen_shot.c`（`offscreen_shot_main`、`render_buffer`、`write_bmp24`、`app_offscreen_audit`）、`map/map_view.c`（`mv_project`、`mv_visible_bbox`） | `src/ui/offscreen_shot.c:194-647`（`offscreen_shot_main` 完整体）；关键段见第三节 |
 | 用户交互（搜索→路由→导航语音） | L9 / L10 / L11 | `tools/route_cli.c`（`router_route_ll`、`maneuver_build`）、`src/ui/window.c`（`app_nav_plan_sync`）、`route/maneuver.c`、`route/voice.c`、`ui/voice_wire.c` | `tools/route_cli.c:46-338`（main 完整体）；`--maneuvers` 块见第三节 |
 | Qt 外壳 | L12 | `src/ui_qt/qt_main.cpp`、`map_canvas.cpp`、`main_window.cpp` | `CMakeLists.txt:496-512`（`navmap_qt` 目标） |
-| 门禁 | L13 | `scripts/regress.sh`、`scripts/check_layers.sh`、`tools/core_no_sdl.c` | `scripts/regress.sh:1-802`（全文为控制篇幅省略，可在 `scripts/regress.sh:1` 查阅） |
+| 门禁 | L13 | `scripts/regress.sh`、`scripts/check_layers.sh`、`tools/core_no_sdl.c` | `scripts/regress.sh:1-802`（关键判据函数节选见 3.6 节；完整脚本见 `13_gates.md` 内嵌，全文 802 行） |
 
 纯 DAG 底座：`utils ← pbf ← map ← route ← render ← ui ← ui_qt`（L2 平台抽象、L1 坐标系为全程底座）。
 
@@ -807,6 +807,77 @@ cp  ~/Downloads/beijing.osm.pbf  sources/beijing.osm.pbf
 ```
 
 这一条链路恰好覆盖：**数据生产**（PBF→二进制→建图）→ **每帧渲染**（视口投影→软件光栅→管线）→ **用户交互**（搜索→路由→导航语音）→ **Qt 外壳** → **门禁**。
+
+### 3.6 门禁判据函数（`scripts/regress.sh` 关键段，完整体）
+
+> `scripts/regress.sh` L48-63（`run` 判据包装器）+ L75-120（`area_lod_tier` 判据函数，完整体）
+
+```bash
+pass=0; fail=0
+run() {                       # run <名字> <必须出现的标记> <命令...>
+    local name=$1 want=$2; shift 2
+    local log="$SHOTS/$name.log"
+    "$@" >"$log" 2>&1
+    local rc=$?
+    local bad
+    bad=$(grep -cE "ASSERT-FAIL" "$log")
+    if [ "$rc" = 0 ] && grep -q -- "$want" "$log" && [ "$bad" = 0 ]; then
+        pass=$((pass + 1)); printf '%-28s OK   (%s)\n' "$name" "$want"
+    else
+        fail=$((fail + 1)); printf '%-28s FAIL rc=%s 期望[%s] FAIL行数=%s\n' \
+            "$name" "$rc" "$want" "$bad"
+        tail -n 6 "$log" | sed 's/^/      | /'
+    fi
+}
+# ---- 面要素 LOD 档位（AREA_DOT_PX）的主判据 ----
+# 2026-10-29 决策：AREA_DOT_PX 定档 4（z9 −21%，净损失 3.5%）。
+#
+# ★ 主判据用**确定性量**「走小面路径的面数」(areas_dotted)，**不用时间**：
+#   时间会被机器负载放大一个数量级（同一条路线手跑三次 502/503/522 ms，
+#   而在 load average 10 + swap 满的机器上会跑出 3885 ms）⇒ 时间型判据必然 flaky，
+#   而 flaky 判据比没有判据更糟（久了大家会习惯性忽略 FAIL）。
+#   areas_dotted 是"多少个面被简化成单个像素"，只取决于数据与档位常量，
+#   与机器负载完全无关。
+#
+# 判据形式（skill §61：已知缺陷写成**上界**，不写成"必须等于"）：
+#   areas_dotted 落在 [LO, HI] 区间内 ⇒ 通过
+#   ⇒ 将来档位调整（无论是产品决策还是 bug 修复）只要落在区间外就会报出来，
+#     而区间本身留了余量，不会因为数据微调就假 FAIL。
+area_lod_tier() {             # area_lod_tier <名字> <zoom> <dotted_lo> <dotted_hi> <drawn>
+    local name=$1 z=$2 lo=$3 hi=$4 want_drawn=$5
+    local log="$SHOTS/$name.log"
+    "$BUILD/navmap_qt" --shot-offscreen --graph="$GRAPH" \
+        --lat=39.90 --lon=116.40 --zoom="$z" --w=1280 --h=800 \
+        --out="$SHOTS/$name.bmp" >"$log" 2>&1
+    local rc=$?
+    local dotted drawn
+    dotted=$(awk '/^areas_dotted/{print $2}' "$log")
+    drawn=$(awk '/^areas_drawn/{print $2}' "$log")
+    if [ "$rc" != 0 ] || [ -z "$dotted" ] || [ -z "$drawn" ]; then
+        fail=$((fail + 1))
+        printf '%-28s FAIL rc=%s 期望 areas_dotted/areas_drawn 输出\n' "$name" "$rc"
+        tail -n 6 "$log" | sed 's/^/      | /'
+        return
+    fi
+    # 面一个都不能少：简化只改画法，不改要素数（实测恒为 113933 @ z9）
+    if [ "$drawn" != "$want_drawn" ]; then
+        fail=$((fail + 1))
+        printf '%-28s FAIL areas_drawn=%s（应为 %s：简化不该改变要素数）\n' \
+            "$name" "$drawn" "$want_drawn"
+        return
+    fi
+    if [ "$dotted" -ge "$lo" ] && [ "$dotted" -le "$hi" ]; then
+        pass=$((pass + 1))
+        printf '%-28s OK   (dotted=%s 在 [%s,%s])\n' "$name" "$dotted" "$lo" "$hi"
+    else
+        fail=$((fail + 1))
+        printf '%-28s FAIL dotted=%s 不在 [%s,%s]（AREA_DOT_PX 档位被改动？）\n' \
+            "$name" "$dotted" "$lo" "$hi"
+    fi
+}
+```
+
+完整脚本见 `13_gates.md` 的 `scripts/regress.sh` 内嵌（全文 802 行）
 
 ## 四、与其他功能之间的联系
 

@@ -247,7 +247,88 @@ int nmbin_check(const NMBinFile *f, char *err, size_t err_cap)
 }
 ```
 
-> 写入侧的 `nmbin_create`/`nmbin_add_field`/`nmbin_write_records`/`nmbin_finalize` 实现（含"先写 0 记录数、写完回填"的小技巧）见 `binfmt.c:98-175`。为控制篇幅省略其完整体，可在 `src/map/binfmt.c:98-175` 查阅。
+写入侧的 `nmbin_create`/`nmbin_add_field`/`nmbin_write_records`/`nmbin_finalize` 实现（含"先写 0 记录数、写完回填"的小技巧）完整如下（`src/map/binfmt.c:98-175`）：
+
+```c
+NMBinWriter *nmbin_create(const char *path, uint32_t kind, uint32_t rec_size,
+                          const char *source_hint)
+{
+    FILE *fp = fopen(path, "wb");
+    if (!fp) return NULL;
+    NMBinWriter *w = calloc(1, sizeof(NMBinWriter));
+    if (!w) { fclose(fp); return NULL; }
+    snprintf(w->path, sizeof(w->path), "%s", path);
+    w->fp = fp;
+    memcpy(w->hdr.magic, NMBIN_MAGIC, 8);
+    w->hdr.version  = NMBIN_VERSION;
+    w->hdr.kind     = kind;
+    w->hdr.rec_size = rec_size;
+    w->hdr.n_fields = 0;
+    w->hdr.rec_count = 0;
+    if (source_hint) snprintf(w->hdr.source, sizeof(w->hdr.source), "%s", source_hint);
+
+    uint8_t hdrb[NMBIN_HDR_BYTES];
+    hdr_to_bytes(&w->hdr, hdrb);
+    if (fwrite(hdrb, 1, NMBIN_HDR_BYTES, fp) != NMBIN_HDR_BYTES) { fclose(fp); free(w); return NULL; }
+    /* 字段表先留白，finalize 时回填（此时还不知道有几个字段） */
+    uint8_t zeros[NMBIN_FIELD_BYTES * NMBIN_MAX_FIELDS];
+    memset(zeros, 0, sizeof(zeros));
+    if (fwrite(zeros, 1, sizeof(zeros), fp) != sizeof(zeros)) { fclose(fp); free(w); return NULL; }
+    return w;
+}
+
+int nmbin_add_field(NMBinWriter *w, const char *name, uint16_t offset,
+                    uint8_t type, uint8_t width)
+{
+    if (!w || w->hdr.n_fields >= NMBIN_MAX_FIELDS) return -1;
+    NMBinField *f = &w->fields[w->hdr.n_fields++];
+    snprintf(f->name, sizeof(f->name), "%s", name);
+    f->offset = offset; f->type = type; f->width = width;
+    return 0;
+}
+
+int nmbin_write_records(NMBinWriter *w, const void *recs, uint64_t n)
+{
+    if (!w || w->failed) return -1;
+    if (n == 0) return 0;
+    size_t bytes = (size_t)n * w->hdr.rec_size;
+    if (fwrite(recs, 1, bytes, w->fp) != bytes) { w->failed = 1; return -1; }
+    w->recs_written += n;
+    return 0;
+}
+
+int nmbin_finalize(NMBinWriter *w)
+{
+    if (!w) return -1;
+    if (w->failed) { fclose(w->fp); remove(w->path); free(w); return -1; }
+
+    w->hdr.rec_count = w->recs_written;
+    w->hdr.payload_bytes = w->recs_written * (uint64_t)w->hdr.rec_size;
+
+    if (fseek(w->fp, 0, SEEK_SET) != 0) { fclose(w->fp); free(w); return -1; }
+    uint8_t hdrb[NMBIN_HDR_BYTES];
+    hdr_to_bytes(&w->hdr, hdrb);
+    if (fwrite(hdrb, 1, NMBIN_HDR_BYTES, w->fp) != NMBIN_HDR_BYTES) { fclose(w->fp); free(w); return -1; }
+
+    uint8_t fb[NMBIN_FIELD_BYTES];
+    for (uint32_t i = 0; i < NMBIN_MAX_FIELDS; i++) {
+        if (i < w->hdr.n_fields) field_to_bytes(&w->fields[i], fb);
+        else memset(fb, 0, sizeof(fb));
+        if (fwrite(fb, 1, sizeof(fb), w->fp) != sizeof(fb)) { fclose(w->fp); free(w); return -1; }
+    }
+    fclose(w->fp);
+    free(w);
+    return 0;
+}
+
+void nmbin_abort(NMBinWriter *w)
+{
+    if (!w) return;
+    if (w->fp) fclose(w->fp);
+    remove(w->path);
+    free(w);
+}
+```
 
 ### 4. NamePool（下沉到 map 层，`namepool.h:19-24`、`namepool.c:24-60`）
 
@@ -646,7 +727,72 @@ void mapset_set_view(MapSet *ms, const int32_t vb[4])
 }
 ```
 
-> `bbox_overlap`（`mapset.c:777-780`，四角交集判定）与 `src_unload`（`mapset.c:446-498`，关文件/释放缓存但保留身份）为 `set_view` 的支撑函数，完整代码见源文件；为控制篇幅此处不重复粘贴，可在 `src/map/mapset.c:446-498` 与 `src/map/mapset.c:777-780` 查阅。
+`bbox_overlap`（`mapset.c:777-780`，四角交集判定）与 `src_unload`（`mapset.c:446-498`，关文件/释放缓存但保留身份）为 `set_view` 的支撑函数，完整代码（`src/map/mapset.c:446-498` 与 `src/map/mapset.c:777-780`）如下：
+
+```c
+/* mapset.c:446-498 —— src_unload：关文件/释放缓存但保留身份 */
+/* 与 src_close（整体释放，mapset_free 用）不同，这里省份槽位继续存在，
+ * 只是文件不再 mmap——下次 set_view 命中视口时 src_open_files 重新打开。 */
+static void src_unload(MapSrc *s)
+{
+    if (s->dmap_inflight) return;   /* 后台解码中：保留 nodes 映射，待解码完再卸 */
+    nmbin_close(&s->nodes);
+    nmbin_close(&s->edges);
+    if (s->has_restr) nmbin_close(&s->restrictions);
+    /* ★ PBF 解码出来的显示层是 malloc 缓冲，nmbin_close 只管 mmap，
+     * 所以要单独 pbfmap_free（否则泄漏）。 */
+    if (s->dmap_from_pbf) {
+        pbfmap_free(&s->dmap);
+        s->dmap_from_pbf = 0;
+    }
+    /* ★ 显示层分 tile 的拼接缓冲也是手 malloc（mapped=0），nmbin_close 不会释放，
+     * 这里先回收；普通省 has_disp_tiles=0，src_free_disp 是空操作。 */
+    src_free_disp(s);
+    if (s->has_features) {
+        nmbin_close(&s->lines);
+        nmbin_close(&s->areas);
+        nmbin_close(&s->polyrefs);
+    }
+    if (s->has_contours) {
+        nmbin_close(&s->contours);
+        nmbin_close(&s->contour_polyrefs);
+        nmbin_close(&s->contour_pts);
+    }
+    if (s->has_tiles) {
+        nmbin_close(&s->tiles);
+        nmbin_close(&s->edgelist);
+    }
+    name_pool_close(&s->np);
+    nmbin_close(&s->lanes);
+    name_pool_close(&s->lnp);
+    s->has_lanes = 0;
+    free(s->area_bbox);
+    free(s->line_bbox);
+    free(s->contour_bbox);
+    memset(&s->nodes, 0, sizeof(s->nodes));
+    memset(&s->edges, 0, sizeof(s->edges));
+    memset(&s->restrictions, 0, sizeof(s->restrictions));
+    memset(&s->lines, 0, sizeof(s->lines));
+    memset(&s->areas, 0, sizeof(s->areas));
+    memset(&s->polyrefs, 0, sizeof(s->polyrefs));
+    memset(&s->tiles, 0, sizeof(s->tiles));
+    memset(&s->edgelist, 0, sizeof(s->edgelist));
+    memset(&s->np, 0, sizeof(s->np));
+    s->has_restr = 0;
+    s->has_features = 0;
+    s->has_tiles = 0;
+    s->area_bbox = NULL;
+    s->line_bbox = NULL;
+    s->contour_bbox = NULL;
+    /* name/dir/bbox/dup_of 保留 */
+}
+
+/* mapset.c:777-780 —— bbox_overlap：四角交集判定 */
+static int bbox_overlap(const int32_t a[4], const int32_t b[4])
+{
+    return !(a[2] < b[0] || a[3] < b[1] || a[0] > b[2] || a[1] > b[3]);
+}
+```
 
 ### 9. `dup_of` 检测：`detect_duplicates`（`mapset.c:608-657`）
 
@@ -820,7 +966,136 @@ int coverage_locate(const MapSet *ms, double lat, double lon, CovPlace *out)
 }
 ```
 
-> `CovPlace` 结构与 `coverage_hint`（生成面向用户文案）的实现见 `coverage.h:35-47` 与 `coverage.c:280-387`；为控制篇幅省略其完整体，可在对应行号查阅。
+`CovPlace` 结构与 `coverage_hint`（生成面向用户文案）的实现完整如下（`src/map/coverage.h:35-47` 与 `src/map/coverage.c:280-387`）：
+
+```c
+/* coverage.h:35-47 —— CovPlace */
+typedef struct {
+    char   country[24];            /* "中国"；判断不出来（多半在境外）时为空串 */
+    char   prov[COV_PROV_MAX];     /* 中文省名 "河北"；无则空 */
+    char   prov_id[COV_PROV_MAX];  /* 拼音目录名 "hebei"（= 已加载省名 / 下载叶子名） */
+    char   city[64];               /* 地级市 "廊坊市"；由上层用地名库补（见 label_nearest_admin） */
+    char   district[64];           /* 区/县 "广阳区"；同上 */
+    int    prov_guessed;           /* 1 = prov 是"按最近省会推断"的，不是 bbox 命中的 */
+    double nearest_km;             /* prov_guessed ? 到最近省会的距离 : 到最近已加载省的距离；
+                                    * 落在已加载省内为 0，无法算为 -1 */
+    double nearest_loaded_km;      /* 到最近**已加载**省 bbox 的距离（判国别用，无实证时为 -1） */
+    char   dl_name[COV_PROV_MAX];  /* 建议下载的 Geofabrik 叶子名（如 "hebei"）；无建议为空 */
+    char   dl_label[COV_PROV_MAX]; /* 建议下载的显示名（如 "河北"）；无建议为空 */
+} CovPlace;
+```
+
+```c
+/* coverage.c:280-387 —— coverage_hint */
+void coverage_hint(const MapSet *ms, double lat, double lon, int cov,
+                   const CovPlace *pl, char *out, size_t cap)
+{
+    if (!out || !cap) return;
+    out[0] = '\0';
+
+    /* 已加载的省列出来，让人一眼看出自己手上有什么 */
+    char provs[512];
+    provs[0] = '\0';
+    size_t used = 0;
+    for (int i = 0; i < ms->n && used < sizeof(provs) - 32; i++) {
+        int n = snprintf(provs + used, sizeof(provs) - used, "%s%s",
+                         i ? " " : "", ms->srcs[i].name);
+        if (n > 0) used += (size_t)n;
+    }
+
+    if (cov == COV_HAS_ROAD) {
+        snprintf(out, cap, "有地图数据（%s）。",
+                 (pl && pl->prov[0]) ? pl->prov : "—");
+        return;
+    }
+
+    /* ---- "这是哪儿"：国家 / 省 / 市 / 区，查到几层报几层 ----
+     * 用"逐段追加 + 空段跳过"拼，不要写成 %s%s%s 的定长模板：某个字段为空时
+     * 会在句尾留下多余空格（实测输出过"中国 河北 。"这种带空格句号）。 */
+    char where[224];
+    size_t wl = 0;
+    where[0] = '\0';
+    {
+        const char *parts[4] = {
+            (pl && pl->country[0])  ? pl->country  : "",
+            (pl && pl->prov[0])     ? pl->prov     : "",
+            (pl && pl->city[0])     ? pl->city     : "",
+            (pl && pl->district[0]) ? pl->district : "",
+        };
+        for (int i = 0; i < 4; i++) {
+            if (!parts[i][0]) continue;
+            int n = snprintf(where + wl, sizeof(where) - wl, "%s%s",
+                             wl ? " · " : "", parts[i]);
+            if (n > 0) wl += (size_t)n;
+        }
+    }
+
+    const char *country = (pl && pl->country[0]) ? pl->country : "";
+    const char *prov    = (pl && pl->prov[0])    ? pl->prov    : "";
+
+    if (pl && pl->nearest_km > 1.0) {
+        /* 在已加载省之外。四种说法，各有各的把握程度 —— 不要硬凑成一句：
+         *   ① 境内（离已加载省近）且推断出省 ⇒ 直接说省，并注明"推断"
+         *   ② 境外/太远但推断出省         ⇒ 报"可能境外"，省只作参考
+         *   ③ 无省表可用                 ⇒ 只能说不确定
+         */
+        const char *how = (pl->prov_guessed && prov[0])
+                              ? "（按最近省会推断）" : "";
+        if (*country && prov[0])
+            snprintf(where, sizeof(where),
+                     "%s境内、但该省未下载；大致在 %s%s，距 %.0f km",
+                     country, prov, how, pl->nearest_km);
+        else if (*country)
+            snprintf(where, sizeof(where),
+                     "%s境内、但不在已加载的省份里（距最近的省约 %.0f km）",
+                     country, pl->nearest_loaded_km);
+        else if (prov[0])
+            snprintf(where, sizeof(where),
+                     "可能在境外（已加载省份之外）；最近的省会参考 %s%s，距 %.0f km",
+                     prov, how, pl->nearest_km);
+        else
+            snprintf(where, sizeof(where), "无法判断（尚未加载任何省份数据）");
+    } else if (!where[0]) {
+        snprintf(where, sizeof(where), "未知区域");
+    }
+
+    const char *what =
+        (cov == COV_NONE)      ? "这里没有地图数据" :
+        (cov == COV_BBOX_ONLY) ? "这里在数据范围内，但附近没有路网"
+                                 "（多半是水域、荒漠或尚未采集）" :
+                                 "无法判断（已加载的省都没有空间索引）";
+
+    /* ---- "该怎么办"：COV_NONE 才该下载；COV_BBOX_ONLY 是"数据有了、这块没路"，
+     *      此时建议下载**已经加载的省**毫无意义（实测输出过"建议下载：河北"，
+     *      而河北明明已加载）。这条分支必须分开写。 ---- */
+    char dl[288];
+    if (cov == COV_BBOX_ONLY) {
+        if (prov[0])
+            snprintf(dl, sizeof(dl),
+                     "%s的数据已加载，此处确实没有路网（水域/未采集）；"
+                     "换个位置或继续浏览即可", prov);
+        else
+            snprintf(dl, sizeof(dl),
+                     "该省数据已加载，此处确实没有路网；换个位置或继续浏览即可");
+    } else if (pl && pl->dl_label[0]) {
+        snprintf(dl, sizeof(dl),
+                 "建议下载：%s（『地图 → 下载全球地图』会直接定位到这一项）",
+                 pl->dl_label);
+    } else {
+        snprintf(dl, sizeof(dl),
+                 "建议下载：在『地图 → 下载全球地图』里按国家/省份选择");
+    }
+
+    snprintf(out, cap,
+             "%s —— %s。\n"
+             "位置 %.5f, %.5f    已加载 %d 个省：%s\n"
+             "%s\n"
+             "（『地图 → 下载全球地图』下载后会自动转换并加载，无需手工跑脚本。）\n"
+             "数据来源 Geofabrik https://download.geofabrik.de/ ，"
+             "自选范围可用 BBBike https://extract.bbbike.org/ 。",
+             what, where, lat, lon, ms->n, provs[0] ? provs : "（无）", dl);
+}
+```
 
 ### 11. `autobuild_repair` 全量（`autobuild.c:471-586`）
 
@@ -941,7 +1216,273 @@ done:
 }
 ```
 
-> `prov_check`（五条判据：目录缺失/文件不全/binfmt 校验失败/版本不符/源指纹不符）、`rebuild_one`、`find_tool`/`find_src_dir`/`find_pbf`、`lock_acquire`/`lock_release` 等支撑函数为完整自愈逻辑，见 `autobuild.c:175-377` 与 `autobuild.c:62-116`；为控制篇幅省略其完整体，可在对应行号查阅。
+`prov_check`（五条判据：目录缺失/文件不全/binfmt 校验失败/版本不符/源指纹不符）、`rebuild_one`、`find_tool`/`find_src_dir`/`find_pbf`、`lock_acquire`/`lock_release` 等支撑函数为完整自愈逻辑，完整代码（`src/map/autobuild.c:62-116` 与 `src/map/autobuild.c:175-377`）如下：
+
+```c
+/* autobuild.c:62-116 —— 工具/源目录/源 pbf 定位 + 并发锁辅助 */
+static int find_tool(char *out, size_t cap)
+{
+    char exe[4096];
+    if (nm_exe_path(exe, sizeof(exe)) == 0) {
+        char dir[4096];
+        size_t n = strlen(exe);
+        if (n < sizeof(dir)) {
+            memcpy(dir, exe, n + 1);
+            char *slash = (char *)nm_last_sep(dir);
+            if (slash) {
+                *slash = '\0';
+                if (nm_which(dir, "graph_extract", out, cap) == 0) return 0;
+                char sub[4096];
+                if (nm_path_join(sub, sizeof(sub), dir, "build") == 0 &&
+                    nm_which(sub, "graph_extract", out, cap) == 0) return 0;
+                char up[4096];
+                if (nm_path_join(up, sizeof(up), dir, "..") == 0 &&
+                    nm_which(up, "graph_extract", out, cap) == 0) return 0;
+            }
+        }
+    }
+    return nm_find_in_path("graph_extract", out, cap);
+}
+
+/* sources/ 在哪：从 graph_dir 逐级往上找，最多 6 级 */
+static int find_src_dir(char *out, size_t cap, const char *graph_dir)
+{
+    char cur[4096];
+    snprintf(cur, sizeof(cur), "%s", graph_dir);
+    size_t n = strlen(cur);
+    while (n > 1 && (cur[n - 1] == '/' || cur[n - 1] == '\\')) cur[--n] = '\0';
+
+    for (int i = 0; i < 6; i++) {
+        if (nm_path_join(out, cap, cur, "sources") == 0 && nm_is_dir(out)) return 0;
+        char *slash = (char *)nm_last_sep(cur);
+        if (!slash || slash == cur) break;
+        *slash = '\0';
+    }
+    snprintf(out, cap, "sources");
+    return nm_is_dir(out) ? 0 : -1;
+}
+
+/* 该省对应的源 pbf（两种后缀都认）。找到返回 0 并填 pbf 路径。 */
+static int find_pbf(const char *src_dir, const char *name, char *out, size_t cap)
+{
+    char base[512];
+    int n = snprintf(base, sizeof(base), "%s.osm.pbf", name);
+    if (n >= 0 && (size_t)n < sizeof(base) &&
+        nm_path_join(out, cap, src_dir, base) == 0 && nm_file_exists(out)) return 0;
+
+    n = snprintf(base, sizeof(base), "%s.pbf", name);
+    if (n >= 0 && (size_t)n < sizeof(base) &&
+        nm_path_join(out, cap, src_dir, base) == 0 && nm_file_exists(out)) return 0;
+    return -1;
+}
+```
+
+```c
+/* autobuild.c:175-377 —— prov_check（五条判据） + 并发锁 + rebuild_one */
+static int prov_check(const char *dir, const char *pbf, char *why, size_t cap)
+{
+    char p[4096];
+
+    /* 1) 产物目录在不在 */
+    if (!nm_is_dir(dir)) {
+        snprintf(why, cap, "%s", PV_MISSING_TXT);
+        return PV_MISSING;
+    }
+    /* 2) 必需文件齐不齐（与 sync_maps 同一份清单） */
+    if (nm_path_join(p, sizeof(p), dir, "manifest.txt") != 0 ||
+        !nm_file_exists(p)) {
+        snprintf(why, cap, "%s（缺 manifest.txt，上次转换没走完）", PV_INCOMPLETE_TXT);
+        return PV_INCOMPLETE;
+    }
+    static const char *need[] = { "nodes.bin", "edges.bin", "osmid.bin" };
+    for (size_t i = 0; i < sizeof(need) / sizeof(need[0]); i++) {
+        if (nm_path_join(p, sizeof(p), dir, need[i]) != 0) {
+            snprintf(why, cap, "%s（路径过长）", PV_INCOMPLETE_TXT);
+            return PV_INCOMPLETE;
+        }
+        if (!nm_file_exists(p)) {
+            snprintf(why, cap, "%s（缺 %s）", PV_INCOMPLETE_TXT, need[i]);
+            return PV_INCOMPLETE;
+        }
+    }
+    /* 3) 二进制自洽性（截断/半截文件在这里现形） */
+    if (bin_ok(dir, "nodes.bin", why, cap) != 0) return PV_CORRUPT;
+    if (bin_ok(dir, "edges.bin", why, cap) != 0) return PV_CORRUPT;
+
+    /* 4) 格式版本 */
+    char v[64];
+    if (mani_get(dir, "binfmt_version", v, sizeof(v)) == 0) {
+        int ver = atoi(v);
+        if (ver > 0 && ver != NMBIN_VERSION) {
+            snprintf(why, cap, "二进制格式升级 v%d → v%d", ver, NMBIN_VERSION);
+            return PV_STALE;
+        }
+    }
+    /* 5) 源指纹：源 pbf 换了就该重转 */
+    uint64_t sb = 0;
+    int64_t  sm = 0;
+    if (nm_stat_file(pbf, &sb, &sm) != 0) { sb = 0; sm = 0; }
+    if (mani_get(dir, "src_bytes", v, sizeof(v)) == 0) {
+        uint64_t mb = strtoull(v, NULL, 10);
+        if (sb && mb && mb != sb) {
+            snprintf(why, cap, "源文件大小变了（%llu → %llu 字节）",
+                     (unsigned long long)mb, (unsigned long long)sb);
+            return PV_STALE;
+        }
+    }
+    if (mani_get(dir, "src_mtime", v, sizeof(v)) == 0) {
+        int64_t mm = strtoll(v, NULL, 10);
+        if (sm && mm && mm != sm) {
+            snprintf(why, cap, "源文件被换过了（mtime 不同）");
+            return PV_STALE;
+        }
+    }
+    why[0] = '\0';
+    return PV_OK;
+}
+
+/* ------------------------------------------------------------------ */
+/* 并发锁：两个实例同时发现缺失时，只有一个去转                            */
+/* ------------------------------------------------------------------ */
+
+static void lock_path(char *out, size_t cap, const char *parent, const char *name)
+{
+    char nm[512];
+    int n = snprintf(nm, sizeof(nm), "%s.building", name);
+    if (n < 0 || (size_t)n >= sizeof(nm) || nm_path_join(out, cap, parent, nm) != 0)
+        out[0] = '\0';
+}
+
+static int lock_pid_alive(const char *lp)
+{
+    FILE *f = fopen(lp, "r");
+    if (!f) return 0;
+    int pid = 0;
+    if (fscanf(f, "%d", &pid) != 1) pid = 0;
+    fclose(f);
+    return nm_pid_alive(pid);
+}
+
+/* 0 = 拿到锁；-1 = 拿不到（超时）。锁里写自己的 pid，便于识别过期锁。 */
+static int lock_acquire(const char *parent, const char *name)
+{
+    char lp[4096];
+    lock_path(lp, sizeof(lp), parent, name);
+    nm_mkdir_p(parent);
+
+    for (int try = 0; try < 360; try++) {          /* 最多等约 3 分钟 */
+        char b[32];
+        snprintf(b, sizeof(b), "%d\n", nm_get_pid());
+        if (nm_create_exclusive(lp, b) == 0) return 0;
+        if (!lock_pid_alive(lp)) {                 /* 上一个人崩了，锁是孤儿 */
+            nm_unlink(lp);
+            continue;
+        }
+        if (try == 0)
+            fprintf(stderr, "[自动重建] %s 有另一个进程正在转换，等待中…\n", name);
+        nm_sleep_ms(500);
+    }
+    return -1;
+}
+
+static void lock_release(const char *parent, const char *name)
+{
+    char lp[4096];
+    lock_path(lp, sizeof(lp), parent, name);
+    nm_unlink(lp);
+}
+
+/* ------------------------------------------------------------------ */
+/* 重建一个省                                                           */
+/* ------------------------------------------------------------------ */
+
+static int run_extract(const char *tool, const char *pbf, const char *dir)
+{
+    /* fork 会把 stdio 缓冲区复制一份，先冲干净（平台层内部也做一次） */
+    fflush(NULL);
+    char outarg[4224];      /* 路径 buffer(4096) + "--out=" 还有富余 */
+    if (snprintf(outarg, sizeof(outarg), "--out=%s", dir) >= (int)sizeof(outarg))
+        return -1;
+    char *const av[] = { (char *)tool, outarg, (char *)pbf, NULL };
+    int code = 0;
+    if (nm_spawn_wait(tool, av, &code) != 0) return -1;
+    return code == 0 ? 0 : -1;
+}
+
+/* 让位目录：prov_dir 同级 + ".old.<pid>"。带 .old. 是刻意的——
+   mapset_load 会跳过 .old.* / .tmp.*，不会被当成一个省加载进来。 */
+static int aside_path(char *out, size_t cap, const char *prov_dir)
+{
+    int n = snprintf(out, cap, "%s.old.%d", prov_dir, nm_get_pid());
+    return (n < 0 || (size_t)n >= cap) ? -1 : 0;
+}
+
+/* 返回 0 = 重建成功 */
+static int rebuild_one(const char *graph_parent, const char *prov_dir,
+                       const char *name, const char *pbf, const char *tool)
+{
+    if (lock_acquire(graph_parent, name) != 0) {
+        fprintf(stderr, "[自动重建] %s 等不到转换锁，放弃重建\n", name);
+        return -1;
+    }
+
+    /* 旧产物先清掉：留着会和转换器新写的文件混在一起（比如更大的 osmid.bin
+       配上新的 nodes.bin），出来的图是自相矛盾的。删不掉就改名让位 ——
+       名字带 .old. 是因为 mapset_load 会跳过 .old.* / .tmp.*，不会被当成
+       一个省加载进来（同一份数据装两遍）。 */
+    if (nm_is_dir(prov_dir)) {
+        char aside[4224];
+        if (aside_path(aside, sizeof(aside), prov_dir) != 0) {
+            fprintf(stderr, "[自动重建] %s 路径过长，放弃重建\n", name);
+            lock_release(graph_parent, name);
+            return -1;
+        }
+        if (nm_rmtree(prov_dir) != 0 && nm_rename(prov_dir, aside) != 0) {
+            fprintf(stderr, "[自动重建] %s 旧产物清不掉（%s），放弃重建\n",
+                    name, strerror(errno));
+            lock_release(graph_parent, name);
+            return -1;
+        }
+    }
+
+    fprintf(stderr, "[自动重建] %s 转换中（%s）…\n", name, pbf);
+    double t0 = now_ms();
+    int rc = run_extract(tool, pbf, prov_dir);
+    double ms = now_ms() - t0;
+
+    if (rc != 0) {
+        fprintf(stderr,
+                "[自动重建] %s 转换失败（%.1f s）。源 pbf 可能已损坏，建议挪到 "
+                "sources/_bad/ 后重试；\n"
+                "           也可手工执行：%s --out=%s %s\n",
+                name, ms / 1000.0, tool, prov_dir, pbf);
+        lock_release(graph_parent, name);
+        return -1;
+    }
+
+    char why[256] = "";
+    int pv = prov_check(prov_dir, pbf, why, sizeof(why));
+    if (pv != PV_OK) {
+        fprintf(stderr, "[自动重建] %s 转换结束但产物仍不可用：%s\n", name, why);
+        lock_release(graph_parent, name);
+        return -1;
+    }
+
+    char nodes[64] = "-", edges[64] = "-";
+    mani_get(prov_dir, "nodes", nodes, sizeof(nodes));
+    mani_get(prov_dir, "edges", edges, sizeof(edges));
+    fprintf(stderr, "[自动重建] %s 重建完成（%.1f s，节点 %s / 边 %s）\n",
+            name, ms / 1000.0, nodes, edges);
+
+    /* 让位的旧目录这时可以清了 */
+    char aside[4224];
+    if (aside_path(aside, sizeof(aside), prov_dir) == 0 && nm_is_dir(aside))
+        nm_rmtree(aside);
+
+    lock_release(graph_parent, name);
+    return 0;
+}
+```
 
 ### 12. `RoadTags` 全字段与 `road_tags_parse` 全量（`road_tags.h:49-76`、`road_tags.c:153-276`）
 

@@ -189,7 +189,67 @@ StEnt *st_find(const StateTab *t, uint64_t key)
 }
 ```
 
-（`st_init` / `st_free` / `st_rehash` / `mix64` 为控制篇幅只列签名：`st_init` `st.c:27`、`st_free` `st.c:39`、`st_rehash` `st.c:45`、`mix64` `st.c:9`。）
+以下四个辅助函数逐字摘自 `src/route/st.c`（行号见各块标题），与源码可编译一致：
+
+**`mix64`**（64 位整数混匀，splitmix64 变体，用于哈希）：`src/route/st.c:9-15`
+
+```c
+static uint64_t mix64(uint64_t x)
+{
+    x += 0x9E3779B97F4A7C15ULL;
+    x = (x ^ (x >> 30)) * 0xBF58476D1CE4E5B9ULL;
+    x = (x ^ (x >> 27)) * 0x94D049BB133111EBULL;
+    return x ^ (x >> 31);
+}
+```
+
+**`st_init`**（开地址哈希表初始化，2²⁰ 槽 / 2¹⁸ 条目）：`src/route/st.c:27-37`
+
+```c
+void st_init(StateTab *t)
+{
+    t->cap = 1u << 20;
+    t->slot = calloc(t->cap, sizeof(StSlot));
+    t->cap_ents = 1u << 18;
+    t->ents = malloc(t->cap_ents * sizeof(StEnt));
+    if (!t->slot || !t->ents) {
+        fprintf(stderr, "路由: 状态表分配失败\n");
+        exit(2);
+    }
+}
+```
+
+**`st_free`**（释放槽与条目数组）：`src/route/st.c:39-43`
+
+```c
+void st_free(StateTab *t)
+{
+    free(t->slot); free(t->ents);
+    memset(t, 0, sizeof(*t));
+}
+```
+
+**`st_rehash`**（翻倍扩容，h 复用、下标按新 cap 用 key 重算）：`src/route/st.c:45-61`
+
+```c
+void st_rehash(StateTab *t)
+{
+    size_t ncap = t->cap * 2;
+    StSlot *ns = calloc(ncap, sizeof(StSlot));
+    if (!ns) { fprintf(stderr, "路由: 状态表扩容失败\n"); exit(2); }
+    for (size_t i = 0; i < t->cap; i++) {
+        if (!t->slot[i].h) continue;
+        /* h 可以复用；下标要按新 cap 重算 ⇒ 需要 key ⇒ 从 ents 取（扩容很罕见） */
+        uint64_t m = mix64(t->ents[t->slot[i].idx].key);
+        size_t j = (size_t)(m & (ncap - 1));
+        while (ns[j].h) j = (j + 1) & (ncap - 1);
+        ns[j].h = t->slot[i].h;
+        ns[j].idx = t->slot[i].idx;
+    }
+    free(t->slot);
+    t->slot = ns; t->cap = ncap;
+}
+```
 
 ### 3. 4 叉最小堆 `PQueue`（完整）：`src/route/pqueue.h:35-119`
 
@@ -278,7 +338,78 @@ typedef struct {
 | `rev_free` | `revidx.c:263-273` | 按 `mapped` 决定 `munmap` 还是 `free` |
 | `rev_equal` | `revidx.c:275-284` | 逐元素对比两份索引（含 `list_count`），供 `--verify` |
 
-`rev_build_mem` 为完整范例（反向 CSR 构建，含脏边跳过与前缀和，为控制篇幅此处仅列签名；其完整实现见 `src/route/revidx.c:71-138`）。
+`rev_build_mem` 完整范例（反向 CSR 构建，含脏边跳过与前缀和），逐字摘自 `src/route/revidx.c:71-138`：
+
+```c
+int rev_build_mem(const NMBinFile *nodes, const NMBinFile *edges,
+                  const char *prov_name, RevIdx *rv)
+{
+    memset(rv, 0, sizeof(*rv));
+    uint64_t n  = nodes->hdr.rec_count;
+    uint64_t ne = edges->hdr.rec_count;
+    if (n == 0 || ne == 0) return -1;
+    if (ne > 0xFFFFFFFFu) return -1;     /* 反向索引用 u32 偏移，超了就不建 */
+
+    uint64_t t0 = rev_now_ms();
+    uint32_t *start = calloc((size_t)n + 1, sizeof(uint32_t));
+    uint32_t *cur   = malloc(((size_t)n + 1) * sizeof(uint32_t));
+    uint32_t *list  = malloc((size_t)ne * sizeof(uint32_t));
+    if (!start || !cur || !list) {
+        free(start); free(cur); free(list);
+        fprintf(stderr, "路由: 反向索引分配失败\n");
+        return -1;
+    }
+    const uint8_t *nds = nodes->data;
+    const uint8_t *eds = edges->data;
+
+    /* 计数：按 from 节点遍历（CSR 天然按 from 分组） */
+    for (uint64_t i = 0; i < n; i++) {
+        const uint8_t *nr = nds + i * NM_NODE_BYTES;
+        uint32_t eb = nm_get_u32(nr + NF_EDGE_BEGIN);
+        uint32_t ec = nm_get_u16(nr + NF_EDGE_COUNT);
+        for (uint32_t k = 0; k < ec; k++) {
+            uint64_t ei = (uint64_t)eb + k;
+            if (ei >= ne) break;
+            uint32_t to = nm_get_u32(eds + ei * NM_EDGE_BYTES + EF_TO);
+            if ((uint64_t)to >= n) continue;      /* 脏数据，忽略 */
+            start[to + 1]++;
+        }
+    }
+    /* 前缀和：start[i] = 指向节点 i 的入边区间起点，start[i+1] = 区间终点。
+       ★ 不能写成 for (i=0; i<=n; i++) { c=start[i]; start[i]=acc; acc+=c; }——
+         那样 start[n] 会漏掉 cnt[n-1]（最后一个节点的入边区间被截成空）。 */
+    uint64_t acc = 0;
+    for (uint64_t i = 0; i < n; i++) {
+        uint32_t c = start[i + 1];
+        start[i] = (uint32_t)acc;
+        acc += c;
+    }
+    start[n] = (uint32_t)acc;
+    memcpy(cur, start, ((size_t)n + 1) * sizeof(uint32_t));
+    for (uint64_t i = 0; i < n; i++) {
+        const uint8_t *nr = nds + i * NM_NODE_BYTES;
+        uint32_t eb = nm_get_u32(nr + NF_EDGE_BEGIN);
+        uint32_t ec = nm_get_u16(nr + NF_EDGE_COUNT);
+        for (uint32_t k = 0; k < ec; k++) {
+            uint64_t ei = (uint64_t)eb + k;
+            if (ei >= ne) break;
+            uint32_t to = nm_get_u32(eds + ei * NM_EDGE_BYTES + EF_TO);
+            if ((uint64_t)to >= n) continue;
+            list[cur[to]++] = (uint32_t)i;
+        }
+    }
+    free(cur);
+    rv->built = 1;
+    rv->start = start;
+    rv->list  = list;
+    rv->list_count = start[n];
+    fprintf(stderr, "路由: 为 %s 建反向索引（%llu 边 / %llu 节点，%llu ms）\n",
+            prov_name ? prov_name : nodes->hdr.source,
+            (unsigned long long)ne, (unsigned long long)n,
+            (unsigned long long)(rev_now_ms() - t0));
+    return 0;
+}
+```
 
 ### 5. 地标下界表 `LmTable`（结构体 + 关键函数签名）：`src/route/lmtable.h:43-94`
 
@@ -355,7 +486,70 @@ double heur(const Router *r, int dir, int32_t lat_e7, int32_t lon_e7)
 }
 ```
 
-`heur` 取"大圆距离"与"地标下界"的 max（admissible 且 consistent：边权=时间 ≥ 距离/130km/h）。`node_coord` / `lm_enabled` / `lm_penalty_add_m` / `graph_root_dir` 为控制篇幅仅列签名（`cost.c:56-110`）。
+`heur` 取"大圆距离"与"地标下界"的 max（admissible 且 consistent：边权=时间 ≥ 距离/130km/h）。以下四个辅助函数逐字摘自 `src/route/cost.c`（行号见各块标题），与源码可编译一致：
+
+**`node_coord`**（节点下标 → 坐标键 `coord_key_e7`）：`src/route/cost.c:56-60`
+
+```c
+uint64_t node_coord(const MapSrc *s, uint32_t node)
+{
+    const uint8_t *nr = s->nodes.data + (uint64_t)node * NM_NODE_BYTES;
+    return coord_key_e7(nm_get_i32(nr + NF_LAT), nm_get_i32(nr + NF_LON));
+}
+```
+
+**`lm_enabled`**（地标表开关，默认开；`NAVIMAP_LM=0` 关，只读一次）：`src/route/cost.c:64-72`
+
+```c
+int lm_enabled(void)
+{
+    static int v = -1;
+    if (v < 0) {
+        const char *e = getenv("NAVIMAP_LM");
+        v = !(e && e[0] == '0' && e[1] == '\0');
+    }
+    return v;
+}
+```
+
+**`lm_penalty_add_m`**（诊断旋钮：在表自带 penalty 上再加 N 米，只读一次）：`src/route/cost.c:79-89`
+
+```c
+uint32_t lm_penalty_add_m(void)
+{
+    static long v = -1;
+    if (v < 0) {
+        const char *e = getenv("NAVIMAP_LM_PENALTY_ADD_M");
+        v = e ? atol(e) : 0;
+        if (v < 0) v = 0;
+        if (v > 1000000) v = 1000000;
+    }
+    return (uint32_t)v;
+}
+```
+
+**`graph_root_dir`**（图目录 = 省目录上上一级，全图只有一份 `lm.bin`/`rev.bin`）：`src/route/cost.c:93-110`
+
+```c
+int graph_root_dir(const MapSet *ms, char *out, size_t cap)
+{
+    if (!ms || ms->n == 0 || !ms->srcs[0].dir[0]) return -1;
+    const char *d = ms->srcs[0].dir;
+    const char *slash = strrchr(d, '/');
+    size_t n;
+    if (!slash) {                        /* 相对的单层目录 ⇒ 父目录是 "." */
+        if (cap < 2) return -1;
+        out[0] = '.'; out[1] = '\0';
+        return 0;
+    }
+    n = (size_t)(slash - d);
+    if (n == 0) n = 1;                   /* "/beijing" ⇒ 父目录是 "/" */
+    if (n >= cap) return -1;
+    memcpy(out, d, n);
+    out[n] = '\0';
+    return 0;
+}
+```
 
 ### 7. 转向限制检查（签名 + 接缝补查完整）：`src/route/restr.c`
 
@@ -696,7 +890,239 @@ static int plan_search(Router *r, RNode from, RNode to, RouteResult *out,
 }
 ```
 
-`expand_dir`（`route.c:573-742`，每坐标松弛出/入边、点查转向限制、入堆记 `ents` 下标）与 `members_of`（`route.c:511-564`，取同一坐标的所有跨省成员）为控制篇幅省略完整体，可在 `src/route/route.c:511` 与 `:573` 查阅。
+**`members_of`**（取同一坐标上的所有跨省成员，逐字摘自 `src/route/route.c:511-564`）——省内部瓦片直接返回到达时的节点，跨多省的缝合坐标用二分在 `SewSlot` 里把所有 `(prov,node)` 成员捞出来：
+
+```c
+size_t members_of(Router *r, uint64_t ck, uint32_t in_prov, uint32_t in_node,
+                         SewEnt *mem)
+{
+    size_t nmem = 0;
+    int32_t la = coord_key_lat(ck), lo = coord_key_lon(ck);
+    int tx, ty;
+    nm_tile_of((double)la / 1e7, (double)lo / 1e7, &tx, &ty);
+    SewSlot *sl = sew_get(r, tx, ty);
+    if (sl->nprov < 0) sl->nprov = tile_prov_count(r->ms, tx, ty);
+
+    if (sl->nprov >= 2) {
+        sew_build(r, sl);
+        size_t lo_i = 0, hi = sl->n;
+        while (lo_i < hi) {
+            size_t mid = (lo_i + hi) / 2;
+            if (sl->v[mid].coord < ck) lo_i = mid + 1; else hi = mid;
+        }
+        while (lo_i < sl->n && sl->v[lo_i].coord == ck && nmem < MAX_MEMBER)
+            mem[nmem++] = sl->v[lo_i++];
+    }
+    if (nmem == 0) {
+        /* 单省瓦片（或索引里没有）：用到达时的那个节点。
+           若它属于副本省（起终点吸附有时还是会碰到），换成宿主省里的
+           同坐标节点——副本下标在宿主省里没有意义。 */
+        uint32_t p = in_prov;
+        while (p < (uint32_t)r->ms->n && r->ms->srcs[p].dup_of >= 0)
+            p = (uint32_t)r->ms->srcs[p].dup_of;
+        int resolved = 0;
+        if (p != in_prov && sl) {
+            sew_build(r, sl);
+            size_t lo_i = 0, hi = sl->n;
+            while (lo_i < hi) {
+                size_t mid = (lo_i + hi) / 2;
+                if (sl->v[mid].coord < ck) lo_i = mid + 1; else hi = mid;
+            }
+            for (size_t z = lo_i; z < sl->n && sl->v[z].coord == ck; z++)
+                if (sl->v[z].prov == p) {
+                    mem[nmem].coord = ck;
+                    mem[nmem].prov = p;
+                    mem[nmem].node = sl->v[z].node;
+                    nmem++;
+                    resolved = 1;
+                    break;
+                }
+        }
+        if (!resolved) {
+            mem[nmem].coord = ck;
+            mem[nmem].prov = in_prov;
+            mem[nmem].node = in_node;
+            nmem++;
+        }
+    }
+    return nmem;
+}
+```
+
+**`expand_dir`**（展开一个坐标：松弛出/入边、点查转向限制、入堆记 `ents` 下标，逐字摘自 `src/route/route.c:573-742`）：
+
+```c
+static void expand_dir(Router *r, int dir, uint64_t ck, StEnt *e0,
+                       uint32_t self_idx)
+{
+    double gd = e0->g;
+    uint32_t in_prov = e0->rep_prov, in_node = e0->rep_node, in_edge = e0->eidx;
+
+    /* 三段限制要的"再前一条边"。正向时它已知（前驱状态已确定）；
+       反向时前驱在搜索方向上还没展开，只能用保守版，见 restr_blocked2_rev。
+       ★ prev_idx 是本表的下标，直接索引即可（原先是一次冷 st_find）：
+         ents 只 append，下标不会因为 realloc 而失效。 */
+    uint32_t prev2_edge = REDGE_SEAM;
+    if (dir == DIR_FWD && e0->prev_idx != UINT32_MAX) {
+        StEnt *pe = &r->st[dir].ents[e0->prev_idx];
+        if (pe->eprov == in_prov) prev2_edge = pe->eidx;
+    }
+
+    /* 原来写 st_intern(ck)->settled = 1：为了置一个已知存在的位又跑一遍
+       哈希查找（含可能的 rehash）。ck 一定已被 intern（它是从堆里 pop
+       出来的），直接置即可。京→郑 83 万次展开 ⇒ 省一次 st_find + 一次
+       st_intern（PLAN.md §40）。 */
+    e0->settled = 1;
+    r->expanded++;
+
+    SewEnt mem[MAX_MEMBER];
+    size_t nmem = members_of(r, ck, in_prov, in_node, mem);
+
+    for (size_t mi = 0; mi < nmem; mi++) {
+        uint32_t p = mem[mi].prov, nd = mem[mi].node;
+        if (p >= (uint32_t)r->ms->n) continue;
+        /* 完全被别省包含的副本：它的边在包含它的那份里都有，再走一遍
+           只是把同一个路口展开两次（实测北京→天津因此多花一倍时间）。 */
+        if (r->ms->srcs[p].dup_of >= 0) continue;
+        const MapSrc *s = &r->ms->srcs[p];
+        if ((uint64_t)nd >= s->nodes.hdr.rec_count) continue;
+        uint64_t ne = s->edges.hdr.rec_count;
+        /* 转向限制只在"入边确实落在这个省的这一个节点上"时才有意义；
+           其他成员（别的省的副本）没有可用的入边信息，不检查。 */
+        int check_restr = (p == in_prov && nd == in_node && in_edge != REDGE_SEAM);
+
+        if (dir == DIR_FWD) {
+            const uint8_t *nr = s->nodes.data + (uint64_t)nd * NM_NODE_BYTES;
+            uint32_t eb = nm_get_u32(nr + NF_EDGE_BEGIN);
+            uint32_t ec = nm_get_u16(nr + NF_EDGE_COUNT);
+            for (uint32_t k = 0; k < ec; k++) {
+                uint64_t ei = (uint64_t)eb + k;
+                if (ei >= ne) break;
+                const uint8_t *er = s->edges.data + ei * NM_EDGE_BYTES;
+                uint16_t fl = nm_get_u16(er + EF_FLAGS);
+                if (fl & EF_NO_ACCESS) continue;
+                if (r->opt.avoid_toll && (fl & EF_TOLL)) continue;
+                if (r->opt.avoid_unpaved && (fl & EF_UNPAVED)) continue;
+                if (check_restr) {
+                    if (restr_debug())
+                        fprintf(stderr, "DBGf nd=%u in=%u prev2=%u ei=%llu\n",
+                                nd, in_edge, prev2_edge, (unsigned long long)ei);
+                    if (restr_blocked(r, p, nd, in_edge, (uint32_t)ei))
+                        continue;
+                    if (restr_blocked_only(r, p, nd, in_edge, (uint32_t)ei))
+                        continue;
+                    if (restr_blocked2(r, p, nd, prev2_edge, in_edge,
+                                       (uint32_t)ei))
+                        continue;
+                }
+
+                double meters = 0;
+                double w = edge_cost(r, er, &meters);
+                if (w <= 0) continue;
+
+                uint32_t to = nm_get_u32(er + EF_TO);
+                if ((uint64_t)to >= s->nodes.hdr.rec_count) continue;
+                uint64_t ck2 = node_coord(s, to);
+                if (ck2 == ck) continue;                  /* 自环 */
+
+                StEnt *te = st_intern(&r->st[dir], ck2);
+                if (te->settled) continue;
+                double ng = gd + w;
+                if (ng < te->g) {
+                    te->g = ng;
+                    te->prev_idx = self_idx;
+                    te->eprov = p;
+                    te->eidx = (uint32_t)ei;
+                    te->from_node = nd;
+                    te->rep_prov = p;
+                    te->rep_node = to;
+                    /* 加权 A*：f = g + w·h（OsmAnd RoutePlanner.cpp:746
+                       roadPriorityComparator）。w 默认 1.2，见 route.h。 */
+                    double f = ng + r->opt.heur_w * heur(r, dir,
+                                         coord_key_lat(ck2), coord_key_lon(ck2));
+                    /* 入堆时记下 ents 下标（ents 只 append，realloc 不改下标），
+                       pop 之后就不必再哈希查找。见 pqueue.h 顶部。 */
+                    if (f < r->best_cut)
+                        pq_push(&r->pq[dir], f,
+                                (uint32_t)(te - r->st[dir].ents));
+                }
+            }
+        } else {
+            RevIdx *rv = &r->rv[p];
+            if (!rv->built) {
+                /* 优先用构建期落盘的 rev.bin；没有或规模对不上就现场建。
+                   两条路共用 rev_build_mem()，见 revidx.h 顶部的说明。 */
+                if (rev_load(s->dir, &s->nodes, &s->edges, rv) != 0)
+                    rev_build_mem(&s->nodes, &s->edges, s->name, rv);
+            }
+            if (!rv->start || !rv->list) continue;
+            uint32_t b = rv->start[nd], e = rv->start[nd + 1];
+            for (uint32_t k = b; k < e; k++) {
+                uint32_t u = rv->list[k];
+                if ((uint64_t)u >= s->nodes.hdr.rec_count) continue;
+                if (u == nd) continue;
+                /* 反向索引只存 from 节点，边下标要扫 u 的出边找 EF_TO==nd。
+                   出度是个位数，比再存 4 字节/边划算。平行边取代价最小的。 */
+                const uint8_t *ur = s->nodes.data + (uint64_t)u * NM_NODE_BYTES;
+                uint32_t eb = nm_get_u32(ur + NF_EDGE_BEGIN);
+                uint32_t ec = nm_get_u16(ur + NF_EDGE_COUNT);
+                uint64_t bei = REDGE_SEAM;
+                double bw = INF_G;
+                for (uint32_t q = 0; q < ec; q++) {
+                    uint64_t ei = (uint64_t)eb + q;
+                    if (ei >= ne) break;
+                    const uint8_t *er = s->edges.data + ei * NM_EDGE_BYTES;
+                    if (nm_get_u32(er + EF_TO) != nd) continue;
+                    uint16_t fl = nm_get_u16(er + EF_FLAGS);
+                    if (fl & EF_NO_ACCESS) continue;
+                    if (r->opt.avoid_toll && (fl & EF_TOLL)) continue;
+                    if (r->opt.avoid_unpaved && (fl & EF_UNPAVED)) continue;
+                    double meters = 0;
+                    double w = edge_cost(r, er, &meters);
+                    if (w > 0 && w < bw) { bw = w; bei = ei; }
+                }
+                if (bei == REDGE_SEAM) continue;
+                /* 反向的限制检查：正向路径是 u --bei--> nd --in_edge--> ...
+                   ⇒ via = nd, from = bei, to = in_edge，与正向完全对称。 */
+                if (check_restr) {
+                    if (restr_debug())
+                        fprintf(stderr, "DBGb nd=%u in=%u bei=%llu\n",
+                                nd, in_edge, (unsigned long long)bei);
+                    if (restr_blocked(r, p, nd, (uint32_t)bei, in_edge))
+                        continue;
+                    if (restr_blocked_only(r, p, nd, (uint32_t)bei, in_edge))
+                        continue;
+                    if (restr_blocked2_rev(r, p, nd, (uint32_t)bei, in_edge))
+                        continue;
+                }
+
+                uint64_t ck2 = node_coord(s, u);
+                if (ck2 == ck) continue;
+
+                StEnt *te = st_intern(&r->st[dir], ck2);
+                if (te->settled) continue;
+                double ng = gd + bw;
+                if (ng < te->g) {
+                    te->g = ng;
+                    te->prev_idx = self_idx;   /* ck 在"更靠近终点"的一侧 */
+                    te->eprov = p;
+                    te->eidx = (uint32_t)bei;
+                    te->from_node = u;
+                    te->rep_prov = p;
+                    te->rep_node = u;
+                    /* 加权 A*：f = g + w·h（OsmAnd RoutePlanner.cpp:746
+                       roadPriorityComparator）。w 默认 1.2，见 route.h。 */
+                    double f = ng + r->opt.heur_w * heur(r, dir,
+                                         coord_key_lat(ck2), coord_key_lon(ck2));
+                    if (f < r->best_cut)
+                        pq_push(&r->pq[dir], f,
+                                (uint32_t)(te - r->st[dir].ents));
+                }
+            }
+        }
+    }
+}
+```
 
 **自适应 w 包装 `router_plan`（完整）：`src/route/route.c:1144-1178`**——两遍只在"撞顶后能换 w"时成立，且必须恢复 `w0`（见注释）：
 
@@ -728,7 +1154,164 @@ done:
 }
 ```
 
-（`router_create` `route.c:63`、`router_destroy` `route.c:129`、`router_route_ll` `route.c:254`、`router_lm_loaded` `route.c:215`、`now_ms` `route.c:48` 为控制篇幅仅列签名。）
+以下五个辅助函数逐字摘自 `src/route/route.c`（行号见各块标题），与源码可编译一致：
+
+**`now_ms`**（毫秒计时，平台层 `nm_now_ms` 封装）：`src/route/route.c:48-51`
+
+```c
+static uint64_t now_ms(void)
+{
+    return nm_now_ms();                /* 平台层：clock_gettime / QPC */
+}
+```
+
+**`router_lm_loaded`**（查询地标下界表是否真加载上，给验收脚本用）：`src/route/route.c:215-218`
+
+```c
+int router_lm_loaded(const Router *r)
+{
+    return r && r->lm.loaded ? 1 : 0;
+}
+```
+
+**`router_create`**（Router 生命周期：加载地标表、`w` 兜底、初始化状态表/限制索引/反向索引）：`src/route/route.c:63-127`
+
+```c
+Router *router_create(const MapSet *ms, const RouteOpts *opt)
+{
+    if (!ms || ms->n == 0) return NULL;
+    Router *r = calloc(1, sizeof(Router));
+    if (!r) return NULL;
+    r->ms = ms;
+    /* lm.bin 是**可选的加速表**：没有/版本不对就退回纯直线启发式，不算错误。
+       ★ 必须在 w 兜底之前加载 —— w 的默认值取决于有没有这张表（见下）。 */
+    r->lm_tc[0] = (size_t)-1;
+    r->lm_tc[1] = (size_t)-1;
+    if (lm_enabled()) {
+        char root[4096];
+        if (graph_root_dir(ms, root, sizeof(root)) == 0)
+            lm_table_load(&r->lm, root);
+        if (r->lm.loaded) {
+            uint32_t add = lm_penalty_add_m();
+            if (add) {
+                printf("地标表       penalty %u + %u = %u 米（诊断旋钮）\n",
+                       r->lm.h.penalty_m, add, r->lm.h.penalty_m + add);
+                r->lm.h.penalty_m += add;
+            }
+        }
+        /* ★ 图指纹校验：省数据重抽之后旧表必须失效。它不会崩、不会报错，
+           只是给出偏大的下界（admissible 被破坏），路线悄悄变差 —— 所以
+           这里必须主动把它丢掉，退回纯直线启发式。 */
+        if (r->lm.loaded) {
+            uint64_t tot = 0;
+            for (int i = 0; i < ms->n; i++) tot += ms->srcs[i].nodes.hdr.rec_count;
+            if (!lm_table_match(&r->lm, (uint32_t)ms->n, tot)) {
+                fprintf(stderr,
+                        "lm.bin 与当前路网不匹配（表：%u 省 / %llu 节点；"
+                        "现在：%d 省 / %llu 节点）——已忽略，退回直线启发式。"
+                        "重跑 scripts/sync_maps.sh 可重建。\n",
+                        r->lm.h.nprov, (unsigned long long)r->lm.h.total_nodes,
+                        ms->n, (unsigned long long)tot);
+                lm_table_free(&r->lm);
+            }
+        }
+    }
+    r->opt = opt ? *opt : (RouteOpts){ .mode_time = 1, .bidir = 1, .heur_w = ROUTE_HEUR_W_DEFAULT };
+    if (r->opt.max_expand == 0) r->opt.max_expand = DEFAULT_MAX_EXPAND;
+    /* 调用点如果漏给 heur_w（指名初始化没写到的字段是 0），兜底成标准 A*。
+       有了 ROUTE_HEUR_W_DEFAULT 兜底，加新字段就不必担心旧调用点静默拿到 0。
+       ★★ 有 lm.bin 时兜底变成 ROUTE_HEUR_W_LM，而且**关闭自适应升级**
+         （hi 也用同一个值）—— 理由见 PLAN.md §50.8 / §51.4：
+         w 的"有效贪心度"是 w × h/真值，h 从 44~74% 提到 92~97% 之后，
+         1.4 相当于原来的 2 倍贪心；1.8 更是到 1.71，实测质量 +4.1%。
+         显式传了 --heur-w / --heur-w-hi 的调用点不受影响。 */
+    if (!(r->opt.heur_w > 0.0))
+        r->opt.heur_w = r->lm.loaded ? ROUTE_HEUR_W_LM : ROUTE_HEUR_W_DEFAULT;
+    if (!(r->opt.heur_w_hi > 0.0))
+        r->opt.heur_w_hi = r->lm.loaded ? ROUTE_HEUR_W_LM : ROUTE_HEUR_W_HARD;
+    if (r->opt.adapt_try == 0) r->opt.adapt_try = ROUTE_ADAPT_TRY;
+    r->max_expand = r->opt.max_expand;
+    st_init(&r->st[0]);
+    st_init(&r->st[1]);
+    r->ri = calloc((size_t)ms->n, sizeof(RestrIdx));
+    r->rv = calloc((size_t)ms->n, sizeof(RevIdx));
+    if (!r->ri || !r->rv) {
+        st_free(&r->st[0]); st_free(&r->st[1]);
+        free(r->ri); free(r->rv); free(r);
+        return NULL;
+    }
+    return r;
+}
+```
+
+**`router_destroy`**（释放状态表/堆/限制索引/反向索引/地标表）：`src/route/route.c:129-151`
+
+```c
+void router_destroy(Router *r)
+{
+    if (!r) return;
+    st_free(&r->st[0]);
+    st_free(&r->st[1]);
+    pq_free(&r->pq[0]);
+    pq_free(&r->pq[1]);
+    for (int i = 0; i < SEW_SLOTS; i++) free(r->sew[i].v);
+    for (int i = 0; i < r->ms->n; i++) {
+        free(r->ri[i].kv);
+        free(r->ri[i].to);
+        free(r->ri[i].kv2);
+        free(r->ri[i].to2);
+        free(r->ri[i].prev2);
+        free(r->ri[i].kv1);
+        free(r->ri[i].to1);
+        rev_free(&r->rv[i]);
+    }
+    free(r->ri);
+    free(r->rv);
+    lm_table_free(&r->lm);
+    free(r);
+}
+```
+
+**`router_route_ll`**（经纬度→经纬度算路，吸附到死节点时换下一个候选重试）：`src/route/route.c:254-289`
+
+```c
+int router_route_ll(Router *r, double flat, double flon, double tlat, double tlon,
+                    RouteResult *out, RNode *fa, RNode *fb,
+                    double *da, double *db)
+{
+    RNode A[SNAP_TRY], B[SNAP_TRY];
+    double DA[SNAP_TRY], DB[SNAP_TRY];
+    if (out) memset(out, 0, sizeof(*out));
+    int na = router_nearest_k(r, flat, flon, A, SNAP_TRY, DA);
+    int nb = router_nearest_k(r, tlat, tlon, B, SNAP_TRY, DB);
+    /* 就算失败也把 fa/fb 填上（至少填第一个候选）：调用方拿它做"吸附标记"，
+       未初始化的 RNode 会让编译器 -Wmaybe-uninitialized 告警（零警告门禁）。 */
+    if (na > 0 && fa) *fa = A[0];
+    if (na > 0 && da) *da = DA[0];
+    if (nb > 0 && fb) *fb = B[0];
+    if (nb > 0 && db) *db = DB[0];
+    if (na <= 0 || nb <= 0) return -1;
+
+    for (int s = 0; s < SNAP_TRY; s++) {
+        for (int i = 0; i <= s && i < na; i++) {
+            int j = s - i;
+            if (j >= nb) continue;
+            int rc = router_plan(r, A[i], B[j], out);
+            if (rc == 0) {
+                if (fa) *fa = A[i];
+                if (fb) *fb = B[j];
+                if (da) *da = DA[i];
+                if (db) *db = DB[j];
+                return 0;
+            }
+            route_result_free(out);
+            if (rc == -1) continue;     /* 不连通：换候选 */
+            return -3;                  /* 超限 */
+        }
+    }
+    return -2;
+}
+```
 
 ### 9. 转向指令生成 `maneuver_build`（完整）：`src/route/maneuver.c:212-304`
 
@@ -829,7 +1412,115 @@ int maneuver_build(const RouteResult *rr, const MapSet *ms, ManeuverList *out)
 }
 ```
 
-（`bearing_deg` `maneuver.c:33`、`walk` `maneuver.c:56`、`road_name_of` `maneuver.c:69`、`roundabout_exit_no` `maneuver.c:139`、`maneuver_text` `maneuver.c:182` 等辅助函数为控制篇幅仅列签名，可在 `src/route/maneuver.c` 查阅。）
+以下五个辅助函数逐字摘自 `src/route/maneuver.c`（行号见各块标题），与源码可编译一致：
+
+**`bearing_deg`**（方位角，正北为 0，顺时针增大）：`src/route/maneuver.c:33-44`
+
+```c
+static double bearing_deg(int32_t la0_e7, int32_t lo0_e7,
+                          int32_t la1_e7, int32_t lo1_e7)
+{
+    double p1 = la0_e7 * 1e-7 * M_PI / 180.0;
+    double p2 = la1_e7 * 1e-7 * M_PI / 180.0;
+    double dlam = (lo1_e7 - lo0_e7) * 1e-7 * M_PI / 180.0;
+    double y = sin(dlam) * cos(p2);
+    double x = cos(p1) * sin(p2) - sin(p1) * cos(p2) * cos(dlam);
+    double b = atan2(y, x) * 180.0 / M_PI;
+    if (b < 0) b += 360.0;
+    return b;
+}
+```
+
+**`walk`**（从点 i 沿 dir 方向累积到 `LOOK_M` 米，返回落点下标）：`src/route/maneuver.c:56-66`
+
+```c
+static uint32_t walk(const RouteResult *rr, uint32_t i, int dir)
+{
+    double acc = 0;
+    uint32_t j = i;
+    if (dir > 0) {
+        while (acc < LOOK_M && j + 1 < rr->n) { acc += seg_len(rr, j); j++; }
+    } else {
+        while (acc < LOOK_M && j > 0) { acc += seg_len(rr, j - 1); j--; }
+    }
+    return j;
+}
+```
+
+**`road_name_of`**（段 `s`（`pts[s]→pts[s+1]`）的路名，edge 属于 `pts[s+1].prov`）：`src/route/maneuver.c:69-88`
+
+```c
+static void road_name_of(const RouteResult *rr, const MapSet *ms,
+                         uint32_t s, char *buf, size_t cap, uint8_t *cls_out)
+{
+    buf[0] = '\0';
+    if (cls_out) *cls_out = 0xFF;
+    if (s + 1 >= rr->n) return;
+    uint32_t prov = rr->pts[s + 1].prov;
+    uint32_t eidx = rr->edge_idx[s];
+    if (!ms || prov >= (uint32_t)ms->n || eidx == REDGE_SEAM) return;
+    mapset_ensure_loaded((MapSet *)ms, (int)prov);   /* 该省可能已被 set_view 卸载 */
+    const MapSrc *src = &ms->srcs[prov];
+    if ((uint64_t)eidx >= src->edges.hdr.rec_count) return;
+    const uint8_t *er = src->edges.data + (uint64_t)eidx * NM_EDGE_BYTES;
+    if (cls_out) *cls_out = er[EF_CLASS];
+    uint32_t nid = nm_get_u32(er + EF_NAME_ID);
+    const NamePool *np = &src->np;
+    if (!nid || !np->ready || nid > np->n) return;
+    const char *s2 = np->blob + np->off[nid];
+    snprintf(buf, cap, "%s", s2);
+}
+```
+
+**`roundabout_exit_no`**（环岛出口序号 = 环上各路口非环岛出边计数之和）：`src/route/maneuver.c:139-149`
+
+```c
+static int roundabout_exit_no(const RouteResult *rr, const MapSet *ms,
+                              uint32_t entry)
+{
+    int exits = 0;
+    uint32_t k = entry;
+    while (k + 1 < rr->n && (seg_flags(rr, k) & EF_ROUNDABOUT)) {
+        k++;                                   /* 走到环上的下一个路口 */
+        exits += count_side_exits(ms, rr, k);   /* 含我们最后驶出的那条 */
+    }
+    return exits;                              /* 0 = 数据不全，文案退化为"进入环岛" */
+}
+```
+
+**`maneuver_text`**（把一条转向指令渲染成中文文案）：`src/route/maneuver.c:182-210`
+
+```c
+void maneuver_text(const Maneuver *m, char *buf, size_t n)
+{
+    char d[32];
+    fmt_distance(m->dist_m, d, sizeof(d));
+    if (m->type == MAN_START) {
+        if (m->road[0]) snprintf(buf, n, "沿%s出发", m->road);
+        else            snprintf(buf, n, "从起点出发");
+        return;
+    }
+    if (m->type == MAN_ARRIVE) {
+        snprintf(buf, n, "行驶%s后到达目的地", d);
+        return;
+    }
+    if (m->type == MAN_STRAIGHT) {
+        if (m->road[0]) snprintf(buf, n, "沿%s直行 %s", m->road, d);
+        else            snprintf(buf, n, "直行%s", d);
+        return;
+    }
+    if (m->type == MAN_ROUNDABOUT) {
+        if (m->exit_no > 0)
+            snprintf(buf, n, "%s后进入环岛，第%d个出口驶出", d, m->exit_no);
+        else
+            snprintf(buf, n, "%s后进入环岛", d);
+        return;
+    }
+    const char *k = maneuver_kind_text(m);
+    if (m->road[0]) snprintf(buf, n, "%s后%s进入%s", d, k, m->road);
+    else            snprintf(buf, n, "%s后%s", d, k);
+}
+```
 
 ## 四、与其他功能之间的联系
 

@@ -1066,7 +1066,131 @@ int voice_tick(VoiceRouter *vr, const RouteResult *rr, const ManeuverList *ml,
 }
 ```
 
-> 说明：`voice.c` 中 `scaled_lead`/`now_lead`/`maneuver_start_m`/`maneuver_dist_to_next`/`alarm_push`/`alarm_type_priority`/`alarm_priority` 等辅助函数与上方主线函数均位于 `src/route/voice.c`，为控制篇幅此处未逐字展开，可在 `src/route/voice.c` 查阅完整体。其中 `voice_announce_state`、`voice_action_text`、`voice_turn_phrase`、`voice_alarm_phrase`、`voice_scan_alarm`、`say_dup`、各 `voice_router_maybe_say*`、`voice_tick` 已**完整**嵌入上文。
+> 以下为 `voice.c` 其余辅助函数的**完整体**（`src/route/voice.c`，逐字、可编译）。其中 `scaled_lead`/`now_lead` 已作为核心函数完整嵌于上文 §3.4（L534 起）；`voice_announce_state`、`voice_action_text`、`voice_turn_phrase`、`voice_alarm_phrase`、`voice_scan_alarm`、`say_dup`、各 `voice_router_maybe_say*`、`voice_tick` 亦已完整嵌入上文。下面补齐 `maneuver_start_m`/`maneuver_dist_to_next`/`alarm_push`/`alarm_type_priority`/`alarm_priority` 五个辅助函数。
+
+```c
+/* 官方 AlarmType 的优先级（Android AlarmInfoType 与 nav-desktop AlarmType 同值）。 */
+static int alarm_type_priority(int type)
+{
+    switch (type) {
+    case VOICE_ALARM_SPEED_CAMERA: return 1;
+    case VOICE_ALARM_TOLL:         return VOICE_ALARM_PRIO_TOLL;
+    case VOICE_ALARM_STOP:         return 7;
+    case VOICE_ALARM_RAILWAY:      return 4;
+    case VOICE_ALARM_PEDESTRIAN:   return 8;
+    case VOICE_ALARM_TUNNEL:       return VOICE_ALARM_PRIO_TUNNEL;
+    case VOICE_ALARM_BRIDGE:       return VOICE_ALARM_PRIO_BRIDGE;
+    default:                       return VOICE_ALARM_PRIO_MAXIMUM;
+    }
+}
+
+/* 官方 Alarms.priority(a, timeSec, dist)：返回越小越该提示，
+ * VOICE_ALARM_PRIO_MAXIMUM+10(=20) 以上视为"不提示"（官方用 Integer.MAX_VALUE）。 */
+static int alarm_priority(int type, double time_sec, double dist_m)
+{
+    if (dist_m > VOICE_ALARM_MAX_DIST_M) return 999;   /* 官方 Integer.MAX_VALUE */
+
+    if (time_sec < 6.0 || dist_m < 75.0) return alarm_type_priority(type);
+
+    /* 摄像头类：官方再放宽一档 */
+    if (type == VOICE_ALARM_SPEED_CAMERA &&
+        (time_sec < 15.0 || dist_m < 150.0))
+        return alarm_type_priority(type);
+
+    /* 收费站：官方再放宽一档 */
+    if (type == VOICE_ALARM_TOLL &&
+        (time_sec < 30.0 || dist_m < 500.0))
+        return alarm_type_priority(type);
+
+    /* 最后一档：官方用 type.priority + MAXIMUM 的 10 */
+    if (time_sec < 7.0 || dist_m < 100.0)
+        return alarm_type_priority(type) + VOICE_ALARM_PRIO_MAXIMUM;
+
+    return 999;
+}
+
+/* 一个待考虑的告警实例（扫描期内的中间量）。 */
+typedef struct {
+    int    type;
+    double dist_m;      /* 距当前位置 */
+    double len_m;       /* 区间型总长（隧道） */
+    double end_m;       /* 区间型终点里程（点状 = 起点） */
+    int    inst;        /* 实例号（见下） */
+} AlarmCand;
+
+/* 追加一个候选。内存不够就返回 -1（调用方放弃本次扫描，不崩）。 */
+static int alarm_push(AlarmCand **cand, size_t *n, size_t *cap,
+                      int type, double dist, double len, double end_m, int inst)
+{
+    if (*n == *cap) {
+        size_t nc = *cap ? *cap * 2 : 8;
+        AlarmCand *tmp = (AlarmCand *)realloc(*cand, nc * sizeof *tmp);
+        if (!tmp) return -1;
+        *cand = tmp;
+        *cap = nc;
+    }
+    (*cand)[*n].type   = type;
+    (*cand)[*n].dist_m = dist;
+    (*cand)[*n].len_m  = len;
+    (*cand)[*n].end_m  = end_m;
+    (*cand)[*n].inst   = inst;
+    (*n)++;
+    return 0;
+}
+
+/* 累加出第 idx 条指令的起始里程（官方 distFromStart 的等价量）。
+ *
+ * ★ 本项目 Maneuver.dist_m 的语义是"距**上一条**指令的路程"（maneuver.c：
+ *   acc 逐段累加、push 时写入、随即清零），且 v[0]（起点）的 dist_m = 0。
+ *   ⇒ 第 idx 条的起始里程 = sum(dist_m[1..idx])，**不是** sum(dist_m[0..idx])。
+ *   这个口径与 navsim_next_maneuver 的 cum 累加完全一致
+ *   （那里也是 cum += v[i].dist_m 后与 here 比较）——两边必须同口径，
+ *   否则"距下一条转向"与"距下一条告警"会各算各的。
+ *   自测里 navsim 侧的判据（maneuver_text 的距离）能反过来校验这条。 */
+static double maneuver_start_m(const ManeuverList *ml, int idx)
+{
+    double acc = 0.0;
+    for (int i = 1; i <= idx && i < ml->n; i++) acc += ml->v[i].dist_m;
+    return acc;
+}
+
+/* 官方 distToNext 链：返回第 idx 条到第 idx+1 条的距离；没有下一条 ⇒ -1。
+ *
+ * ★★★ 这里有一处**官方的 off-by-one**，必须说清楚（否则抄出来的行为是错的）：
+ *
+ *   生产方（nav-desktop RouteEngine.finishManeuvers:257 与
+ *   mergeAndLinkManeuvers:555）：
+ *       mvs.get(i).distToNext = mvs.get(i + 1).distFromStart - mvs.get(i).distFromStart
+ *   ⇒ 严格定义是 "第 i 条到第 i+1 条的距离"。
+ *
+ *   消费方（VoiceRouter.java:148 与 ui/panel/NavTop.java:149）**都**读
+ *   `st.after.distToNext`，而 `st.after` = maneuvers[idx+1]：
+ *       - VoiceRouter：判"相邻路口过近 ⇒ 合并播报『然后紧接着<after 的动作>』"
+ *       - NavTop    ：显示 "然后 {dist} 米 后 {after 的转向}"
+ *   两处都把 `after.distToNext` 当成"**当前这条到下一条**的距离"来用。
+ *
+ *   官方自己的自测（test/osmand/nav/VoiceRouterProbe.java:119）也是这个意图：
+ *       nx.distToNext = 80;   // 与下一路口过近 ⇒ 应合并
+ *       （nx 就是 after ⇒ 它把 after.distToNext 当"到下一路口的距离"）
+ *
+ *   ⇒ 生产方与消费方差一条索引。**按字面照抄生产方**会让"然后紧接着右转"
+ *     在"下一条的**再下一条**离下一条很近"时才触发，而播出来的却是 after
+ *     的动作 ⇒ 语义对不上。按**消费方意图**（当前→下一条的距离）实现，
+ *   与官方面板显示、官方自测断言、以及播报语句本身的语义三者一致。
+ *   本函数返回的正是"第 idx 条到第 idx+1 条的距离"，
+ *   ⇒ 判据应取 idx = **当前**那条（不是 after 那条）。
+ *
+ *   本项目 Maneuver.dist_m 的语义是"距**上一条**指令的路程"（maneuver.c 里
+ *   acc 累加后清零），与官方 distFromStart 链同构 ⇒ 官方 distToNext[i]
+ *   等于本项目 start_m(i+1) - start_m(i)，可以直接复用。 */
+static double maneuver_dist_to_next(const ManeuverList *ml, int idx)
+{
+    if (!ml || idx < 0 || idx + 1 >= ml->n) return -1.0;
+    double a = maneuver_start_m(ml, idx);
+    double b = maneuver_start_m(ml, idx + 1);
+    return b - a;
+}
+```
 
 ### 3.5 发声层声明 `src/utils/plat.h`（语音播报部分，完整）
 
@@ -1113,7 +1237,306 @@ static int tts_dryrun_write(const char *text)
     return 1;
 }
 
-/* （…… TTS 队列 / 常驻会话 / 后台朗读线程等机制略，见 src/utils/plat.c ……）
+/* === src/utils/plat.c:828-1125 —— TTS 队列 / 常驻会话 / 后台朗读线程（完整体，逐字） === */
+/* ---- 单句模式（回退路径）：Windows 走临时 .ps1，POSIX 走命令行 TTS ---- */
+static void tts_speak_once(const char *text)
+{
+#ifdef _WIN32
+    char ps[1024];
+    if (nm_find_in_path("powershell.exe", ps, sizeof(ps)) != 0) return;
+    char tmpl[1024];
+    int k = snprintf(tmpl, sizeof(tmpl), "%s/navimap_tts_%d_%llu.ps1",
+                     nm_temp_dir(), (int)nm_get_pid(),
+                     (unsigned long long)nm_now_ms());
+    if (k < 0 || (size_t)k >= sizeof(tmpl)) return;
+    FILE *f = fopen(tmpl, "wb");
+    if (!f) return;
+    static const unsigned char bom[3] = { 0xEF, 0xBB, 0xBF };
+    fwrite(bom, 1, 3, f);
+    fputs("Add-Type -AssemblyName System.Speech\n", f);
+    fputs("$s = New-Object System.Speech.Synthesis.SpeechSynthesizer\n", f);
+    fputs("$s.Speak('", f);
+    for (const char *p = text; *p; p++) {       /* 单引号转义为两个单引号 */
+        if (*p == '\'') fputs("''", f);
+        else            fputc(*p, f);
+    }
+    fputs("')\n", f);
+    fclose(f);
+    char *argv[] = { ps, "-NoProfile", "-NonInteractive", "-File", tmpl, NULL };
+    int code = 0;
+    nm_spawn_wait(ps, argv, &code);
+    nm_unlink(tmpl);
+#else
+    char exe[1024];
+    if (nm_find_in_path("spd-say", exe, sizeof(exe)) == 0) {
+        char *argv[] = { exe, "-l", "zh", "-t", (char *)text, NULL };
+        int c = 0; nm_spawn_wait(exe, argv, &c); return;
+    }
+    if (nm_find_in_path("espeak-ng", exe, sizeof(exe)) == 0) {
+        char *argv[] = { exe, "-v", "zh", "-s", "160", (char *)text, NULL };
+        int c = 0; nm_spawn_wait(exe, argv, &c); return;
+    }
+    if (nm_find_in_path("espeak", exe, sizeof(exe)) == 0) {
+        char *argv[] = { exe, "-v", "zh", "-s", "160", (char *)text, NULL };
+        int c = 0; nm_spawn_wait(exe, argv, &c); return;
+    }
+    if (nm_find_in_path("say", exe, sizeof(exe)) == 0) {
+        char *argv[] = { exe, (char *)text, NULL };
+        int c = 0; nm_spawn_wait(exe, argv, &c); return;
+    }
+#endif
+    /* 没有任何引擎：静默（无头环境不报错） */
+}
+
+/* ---- 常驻会话（Windows）：一个 powershell 进程，逐行喂文本 ---- */
+#ifdef _WIN32
+static NmProc *g_sapi = NULL;      /* 常驻会话（NULL = 还没起或已坏） */
+static char     g_sapi_script[1024]; /* 脚本文件路径（NULL 串 = 还没写） */
+
+/* ★ 为什么用 `-File <脚本>` 而不是 `-Command <脚本>`：
+ *   `-Command` 模式下 PowerShell **引擎自己也在读 stdin**（它要知道命令还有没有
+ *   下一行），与脚本里的 `[Console]::In.ReadLine()` 抢同一个流 ⇒ 实测第一句能播、
+ *   第二句卡死（引擎把第二行吞了）。
+ *   `-File` 模式下引擎从**文件**读脚本，stdin 完全归脚本自己用 ⇒ 不抢。
+ *   （OsmAnd 用的是 `-Command -`，它能工作是因为它的脚本是一行 while，
+ *     引擎读脚本时只取一行；但那个写法仍然依赖引擎的读取时机，不稳。）
+ *
+ * 脚本内容抄 OsmAnd 的 SapiBackend.ensureSession：
+ *   设 UTF8 编码（否则中文进管道按 ANSI 码页解码成乱码）、
+ *   建 SpeechSynthesizer、选 zh-CN 声音、循环 ReadLine + Speak。 */
+static const char *sapi_script_body(void)
+{
+    return
+        "[Console]::InputEncoding = [System.Text.Encoding]::UTF8\n"
+        "[Console]::OutputEncoding = [System.Text.Encoding]::UTF8\n"
+        "Add-Type -AssemblyName System.Speech\n"
+        "$v = New-Object System.Speech.Synthesis.SpeechSynthesizer\n"
+        "$v.Rate = 1\n"
+        "try { $v.SelectVoiceByHints([System.Speech.Synthesis.VoiceGender]::NotSet,"
+        "[System.Speech.Synthesis.VoiceAge]::NotSet,0,"
+        "[System.Globalization.CultureInfo]::new('zh-CN')) } catch { }\n"
+        "while ($true) {\n"
+        "  $l = [Console]::In.ReadLine()\n"
+        "  if ($null -eq $l) { break }\n"
+        "  if ($l -ne '') { try { $v.Speak($l) } catch { } }\n"
+        "}\n";
+}
+
+/* 写脚本文件（UTF-8 BOM，否则 PowerShell 按 ANSI 读脚本本身也会乱）。 */
+static int sapi_script_write(void)
+{
+    if (g_sapi_script[0]) return 1;
+    int k = snprintf(g_sapi_script, sizeof g_sapi_script,
+                     "%s/navimap_tts_session_%d.ps1", nm_temp_dir(), (int)nm_get_pid());
+    if (k < 0 || (size_t)k >= sizeof g_sapi_script) { g_sapi_script[0] = '\0'; return 0; }
+    FILE *f = fopen(g_sapi_script, "wb");
+    if (!f) { g_sapi_script[0] = '\0'; return 0; }
+    static const unsigned char bom[3] = { 0xEF, 0xBB, 0xBF };
+    fwrite(bom, 1, 3, f);
+    fputs(sapi_script_body(), f);
+    fclose(f);
+    return 1;
+}
+
+static int sapi_session_start(void)
+{
+    if (g_sapi && nm_proc_alive(g_sapi)) return 1;
+    if (g_sapi) { nm_proc_close(g_sapi); g_sapi = NULL; }
+
+    char ps[1024];
+    if (nm_find_in_path("powershell.exe", ps, sizeof(ps)) != 0) return 0;
+    if (!sapi_script_write()) return 0;
+
+    char *argv[] = { ps, "-NoProfile", "-NonInteractive", "-File", g_sapi_script, NULL };
+    g_sapi = nm_proc_spawn(ps, argv);
+    if (!g_sapi) return 0;
+    /* 探测会话是否真的起来了：写一行空行，若管道已断则写失败。 */
+    if (nm_proc_write(g_sapi, "\n") < 0) {
+        nm_proc_close(g_sapi);
+        g_sapi = NULL;
+        return 0;
+    }
+    return 1;
+}
+#endif /* _WIN32 */
+
+/* ---- POSIX 常驻会话：festival 从 stdin 读文本；其余是一次性的 ---- */
+#ifndef _WIN32
+static NmProc *g_festival = NULL;
+
+static int festival_session_start(void)
+{
+    if (g_festival && nm_proc_alive(g_festival)) return 1;
+    if (g_festival) { nm_proc_close(g_festival); g_festival = NULL; }
+    char exe[1024];
+    if (nm_find_in_path("festival", exe, sizeof(exe)) != 0) return 0;
+    char *argv[] = { exe, "--tts", NULL };
+    g_festival = nm_proc_spawn(exe, argv);
+    return g_festival != NULL;
+}
+#endif
+
+/* ---- 后端：发一句话 ---- */
+static void tts_backend_speak(const char *text)
+{
+#ifdef _WIN32
+    if (sapi_session_start()) {
+        /* 逐行喂：一行一句。文本里的换行会把它拆成两句 ⇒ 先压成空格。 */
+        char buf[1024];
+        size_t k = 0;
+        for (const char *p = text; *p && k + 1 < sizeof buf; p++) {
+            buf[k++] = (*p == '\n' || *p == '\r') ? ' ' : *p;
+        }
+        buf[k] = '\0';
+        if (nm_proc_write(g_sapi, buf) > 0 && nm_proc_write(g_sapi, "\n") > 0) return;
+        /* 写失败 ⇒ 会话坏了 ⇒ 回退单句模式（OsmAnd: sessionBroken） */
+        nm_proc_close(g_sapi);
+        g_sapi = NULL;
+    }
+    tts_speak_once(text);
+#else
+    /* festival 会话是常驻进程：没起来就先尝试启动（无 festival 可执行文件时
+     * 返回 0、g_festival 仍为 NULL，行为与原来一致，静默退回单句引擎）。
+     * 原先漏了这步调用 ⇒ festival_session_start 成了死函数、且 Linux 下
+     * festival 路径永远走不到（g_festival 恒为 NULL）。 */
+    if (!g_festival) festival_session_start();
+    if (g_festival && nm_proc_alive(g_festival)) {
+        if (nm_proc_write(g_festival, text) > 0 && nm_proc_write(g_festival, "\n") > 0) return;
+        nm_proc_close(g_festival);
+        g_festival = NULL;
+    }
+    tts_speak_once(text);
+#endif
+}
+
+/* ---- 队列 + 后台朗读线程（抄 OsmAnd 的 LinkedBlockingQueue + worker） ---- */
+#define TTS_QUEUE_MAX 32
+
+typedef struct TtsItem {
+    char *text;
+    struct TtsItem *next;
+} TtsItem;
+
+static struct {
+    NmMutex *lock;
+    NmCond  *not_empty;     /* 有文本可取 */
+    NmCond  *not_full;      /* 队列有空间 */
+    TtsItem *head, *tail;
+    int      count;
+    int      running;       /* worker 是否已起 */
+    int      stop;
+    int      offered;       /* 累计受理句数（观测口，见下） */
+    int      delivered;     /* 累计已交付引擎句数（观测口，见下） */
+    int      inflight;      /* worker 正在处理的那一句（0=无） */
+} g_tts;
+
+/* ★ 受理计数：计数点放在**入队之前**、调用线程内、无竞争。
+ *   不能读队列长度 —— 后台线程会异步喝空队列，"入队后立刻读 size()"是
+ *   与活消费者赛跑（OsmAnd 踩过同一个坑，见 Speech.OFFERED 的注释）。 */
+int nm_tts_offered_count(void) { return g_tts.offered; }
+
+/* ★ 已交付引擎计数：计数点在**把文本交给引擎之后**、后台线程内。
+ *   与"受理"配对可断言"队列真的被消费了"—— 只看受理数证明不了 worker
+ *   真的在跑（可能线程没起来）。
+ *   ★ 注意它**不等于"已播完"**：常驻会话下"写入管道"就返回了，合成还在
+ *     子进程那边进行中。要等真正播完用 nm_tts_flush()。 */
+int nm_tts_delivered_count(void) { return g_tts.delivered; }
+
+/* ★ 等待"已受理的句子全部播完"。实现：关掉常驻会话的写端 ⇒ 子进程读到
+ *   EOF ⇒ 循环退出 ⇒ 子进程退出前会把当前句说完。于是"子进程退出"
+ *   就是精确的"全部播完"边界。
+ *   返回 0 = 已排空并播完；-1 = 没有会话可关（无引擎）。
+ *   ★ 这是判定"播报真的出声了"的唯一可靠手段：常驻会话下写入即返回，
+ *     看写入返回证明不了合成完成。 */
+int nm_tts_flush(void)
+{
+    if (!g_tts.running) return -1;
+    /* 先等队列排空（worker 把最后一句也交给引擎） */
+    for (int i = 0; i < 2000; i++) {
+        nm_mutex_lock(g_tts.lock);
+        int empty = (g_tts.count == 0 && g_tts.inflight == 0);
+        nm_mutex_unlock(g_tts.lock);
+        if (empty) break;
+        nm_sleep_ms(5);
+    }
+#ifdef _WIN32
+    if (g_sapi) {
+        nm_proc_close(g_sapi);      /* 关写端 ⇒ 子进程读到 EOF ⇒ 说完当前句后退出 */
+        g_sapi = NULL;
+    }
+#else
+    if (g_festival) {
+        nm_proc_close(g_festival);
+        g_festival = NULL;
+    }
+#endif
+    return 0;
+}
+
+static void tts_queue_push(char *text)
+{
+    TtsItem *it = (TtsItem *)malloc(sizeof *it);
+    if (!it) { free(text); return; }
+    it->text = text;
+    it->next = NULL;
+    if (g_tts.tail) g_tts.tail->next = it;
+    else            g_tts.head = it;
+    g_tts.tail = it;
+    g_tts.count++;
+}
+
+static char *tts_queue_pop(void)
+{
+    TtsItem *it = g_tts.head;
+    if (!it) return NULL;
+    g_tts.head = it->next;
+    if (!g_tts.head) g_tts.tail = NULL;
+    g_tts.count--;
+    char *t = it->text;
+    free(it);
+    return t;
+}
+
+static void tts_worker(void *p)
+{
+    (void)p;
+    for (;;) {
+        nm_mutex_lock(g_tts.lock);
+        while (g_tts.count == 0 && !g_tts.stop)
+            nm_cond_wait(g_tts.not_empty, g_tts.lock);
+        if (g_tts.count == 0 && g_tts.stop) { nm_mutex_unlock(g_tts.lock); break; }
+        char *text = tts_queue_pop();
+        g_tts.inflight = 1;          /* 取走即算"在飞"（flush 据此判断没排空） */
+        nm_cond_signal(g_tts.not_full);
+        nm_mutex_unlock(g_tts.lock);
+
+        if (text) {
+            tts_backend_speak(text);
+            free(text);
+            nm_mutex_lock(g_tts.lock);
+            g_tts.delivered++;
+            g_tts.inflight = 0;
+            nm_cond_signal(g_tts.not_full);
+            nm_mutex_unlock(g_tts.lock);
+        }
+    }
+}
+
+static int tts_queue_init(void)
+{
+    if (g_tts.running) return 1;
+    g_tts.lock      = nm_mutex_create();
+    g_tts.not_empty = nm_cond_create();
+    g_tts.not_full  = nm_cond_create();
+    if (!g_tts.lock || !g_tts.not_empty || !g_tts.not_full) return 0;
+    g_tts.head = g_tts.tail = NULL;
+    g_tts.count = 0;
+    g_tts.stop = 0;
+    g_tts.running = 1;
+    if (nm_thread_spawn(tts_worker, NULL) != 0) { g_tts.running = 0; return 0; }
+    return 1;
+}
+/* === src/utils/plat.c:828-1125 完 === */
 
 int nm_tts_speak(const char *text)
 {
@@ -1149,7 +1572,7 @@ int nm_tts_speak(const char *text)
 }
 ```
 
-> 说明：`nm_tts_speak` 上方 `tts_speak_once`/`tts_backend_speak`/`tts_worker`/`tts_queue_*` 等（约 `plat.c:828`–`plat.c:1125`）为 TTS 队列与常驻会话机制，为控制篇幅仅列签名与调用关系；`nm_tts_speak` 本身为**完整体**。完整实现见 `src/utils/plat.c`。
+> 说明：上方 `nm_tts_speak` 之前的 `tts_speak_once`/`tts_backend_speak`/`tts_worker`/`tts_queue_*` 等 TTS 队列与常驻会话机制（约 `plat.c:828`–`plat.c:1125`）已**完整**嵌入上文代码块（逐字、可编译）；`nm_tts_speak` 本身亦为**完整体**。
 
 ## 四、与其他功能之间的联系
 
