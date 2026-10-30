@@ -316,6 +316,15 @@ if [ -x "$ROOT/scripts/check_layers.sh" ]; then
     run layer_dirs "分层方向门禁 PASS" "$ROOT/scripts/check_layers.sh" --quiet
 fi
 
+# ---- docs/teaching/ 讲义编号一致性门禁 ----
+#
+# docs/teaching/ 与 tutorial/ 是同一套 00–14 编号的"概念 vs 动手"两份资料，
+# 每课讲义的首个 H1 标题必须声明与文件名前缀一致的「第 N 课」，防止再次漂移。
+# 详见 scripts/check_doc_numbers.sh（自带负向对照：改错位 H1 必 FAIL）。
+if [ -x "$ROOT/scripts/check_doc_numbers.sh" ]; then
+    run doc_numbers "DOC-NUMBERS-OK" "$ROOT/scripts/check_doc_numbers.sh"
+fi
+
 # ---- 字体链的中文覆盖（中文变方框的根因门禁）----
 #
 # 地图上的文字（C 侧 stb_truetype）和 Qt 控件上的文字（Qt 自己的字体系统）
