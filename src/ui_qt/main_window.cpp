@@ -91,6 +91,12 @@ static double pointSegM(double plat, double plon,
 MainWindow::MainWindow(App *a, QWidget *parent)
     : QMainWindow(parent), m_a(a)
 {
+    /* 启动时从设置读取语言（持久化）：覆盖 i18n 全局默认中文，
+     * 否则下面的 tick() 兜底会用 m_lang(默认0) 把全局 lang 打回中文，
+     * 导致重启后英文选择丢失。 */
+    m_lang = settings_get_int(m_a->cfg, "lang", 0);
+    i18n_set_lang((I18nLang)m_lang);
+
     setWindowTitle(trc("跑路了"));
     m_canvas = new MapCanvas(a, this);
     setCentralWidget(m_canvas);
