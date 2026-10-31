@@ -1,12 +1,27 @@
 #include "i18n/i18n.h"
 
 #include <string.h>
+#include <stdlib.h>
+#include <stdio.h>
 
 static I18nLang g_lang = I18N_ZH;   /* 默认中文 */
+
+static void i18n_load(const char *code);  /* 前向声明，定义见文件末尾 */
 
 void i18n_set_lang(I18nLang l)
 {
     g_lang = (l == I18N_EN) ? I18N_EN : I18N_ZH;
+
+    /* 释放上一次加载的映射（切换语言时） */
+    for (size_t i = 0; i < g_n; i++) {
+        free((void *)g_pairs[i].zh);
+        free((void *)g_pairs[i].en);
+    }
+    free(g_pairs);
+    g_pairs = NULL;
+    g_n = 0;
+
+    if (g_lang == I18N_EN) i18n_load("en");
 }
 
 I18nLang i18n_lang(void)
@@ -390,8 +405,190 @@ static const TrPair TR[] = {
 
 };
 
+/* ---------------- 运行时语言文件（XML） ----------------
+ * 每种目标语言一个独立文件（lang/<code>.xml），由 Qt 侧通过
+ * i18n_set_lang_dir() 传入目录。文件优先；文件缺失/损坏时回退下面的
+ * 内置 TR[]（与文件同源，由 scripts/export_lang.py 从 TR[] 生成）。
+ * 中文是源语言（msgid），不生成文件。 */
+
+static TrPair *g_pairs = NULL;   /* 从 XML 加载的该语言映射 */
+static size_t  g_n = 0;
+static char   *g_lang_dir = NULL;
+
+static char *xstrdup(const char *s)
+{
+    size_t n = strlen(s) + 1;
+    char *p = (char *)malloc(n);
+    if (p) memcpy(p, s, n);
+    return p;
+}
+
+void i18n_set_lang_dir(const char *dir)
+{
+    free(g_lang_dir);
+    g_lang_dir = dir ? xstrdup(dir) : NULL;
+}
+
+/* 极简 XML 文本解码（只处理我们生成的格式）：
+ *   - 实体 &amp; &lt; &gt; &quot; &#NNN; &#xHH; 还原
+ *   - 字面 \n \t \\ \" 还原（兼容手改 xml 时使用字面转义）
+ * 写入 dst（容量 dstcap），返回解码长度。 */
+static size_t xml_decode(const char *src, size_t srclen, char *dst, size_t dstcap)
+{
+    size_t o = 0;
+    for (size_t i = 0; i < srclen; i++) {
+        char c = src[i];
+        if (c == '&') {
+            size_t j = i + 1;
+            while (j < srclen && src[j] != ';') j++;
+            if (j < srclen) {
+                const char *e = src + i + 1;
+                size_t elen = j - i - 1;
+                char outc = 0;
+                if      (elen == 3 && strncmp(e, "amp", 3) == 0)  outc = '&';
+                else if (elen == 2 && strncmp(e, "lt", 2) == 0)   outc = '<';
+                else if (elen == 2 && strncmp(e, "gt", 2) == 0)   outc = '>';
+                else if (elen == 4 && strncmp(e, "quot", 4) == 0) outc = '"';
+                else if (e[0] == '#') {
+                    int code = 0;
+                    if (e[1] == 'x' || e[1] == 'X')
+                        for (size_t k = 2; k < elen; k++)
+                            code = code * 16 + (e[k] >= '0' && e[k] <= '9' ? e[k]-'0'
+                                  : e[k] >= 'a' && e[k] <= 'f' ? e[k]-'a'+10
+                                  : e[k] >= 'A' && e[k] <= 'F' ? e[k]-'A'+10 : 0);
+                    else
+                        for (size_t k = 1; k < elen; k++)
+                            code = code * 10 + (e[k] >= '0' && e[k] <= '9' ? e[k]-'0' : 0);
+                    outc = (char)(code & 0xFF);
+                }
+                if (outc) { if (o + 1 < dstcap) dst[o++] = outc; i = j; continue; }
+                i = j; continue;   /* 未知实体：跳过 */
+            }
+            if (o + 1 < dstcap) dst[o++] = '&';
+            continue;
+        }
+        if (c == '\\' && i + 1 < srclen) {
+            char n = src[i + 1];
+            char outc = 0;
+            if      (n == 'n') outc = '\n';
+            else if (n == 't') outc = '\t';
+            else if (n == '\\') outc = '\\';
+            else if (n == '"') outc = '"';
+            if (outc) { if (o + 1 < dstcap) dst[o++] = outc; i++; continue; }
+        }
+        if (o + 1 < dstcap) dst[o++] = c;
+    }
+    if (o < dstcap) dst[o] = 0;
+    return o;
+}
+
+/* 在 [start,end) 内找下一个 <tag ...>...</tag>，返回内容起点；
+ * *content_end 设为 </tag> 起点。找不到返回 NULL。 */
+static const char *find_tag(const char *start, const char *end,
+                            const char *tag, const char **content_end)
+{
+    size_t tlen = strlen(tag);
+    for (const char *p = start; p + 1 + tlen < end; p++) {
+        if (p[0] == '<' && strncmp(p + 1, tag, tlen) == 0 &&
+            (p[1 + tlen] == ' ' || p[1 + tlen] == '>' || p[1 + tlen] == '/')) {
+            const char *q = p + 1 + tlen;
+            while (q < end && *q != '>') q++;
+            if (q >= end) return NULL;
+            const char *cstart = q + 1;
+            char closebuf[64];
+            int cn = snprintf(closebuf, sizeof closebuf, "</%s>", tag);
+            const char *cpos = cstart;
+            while (cpos + cn <= end) {           /* bounded strstr */
+                if (memcmp(cpos, closebuf, (size_t)cn) == 0) {
+                    *content_end = cpos;
+                    return cstart;
+                }
+                cpos++;
+            }
+            return NULL;
+        }
+    }
+    return NULL;
+}
+
+/* 提取 <tag> 文本并解码（首尾空白已 trim，内部真实换行保留）。 */
+static char *extract_tag_text(const char *start, const char *end, const char *tag)
+{
+    const char *ce;
+    const char *cs = find_tag(start, end, tag, &ce);
+    if (!cs) return NULL;
+    while (ce > cs && (ce[-1] == ' ' || ce[-1] == '\t' ||
+                       ce[-1] == '\n' || ce[-1] == '\r')) ce--;
+    while (cs < ce && (*cs == ' ' || *cs == '\t' ||
+                       *cs == '\n' || *cs == '\r')) cs++;
+    size_t len = (size_t)(ce - cs);
+    char *out = (char *)malloc(len + 1);
+    if (!out) return NULL;
+    xml_decode(cs, len, out, len + 1);
+    return out;
+}
+
+/* 加载 lang/<code>.xml 到 g_pairs。失败（文件缺失/损坏）则保持
+ * g_pairs 为空，调用方回退到内置 TR[]。 */
+static void i18n_load(const char *code)
+{
+    const char *cands[4];
+    char b1[2048]; char b2[2048]; char b3[2048];
+    int nc = 0;
+    if (g_lang_dir && *g_lang_dir) {
+        snprintf(b1, sizeof b1, "%s/%s.xml", g_lang_dir, code);
+        cands[nc++] = b1;
+    }
+    snprintf(b2, sizeof b2, "lang/%s.xml", code); cands[nc++] = b2;
+    snprintf(b3, sizeof b3, "%s.xml", code);      cands[nc++] = b3;
+
+    FILE *f = NULL;
+    for (int i = 0; i < nc; i++) {
+        f = fopen(cands[i], "rb");
+        if (f) break;
+    }
+    if (!f) return;
+
+    fseek(f, 0, SEEK_END);
+    long sz = ftell(f);
+    fseek(f, 0, SEEK_SET);
+    if (sz <= 0) { fclose(f); return; }
+    char *buf = (char *)malloc((size_t)sz + 1);
+    if (!buf) { fclose(f); return; }
+    size_t rd = fread(buf, 1, (size_t)sz, f);
+    buf[rd] = 0;
+    fclose(f);
+
+    const char *p = buf;
+    const char *end = buf + rd;
+    while (p < end) {
+        const char *ce;
+        const char *cs = find_tag(p, end, "item", &ce);
+        if (!cs) break;
+        char *zh = extract_tag_text(cs, ce, "zh");
+        char *en = extract_tag_text(cs, ce, "en");
+        if (zh && en) {
+            TrPair *tmp = (TrPair *)realloc(g_pairs, (g_n + 1) * sizeof(TrPair));
+            if (tmp) {
+                g_pairs = tmp;
+                g_pairs[g_n].zh = zh;
+                g_pairs[g_n].en = en;
+                g_n++;
+            } else {
+                free(zh); free(en);
+            }
+        } else {
+            free(zh); free(en);
+        }
+        p = ce + strlen("</item>");
+    }
+    free(buf);
+}
+
 static const char *tr_lookup(const char *zh)
 {
+    for (size_t i = 0; i < g_n; i++)
+        if (strcmp(g_pairs[i].zh, zh) == 0) return g_pairs[i].en;
     for (size_t i = 0; i < sizeof(TR) / sizeof(TR[0]); i++)
         if (strcmp(TR[i].zh, zh) == 0) return TR[i].en;
     return zh;   /* 缺译：回退中文原文 */

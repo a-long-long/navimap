@@ -96,6 +96,11 @@ MainWindow::MainWindow(App *a, QWidget *parent)
     /* 启动时从设置读取语言（持久化）：覆盖 i18n 全局默认中文，
      * 否则下面的 tick() 兜底会用 m_lang(默认0) 把全局 lang 打回中文，
      * 导致重启后英文选择丢失。 */
+    /* 语言文件目录：exe 同目录下的 lang/（运行时加载 lang/en.xml 等）。
+     * 必须在 i18n_set_lang 之前设置，英文模式才会优先用外部文件；
+     * 未设置时 i18n 回退到相对路径 lang/，再失败则用内置 TR[] 兜底。 */
+    i18n_set_lang_dir((QApplication::applicationDirPath() + "/lang").toUtf8().constData());
+
     m_lang = settings_get_int(m_a->cfg, "lang", 0);
     i18n_set_lang((I18nLang)m_lang);
 

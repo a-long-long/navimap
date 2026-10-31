@@ -1,0 +1,399 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Skedaddle / 跑路了 英文语言包 (lang/en.xml) -->
+<!-- 由 scripts/export_lang.py 从 src/i18n/i18n.c 的 TR[] 自动导出。 -->
+<!-- 手改本文件会在运行时覆盖内置翻译；勿运行导出脚本以免覆盖你的修改。 -->
+<translations lang="en">
+  <item><zh>跑路了</zh><en>Skedaddle</en></item>
+  <item><zh>语言</zh><en>Language</en></item>
+  <item><zh>中文</zh><en>Chinese</en></item>
+  <item><zh>English</zh><en>English</en></item>
+  <item><zh>昼夜模式</zh><en>Day/Night</en></item>
+  <item><zh>导航面板</zh><en>Nav panel</en></item>
+  <item><zh>POI 图标</zh><en>POI icons</en></item>
+  <item><zh>地名标注</zh><en>Place labels</en></item>
+  <item><zh>等高线</zh><en>Contours</en></item>
+  <item><zh>网格细分刻度</zh><en>Grid subdivision</en></item>
+  <item><zh>语音播报</zh><en>Voice guidance</en></item>
+  <item><zh>默认页签</zh><en>Default tab</en></item>
+  <item><zh>字号(pt)</zh><en>Font size (pt)</en></item>
+  <item><zh>道路细节</zh><en>Road detail</en></item>
+  <item><zh>坐标系</zh><en>Datum</en></item>
+  <item><zh>网格类型</zh><en>Grid type</en></item>
+  <item><zh>白天</zh><en>Day</en></item>
+  <item><zh>夜间</zh><en>Night</en></item>
+  <item><zh>自动(日出日落)</zh><en>Auto (sun)</en></item>
+  <item><zh>浏览</zh><en>Browse</en></item>
+  <item><zh>导航</zh><en>Navigate</en></item>
+  <item><zh>WGS84</zh><en>WGS84</en></item>
+  <item><zh>CGCS2000</zh><en>CGCS2000</en></item>
+  <item><zh>北京1954</zh><en>Beijing 1954</en></item>
+  <item><zh>西安1980</zh><en>Xian 1980</en></item>
+  <item><zh>经纬网</zh><en>Lat/Lon grid</en></item>
+  <item><zh>方里格</zh><en>Gauss-Krüger</en></item>
+  <item><zh>北京54</zh><en>Beijing 1954</en></item>
+  <item><zh>西安80</zh><en>Xian 1980</en></item>
+  <item><zh>WGS84（默认）</zh><en>WGS84 (default)</en></item>
+  <item><zh>CGCS2000（2000国家大地坐标系）</zh><en>CGCS2000 (2000 national datum)</en></item>
+  <item><zh>北京 1954</zh><en>Beijing 1954</en></item>
+  <item><zh>西安 1980</zh><en>Xian 1980</en></item>
+  <item><zh>设置</zh><en>Settings</en></item>
+  <item><zh>关</zh><en>Off</en></item>
+  <item><zh>开</zh><en>On</en></item>
+  <item><zh>浮层透明度…</zh><en>Overlay opacity…</en></item>
+  <item><zh>逐个设置</zh><en>Per layer</en></item>
+  <item><zh>重置全部</zh><en>Reset all</en></item>
+  <item><zh>关闭</zh><en>Close</en></item>
+  <item><zh>菜单(&amp;M)</zh><en>Menu(&amp;M)</en></item>
+  <item><zh>搜索地点</zh><en>Search place</en></item>
+  <item><zh>清除路线</zh><en>Clear route</en></item>
+  <item><zh>缩放到路线</zh><en>Zoom to route</en></item>
+  <item><zh>跟随车头</zh><en>Follow heading</en></item>
+  <item><zh>下载地图…</zh><en>Download map…</en></item>
+  <item><zh>退出</zh><en>Quit</en></item>
+  <item><zh>模拟导航(&amp;S)</zh><en>Simulate(&amp;S)</en></item>
+  <item><zh>开始 / 停止</zh><en>Start / Stop</en></item>
+  <item><zh>注入偏航（触发重算）</zh><en>Inject deviation</en></item>
+  <item><zh>加速</zh><en>Speed up</en></item>
+  <item><zh>减速</zh><en>Slow down</en></item>
+  <item><zh>视图(&amp;V)</zh><en>View(&amp;V)</en></item>
+  <item><zh>道路细节 LOD %d</zh><en>Road detail LOD %d</en></item>
+  <item><zh>字号增大</zh><en>Larger font</en></item>
+  <item><zh>字号减小</zh><en>Smaller font</en></item>
+  <item><zh>坐标系(&amp;C)</zh><en>Datum(&amp;C)</en></item>
+  <item><zh>轨迹(&amp;K)</zh><en>Tracks(&amp;K)</en></item>
+  <item><zh>导入 GPX…</zh><en>Import GPX…</en></item>
+  <item><zh>导出全部为 GPX…</zh><en>Export all as GPX…</en></item>
+  <item><zh>收藏视口中心</zh><en>Favorite center</en></item>
+  <item><zh>轨迹 / 收藏面板</zh><en>Tracks / Favorites panel</en></item>
+  <item><zh>设置(&amp;P)</zh><en>Settings(&amp;P)</en></item>
+  <item><zh>经纬网（度）</zh><en>Lat/Lon grid (deg)</en></item>
+  <item><zh>方里格（公里）</zh><en>Gauss-Krüger (km)</en></item>
+  <item><zh>夜间模式</zh><en>Night mode</en></item>
+  <item><zh>自动（日出日落）</zh><en>Auto (sunrise/sunset)</en></item>
+  <item><zh>放大</zh><en>Zoom in</en></item>
+  <item><zh>缩小</zh><en>Zoom out</en></item>
+  <item><zh>定位到关注点</zh><en>Locate to favorites</en></item>
+  <item><zh>昼 / 夜 切换</zh><en>Day / Night toggle</en></item>
+  <item><zh>坐标网</zh><en>Coordinate grid</en></item>
+  <item><zh>显示坐标网</zh><en>Show grid</en></item>
+  <item><zh>轨迹 / 收藏（导入 GPX）</zh><en>Tracks / Favorites (import GPX)</en></item>
+  <item><zh>途经点（面板开着时点地图添加）</zh><en>Via points (click map when panel open)</en></item>
+  <item><zh>主菜单</zh><en>Main menu</en></item>
+  <item><zh>搜索地点或道路（Ctrl+F）</zh><en>Search place or road (Ctrl+F)</en></item>
+  <item><zh>搜索</zh><en>Search</en></item>
+  <item><zh>搜索地点、道路…</zh><en>Search place, road…</en></item>
+  <item>
+    <zh>坐标网：%1
+</zh>
+    <en>Grid: %1
+</en>
+  </item>
+  <item>
+    <zh>坐标系：%1    网格：%2
+</zh>
+    <en>Datum: %1    Grid: %2
+</en>
+  </item>
+  <item><zh>左键循环切换 · 右键菜单</zh><en>Left-click cycles · right-click menu</en></item>
+  <item><zh>浮层透明度</zh><en>Overlay opacity</en></item>
+  <item><zh>（C 核心）</zh><en> (C core)</en></item>
+  <item><zh>默认</zh><en>Default</en></item>
+  <item><zh>全部恢复默认（75%）</zh><en>Reset all to default (75%)</en></item>
+  <item><zh>转向指令</zh><en>Turn-by-turn</en></item>
+  <item><zh>轨迹 / 收藏</zh><en>Tracks / Favorites</en></item>
+  <item><zh>导出全部…</zh><en>Export all…</en></item>
+  <item><zh>收藏中心点</zh><en>Favorite center</en></item>
+  <item><zh>贴合</zh><en>Snap</en></item>
+  <item><zh>把这条轨迹吸附到道路网（贴合路线）</zh><en>Snap this track to the road network</en></item>
+  <item><zh>删除这一条</zh><en>Delete this item</en></item>
+  <item><zh>删除这个途经点</zh><en>Delete this via point</en></item>
+  <item><zh>(未命名轨迹)</zh><en>(unnamed track)</en></item>
+  <item><zh>(未命名)</zh><en>(unnamed)</en></item>
+  <item><zh>双击定位到这条轨迹的起点</zh><en>Double-click to locate this track's start</en></item>
+  <item><zh>双击定位到这个收藏点</zh><en>Double-click to locate this favorite</en></item>
+  <item><zh>（还没有轨迹：点「导入 GPX…」选一个 .gpx 文件，或用 Ctrl+D 收藏视口中心）</zh><en>(No tracks yet: click \"Import GPX…\" to pick a .gpx, or Ctrl+D to favorite the viewport center)</en></item>
+  <item><zh>途经点</zh><en>Via points</en></item>
+  <item><zh>面板开着时，点地图即可按顺序添加途经点；路线会依次经过它们。</zh><en>With the panel open, click the map to add via points in order; the route visits them sequentially.</en></item>
+  <item><zh>清空</zh><en>Clear</en></item>
+  <item><zh>途经点 %1：%2, %3</zh><en>Via point %1: %2, %3</en></item>
+  <item><zh>（还没有途经点：面板开着时点地图即可添加；也可先设好起点和终点）</zh><en>(No via points yet: click the map with the panel open to add; or set start and end first)</en></item>
+  <item><zh>全程约 %1 km</zh><en>Total ~ %1 km</en></item>
+  <item><zh>下载地图（全球可下载区域 · Geofabrik）</zh><en>Download map (Geofabrik extracts)</en></item>
+  <item><zh>可下载区域（✓已下载 ·未下载）</zh><en>Downloadable regions (✓ downloaded · pending)</en></item>
+  <item><zh>选择左侧一个地区，查看下载链接并下载。</zh><en>Pick a region on the left to see its link and download.</en></item>
+  <item><zh>下载并转换</zh><en>Download &amp; convert</en></item>
+  <item><zh>复制下载链接</zh><en>Copy link</en></item>
+  <item><zh>同时生成 SRTM 等高线</zh><en>Also generate SRTM contours</en></item>
+  <item><zh>请选择最末级地区（带下载链接的）查看详情。</zh><en>Select a leaf region (the one with a download link) for details.</en></item>
+  <item>
+    <zh>将下载：%1
+保存到：%2/%3-latest.osm.pbf
+（若本地已存在，会先比对远端；有更新则询问是否更新）</zh>
+    <en>Will download: %1
+Saved to: %2/%3-latest.osm.pbf
+(If it already exists locally, the remote is compared first; if newer, you'll be asked to update)</en>
+  </item>
+  <item><zh>发现更新</zh><en>Update available</en></item>
+  <item>
+    <zh>本地已有 %1，远端存在更新版本。是否下载更新？
+（选择\"否\"将保留本地文件。）</zh>
+    <en>A newer version of %1 exists on the server. Download the update?
+(Choosing \"No\" keeps the local file.)</en>
+  </item>
+  <item><zh>%1  (%2 点)</zh><en>%1  (%2 pts)</en></item>
+  <item><zh>导入 GPX 文件</zh><en>Import GPX file</en></item>
+  <item><zh>GPX 轨迹</zh><en>GPX tracks</en></item>
+  <item><zh>所有文件</zh><en>All files</en></item>
+  <item><zh>导出全部为 GPX</zh><en>Export all as GPX</en></item>
+  <item><zh>  ✓已下载</zh><en>  ✓ downloaded</en></item>
+  <item><zh>  ·未下载</zh><en>  · pending</en></item>
+  <item><zh>  (%1/%2)</zh><en>  (%1/%2 downloaded)</en></item>
+  <item><zh>本地已存在 %1。正在比对远端是否有更新…</zh><en>Already exists locally: %1. Comparing with remote for updates…</en></item>
+  <item>
+    <zh>开始下载：%1
+  → %2</zh>
+    <en>Start download: %1
+  → %2</en>
+  </item>
+  <item><zh>无法创建目标文件：%1</zh><en>Cannot create target file: %1</en></item>
+  <item>
+    <zh>无法比对远端（%1）。为稳妥起见保留本地文件，跳过下载。
+如需强制刷新，请先删除本地文件后重试。</zh>
+    <en>Cannot compare with remote (%1). Keeping local file to be safe, skipping download.
+To force refresh, delete the local file and retry.</en>
+  </item>
+  <item><zh>远端无更新（本地已是最新），跳过下载。</zh><en>Remote has no update (local is latest), skipping download.</en></item>
+  <item><zh>用户选择更新，开始下载…</zh><en>User chose to update, starting download…</en></item>
+  <item><zh>用户选择保留本地文件，跳过下载。</zh><en>User chose to keep local file, skipping download.</en></item>
+  <item><zh>下载失败：%1</zh><en>Download failed: %1</en></item>
+  <item><zh>下载完成（%1 字节），开始转换…</zh><en>Download complete (%1 bytes), starting conversion…</en></item>
+  <item><zh>运行 sync_maps.sh（转换 + 建地名库 + 地标表）…</zh><en>Running sync_maps.sh (convert + build place DB + landmark table)…</en></item>
+  <item><zh>转换完成 ✓ 地图已就绪。</zh><en>Conversion complete ✓ map ready.</en></item>
+  <item><zh>转换失败（exit %1）。可在终端手动运行 scripts/sync_maps.sh 查看详情。</zh><en>Conversion failed (exit %1). Run scripts/sync_maps.sh in terminal for details.</en></item>
+  <item><zh>中国（全国）</zh><en>China (whole country)</en></item>
+  <item><zh>中国·省级</zh><en>China · provinces</en></item>
+  <item><zh>北京</zh><en>Beijing</en></item>
+  <item><zh>天津</zh><en>Tianjin</en></item>
+  <item><zh>河北</zh><en>Hebei</en></item>
+  <item><zh>山西</zh><en>Shanxi</en></item>
+  <item><zh>内蒙古</zh><en>Inner Mongolia</en></item>
+  <item><zh>辽宁</zh><en>Liaoning</en></item>
+  <item><zh>吉林</zh><en>Jilin</en></item>
+  <item><zh>黑龙江</zh><en>Heilongjiang</en></item>
+  <item><zh>上海</zh><en>Shanghai</en></item>
+  <item><zh>江苏</zh><en>Jiangsu</en></item>
+  <item><zh>浙江</zh><en>Zhejiang</en></item>
+  <item><zh>安徽</zh><en>Anhui</en></item>
+  <item><zh>福建</zh><en>Fujian</en></item>
+  <item><zh>江西</zh><en>Jiangxi</en></item>
+  <item><zh>山东</zh><en>Shandong</en></item>
+  <item><zh>河南</zh><en>Henan</en></item>
+  <item><zh>湖北</zh><en>Hubei</en></item>
+  <item><zh>湖南</zh><en>Hunan</en></item>
+  <item><zh>广东</zh><en>Guangdong</en></item>
+  <item><zh>广西</zh><en>Guangxi</en></item>
+  <item><zh>海南</zh><en>Hainan</en></item>
+  <item><zh>重庆</zh><en>Chongqing</en></item>
+  <item><zh>四川</zh><en>Sichuan</en></item>
+  <item><zh>贵州</zh><en>Guizhou</en></item>
+  <item><zh>云南</zh><en>Yunnan</en></item>
+  <item><zh>西藏</zh><en>Tibet</en></item>
+  <item><zh>陕西</zh><en>Shaanxi</en></item>
+  <item><zh>甘肃</zh><en>Gansu</en></item>
+  <item><zh>青海</zh><en>Qinghai</en></item>
+  <item><zh>宁夏</zh><en>Ningxia</en></item>
+  <item><zh>新疆</zh><en>Xinjiang</en></item>
+  <item><zh>香港</zh><en>Hong Kong</en></item>
+  <item><zh>澳门</zh><en>Macau</en></item>
+  <item><zh>台湾</zh><en>Taiwan</en></item>
+  <item><zh>亚洲</zh><en>Asia</en></item>
+  <item><zh>欧洲</zh><en>Europe</en></item>
+  <item><zh>非洲</zh><en>Africa</en></item>
+  <item><zh>北美洲</zh><en>North America</en></item>
+  <item><zh>南美洲</zh><en>South America</en></item>
+  <item><zh>大洋洲</zh><en>Oceania</en></item>
+  <item><zh>不丹</zh><en>Bhutan</en></item>
+  <item><zh>东帝汶</zh><en>Timor-Leste</en></item>
+  <item><zh>中非</zh><en>Central African Republic</en></item>
+  <item><zh>丹麦</zh><en>Denmark</en></item>
+  <item><zh>乌克兰</zh><en>Ukraine</en></item>
+  <item><zh>乌兹别克斯坦</zh><en>Uzbekistan</en></item>
+  <item><zh>乌干达</zh><en>Uganda</en></item>
+  <item><zh>乌拉圭</zh><en>Uruguay</en></item>
+  <item><zh>乍得</zh><en>Chad</en></item>
+  <item><zh>也门</zh><en>Yemen</en></item>
+  <item><zh>亚美尼亚</zh><en>Armenia</en></item>
+  <item><zh>以色列</zh><en>Israel</en></item>
+  <item><zh>伊拉克</zh><en>Iraq</en></item>
+  <item><zh>伊朗</zh><en>Iran</en></item>
+  <item><zh>俄罗斯（欧洲部分）</zh><en>Russia (European part)</en></item>
+  <item><zh>保加利亚</zh><en>Bulgaria</en></item>
+  <item><zh>克罗地亚</zh><en>Croatia</en></item>
+  <item><zh>冈比亚</zh><en>Gambia</en></item>
+  <item><zh>冰岛</zh><en>Iceland</en></item>
+  <item><zh>几内亚</zh><en>Guinea</en></item>
+  <item><zh>列支敦士登</zh><en>Liechtenstein</en></item>
+  <item><zh>刚果（布）</zh><en>Congo</en></item>
+  <item><zh>刚果（金）</zh><en>Democratic Republic of the Congo</en></item>
+  <item><zh>利比亚</zh><en>Libya</en></item>
+  <item><zh>利比里亚</zh><en>Liberia</en></item>
+  <item><zh>加拿大</zh><en>Canada</en></item>
+  <item><zh>加纳</zh><en>Ghana</en></item>
+  <item><zh>加蓬</zh><en>Gabon</en></item>
+  <item><zh>匈牙利</zh><en>Hungary</en></item>
+  <item><zh>北马其顿</zh><en>North Macedonia</en></item>
+  <item><zh>南苏丹</zh><en>South Sudan</en></item>
+  <item><zh>南非</zh><en>South Africa</en></item>
+  <item><zh>博茨瓦纳</zh><en>Botswana</en></item>
+  <item><zh>卡塔尔</zh><en>Qatar</en></item>
+  <item><zh>卢旺达</zh><en>Rwanda</en></item>
+  <item><zh>卢森堡</zh><en>Luxembourg</en></item>
+  <item><zh>印度</zh><en>India</en></item>
+  <item><zh>印度尼西亚</zh><en>Indonesia</en></item>
+  <item><zh>厄瓜多尔</zh><en>Ecuador</en></item>
+  <item><zh>厄立特里亚</zh><en>Eritrea</en></item>
+  <item><zh>叙利亚</zh><en>Syria</en></item>
+  <item><zh>吉尔吉斯斯坦</zh><en>Kyrgyzstan</en></item>
+  <item><zh>吉布提</zh><en>Djibouti</en></item>
+  <item><zh>哈萨克斯坦</zh><en>Kazakhstan</en></item>
+  <item><zh>哥伦比亚</zh><en>Colombia</en></item>
+  <item><zh>喀麦隆</zh><en>Cameroon</en></item>
+  <item><zh>土库曼斯坦</zh><en>Turkmenistan</en></item>
+  <item><zh>土耳其</zh><en>Turkey</en></item>
+  <item><zh>圣马力诺</zh><en>San Marino</en></item>
+  <item><zh>圭亚那</zh><en>Guyana</en></item>
+  <item><zh>坦桑尼亚</zh><en>Tanzania</en></item>
+  <item><zh>埃及</zh><en>Egypt</en></item>
+  <item><zh>埃塞俄比亚</zh><en>Ethiopia</en></item>
+  <item><zh>塔吉克斯坦</zh><en>Tajikistan</en></item>
+  <item><zh>塞内加尔</zh><en>Senegal</en></item>
+  <item><zh>塞尔维亚</zh><en>Serbia</en></item>
+  <item><zh>塞拉利昂</zh><en>Sierra Leone</en></item>
+  <item><zh>塞浦路斯</zh><en>Cyprus</en></item>
+  <item><zh>墨西哥</zh><en>Mexico</en></item>
+  <item><zh>多哥</zh><en>Togo</en></item>
+  <item><zh>奥地利</zh><en>Austria</en></item>
+  <item><zh>委内瑞拉</zh><en>Venezuela</en></item>
+  <item><zh>孟加拉国</zh><en>Bangladesh</en></item>
+  <item><zh>安哥拉</zh><en>Angola</en></item>
+  <item><zh>安道尔</zh><en>Andorra</en></item>
+  <item><zh>尼日利亚</zh><en>Nigeria</en></item>
+  <item><zh>尼日尔</zh><en>Niger</en></item>
+  <item><zh>尼泊尔</zh><en>Nepal</en></item>
+  <item><zh>巴勒斯坦</zh><en>Palestine</en></item>
+  <item><zh>巴基斯坦</zh><en>Pakistan</en></item>
+  <item><zh>巴布亚新几内亚</zh><en>Papua New Guinea</en></item>
+  <item><zh>巴拉圭</zh><en>Paraguay</en></item>
+  <item><zh>巴林</zh><en>Bahrain</en></item>
+  <item><zh>巴西</zh><en>Brazil</en></item>
+  <item><zh>布隆迪</zh><en>Burundi</en></item>
+  <item><zh>希腊</zh><en>Greece</en></item>
+  <item><zh>德国</zh><en>Germany</en></item>
+  <item><zh>意大利</zh><en>Italy</en></item>
+  <item><zh>拉脱维亚</zh><en>Latvia</en></item>
+  <item><zh>挪威</zh><en>Norway</en></item>
+  <item><zh>捷克</zh><en>Czech Republic</en></item>
+  <item><zh>摩尔多瓦</zh><en>Moldova</en></item>
+  <item><zh>摩洛哥</zh><en>Morocco</en></item>
+  <item><zh>摩纳哥</zh><en>Monaco</en></item>
+  <item><zh>文莱</zh><en>Brunei</en></item>
+  <item><zh>斐济</zh><en>Fiji</en></item>
+  <item><zh>斯洛伐克</zh><en>Slovakia</en></item>
+  <item><zh>斯洛文尼亚</zh><en>Slovenia</en></item>
+  <item><zh>斯里兰卡</zh><en>Sri Lanka</en></item>
+  <item><zh>新加坡</zh><en>Singapore</en></item>
+  <item><zh>新西兰</zh><en>New Zealand</en></item>
+  <item><zh>日本</zh><en>Japan</en></item>
+  <item><zh>智利</zh><en>Chile</en></item>
+  <item><zh>朝鲜</zh><en>North Korea</en></item>
+  <item><zh>柬埔寨</zh><en>Cambodia</en></item>
+  <item><zh>格陵兰</zh><en>Greenland</en></item>
+  <item><zh>格鲁吉亚</zh><en>Georgia</en></item>
+  <item><zh>比利时</zh><en>Belgium</en></item>
+  <item><zh>毛里塔尼亚</zh><en>Mauritania</en></item>
+  <item><zh>沙特阿拉伯</zh><en>Saudi Arabia</en></item>
+  <item><zh>法国</zh><en>France</en></item>
+  <item><zh>波兰</zh><en>Poland</en></item>
+  <item><zh>波黑</zh><en>Bosnia and Herzegovina</en></item>
+  <item><zh>泰国</zh><en>Thailand</en></item>
+  <item><zh>津巴布韦</zh><en>Zimbabwe</en></item>
+  <item><zh>澳大利亚</zh><en>Australia</en></item>
+  <item><zh>爱尔兰</zh><en>Ireland</en></item>
+  <item><zh>爱沙尼亚</zh><en>Estonia</en></item>
+  <item><zh>玻利维亚</zh><en>Bolivia</en></item>
+  <item><zh>瑞典</zh><en>Sweden</en></item>
+  <item><zh>瑞士</zh><en>Switzerland</en></item>
+  <item><zh>白俄罗斯</zh><en>Belarus</en></item>
+  <item><zh>百慕大</zh><en>Bermuda</en></item>
+  <item><zh>科威特</zh><en>Kuwait</en></item>
+  <item><zh>科特迪瓦</zh><en>Ivory Coast</en></item>
+  <item><zh>科索沃</zh><en>Kosovo</en></item>
+  <item><zh>秘鲁</zh><en>Peru</en></item>
+  <item><zh>突尼斯</zh><en>Tunisia</en></item>
+  <item><zh>立陶宛</zh><en>Lithuania</en></item>
+  <item><zh>索马里</zh><en>Somalia</en></item>
+  <item><zh>约旦</zh><en>Jordan</en></item>
+  <item><zh>纳米比亚</zh><en>Namibia</en></item>
+  <item><zh>缅甸</zh><en>Myanmar</en></item>
+  <item><zh>罗马尼亚</zh><en>Romania</en></item>
+  <item><zh>美国（本土）</zh><en>United States (mainland)</en></item>
+  <item><zh>老挝</zh><en>Laos</en></item>
+  <item><zh>肯尼亚</zh><en>Kenya</en></item>
+  <item><zh>芬兰</zh><en>Finland</en></item>
+  <item><zh>苏丹</zh><en>Sudan</en></item>
+  <item><zh>苏里南</zh><en>Suriname</en></item>
+  <item><zh>英国</zh><en>United Kingdom</en></item>
+  <item><zh>荷兰</zh><en>Netherlands</en></item>
+  <item><zh>莫桑比克</zh><en>Mozambique</en></item>
+  <item><zh>菲律宾</zh><en>Philippines</en></item>
+  <item><zh>葡萄牙</zh><en>Portugal</en></item>
+  <item><zh>蒙古</zh><en>Mongolia</en></item>
+  <item><zh>西班牙</zh><en>Spain</en></item>
+  <item><zh>贝宁</zh><en>Benin</en></item>
+  <item><zh>赞比亚</zh><en>Zambia</en></item>
+  <item><zh>越南</zh><en>Vietnam</en></item>
+  <item><zh>阿塞拜疆</zh><en>Azerbaijan</en></item>
+  <item><zh>阿富汗</zh><en>Afghanistan</en></item>
+  <item><zh>阿尔及利亚</zh><en>Algeria</en></item>
+  <item><zh>阿尔巴尼亚</zh><en>Albania</en></item>
+  <item><zh>阿曼</zh><en>Oman</en></item>
+  <item><zh>阿根廷</zh><en>Argentina</en></item>
+  <item><zh>阿联酋</zh><en>United Arab Emirates</en></item>
+  <item><zh>韩国</zh><en>South Korea</en></item>
+  <item><zh>马拉维</zh><en>Malawi</en></item>
+  <item><zh>马来西亚</zh><en>Malaysia</en></item>
+  <item><zh>马耳他</zh><en>Malta</en></item>
+  <item><zh>马达加斯加</zh><en>Madagascar</en></item>
+  <item><zh>马里</zh><en>Mali</en></item>
+  <item><zh>黎巴嫩</zh><en>Lebanon</en></item>
+  <item><zh>黑山</zh><en>Montenegro</en></item>
+  <item><zh>  [等高线] %1</zh><en>  [Contours] %1</en></item>
+  <item><zh>  [等高线] PBF 文件不存在，跳过生成。</zh><en>  [Contours] PBF file not found, skipping generation.</en></item>
+  <item><zh>  [等高线] skedaddle_gen_contours 工具未编译，跳过生成。</zh><en>  [Contours] skedaddle_gen_contours tool not built, skipping generation.</en></item>
+  <item><zh>  [等高线] skedaddle_pbf_info 工具未编译，跳过生成。</zh><en>  [Contours] skedaddle_pbf_info tool not built, skipping generation.</en></item>
+  <item><zh>  [等高线] skedaddle_pbf_info 运行超时，跳过生成。</zh><en>  [Contours] skedaddle_pbf_info timed out, skipping generation.</en></item>
+  <item><zh>  [等高线] 区域内 %1 张 SRTM 瓦片已全部存在，仅生成等高线。</zh><en>  [Contours] All %1 SRTM tiles in region already exist; generating contours only.</en></item>
+  <item><zh>  [等高线] 区域内 %1/%2 张 SRTM 瓦片已存在，自动下载缺失的瓦片。</zh><en>  [Contours] %1/%2 SRTM tiles in region exist; auto-downloading missing ones.</en></item>
+  <item><zh>  [等高线] 区域范围：%1,%2 – %3,%4</zh><en>  [Contours] Region bounds: %1,%2 – %3,%4</en></item>
+  <item><zh>  [等高线] 无法从 PBF 提取 bbox，跳过生成。</zh><en>  [Contours] Cannot extract bbox from PBF, skipping generation.</en></item>
+  <item><zh>  [等高线] 无法创建 SRTM 缓存目录，跳过生成。</zh><en>  [Contours] Cannot create SRTM cache directory, skipping generation.</en></item>
+  <item><zh>  [等高线] 检测到已存在 %1，跳过生成。</zh><en>  [Contours] Detected existing %1, skipping generation.</en></item>
+  <item><zh>  [等高线] 生成失败（exit %1）。可在命令行手动运行：%2 %3</zh><en>  [Contours] Generation failed (exit %1). Run manually on CLI: %2 %3</en></item>
+  <item><zh>  [等高线] 生成完成 ✓ 地图目录已包含等高线数据。</zh><en>  [Contours] Generation complete ✓ map directory now contains contour data.</en></item>
+  <item><zh>  [等高线] 生成超时（2 分钟），已强制停止。</zh><en>  [Contours] Generation timed out (2 min), force-stopped.</en></item>
+  <item><zh>  [等高线]⚠ %1</zh><en>  [Contours]⚠ %1</en></item>
+  <item>
+    <zh>将下载：%1
+保存到：%2/%3-latest.osm.pbf</zh>
+    <en>Will download: %1
+Saved to: %2/%3-latest.osm.pbf</en>
+  </item>
+  <item>
+    <zh>搜索地点或道路（Ctrl+F）
+最近选择：</zh>
+    <en>Search place or road (Ctrl+F)
+Recent:</en>
+  </item>
+  <item><zh>无法比对远端（%1）。为稳妥起见保留本地文件，跳过下载。</zh><en>Cannot compare with remote (%1). Keeping local file to be safe, skipping download.</en></item>
+  <item><zh>（还没有途经点：面板开着时点地图添加；也可先设好起点和终点）</zh><en>(No via points yet: click the map with the panel open to add; or set start and end first)</en></item>
+</translations>

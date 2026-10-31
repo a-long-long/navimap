@@ -519,7 +519,21 @@ if(QT)
         qt5_add_resources(NAVIMAP_QT_RC_GEN ${NAVIMAP_QT_QRC})
     endif()
     target_sources(skedaddle PRIVATE ${NAVIMAP_QT_RC_GEN})
-    target_link_libraries(skedaddle PRIVATE navimap_core ${QT}::Widgets ${QT}::Network Threads::Threads)
+    target_link_libraries(skedaddle PRIVATE navmap_core ${QT}::Widgets ${QT}::Network Threads::Threads)
+    # skedaddle 直接引用 src/ 下的头（ui/window.h、i18n/i18n.h、utils/* 等），
+    # 需要源码根在 include 路径。历史上该路径靠 navmap_core 的传递 + 旧 .obj
+    # 缓存"恰好能编"，reconfigure 后全量重编才暴露缺失——这里显式补上。
+    target_include_directories(skedaddle PRIVATE ${CMAKE_SOURCE_DIR}/src)
+
+    # 语言包：拷贝到构建目录与 skedaddle.exe 同级的 lang/
+    # （运行时 i18n 按 exe 目录下的 lang/<code>.xml 加载，文件缺失则回退内置 TR[]）
+    add_custom_command(TARGET skedaddle POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E make_directory "$<TARGET_FILE_DIR:skedaddle>/lang"
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                "${CMAKE_SOURCE_DIR}/lang/en.xml"
+                "$<TARGET_FILE_DIR:skedaddle>/lang/en.xml"
+        COMMENT "拷贝英文语言包 lang/en.xml")
+
     message(STATUS "Qt 前端: 启用 (${QT} ${${QT}Widgets_VERSION})")
 else()
     message(STATUS "Qt 前端: 未找到 Qt6/Qt5 Widgets，跳过 skedaddle")

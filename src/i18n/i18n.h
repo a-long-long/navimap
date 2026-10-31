@@ -21,6 +21,10 @@ typedef enum {
 } I18nLang;
 
 void      i18n_set_lang(I18nLang l);
+/* 设置语言文件所在目录（通常是 exe 同目录下的 lang/）。
+ * 由 Qt 侧在启动时用 QCoreApplication::applicationDirPath() 传入；
+ * 未设置时回退到相对路径 lang/ 或工作目录，再失败则用内置 TR[] 兜底。 */
+void      i18n_set_lang_dir(const char *dir);
 I18nLang  i18n_lang(void);
 /* 以中文串为 key：返回当前语言的对应串（缺译回退中文）。 */
 const char *i18n_tr(const char *zh);
