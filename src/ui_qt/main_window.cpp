@@ -8,6 +8,8 @@
 #include "download_dialog.h"     /* 下载地图对话框（全球 Geofabrik 列表） */
 #include "i18n/i18n.h"            /* 多语言：i18n_tr / i18n_set_lang / I18nLang */
 #include <QMessageBox>
+#include <QLocale>       /* 探测系统区域/语言（跨平台，无需 Win32 ifdef） */
+#include <QTimer>
 
 /* 多语言便捷封装：以中文为 key，按当前语言返回串（默认中文原样返回）。 */
 static QString trc(const char *zh) { return QString::fromUtf8(i18n_tr(zh)); }
@@ -134,6 +136,9 @@ void MainWindow::start()
     m_timer->start(33);
     m_canvas->renderNow();
     updateGridBtn();   /* 让坐标网按钮显示当前坐标系统一短名 */
+    /* 启动后探测系统区域/语言：在事件循环起来后再弹窗（不阻塞 start 返回）。
+     * --ui-test / --shot 不调用 start，故无头模式不会弹窗卡住。 */
+    QTimer::singleShot(0, this, [this]() { checkSystemLanguage(); });
 }
 
 bool MainWindow::takeShot(const QString &path)
@@ -2325,6 +2330,70 @@ void MainWindow::tick()
         m_lang = (int)i18n_lang();
         retranslateUi();
     }
+}
+
+/* ---------------------------------------------------------------------------
+ * 启动后探测系统区域/语言：若与当前 lang 设置不一致（且本 app 恰好支持该语言），
+ * 弹窗让用户决定是否切换。提示本身用"目标语言"书写，保证英文用户也能读懂。
+ * 一旦用户做过决定（切换 或 保持），置 lang_autodetect=1 落盘，之后不再打扰。
+ * ------------------------------------------------------------------------- */
+void MainWindow::checkSystemLanguage()
+{
+    if (settings_get_int(m_a->cfg, "lang_autodetect", 0))
+        return;                     /* 已询问过，尊重上次决定 */
+
+    const QLocale sys = QLocale::system();
+
+    /* 本 app 仅支持 中文 / English；其它语言暂无翻译，不弹窗打扰。 */
+    I18nLang wanted;
+    switch (sys.language()) {
+        case QLocale::Chinese: wanted = I18N_ZH; break;
+        case QLocale::English: wanted = I18N_EN; break;
+        default:               return;          /* 不支持的系统语言，跳过 */
+    }
+
+    /* 先记一次"已询问"：无论用户最终选什么，之后都不再弹。 */
+    settings_set_int(m_a->cfg, "lang_autodetect", 1);
+
+    const int cur = settings_get_int(m_a->cfg, "lang", 0);
+    if ((int)wanted == cur) {                 /* 系统语言与设置一致，无需打扰 */
+        app_persist_settings(m_a);
+        return;
+    }
+
+    /* 展示用名称：语言（含区域），例如 "English (United States)" / "中文（中国）"。 */
+    QString sysName = sys.nativeLanguageName();
+    if (sysName.isEmpty()) sysName = sys.name();
+
+    QString title, msg, switchTxt, keepTxt;
+    if (wanted == I18N_EN) {
+        title     = QStringLiteral("Language");
+        msg       = QString("Your system language/region is %1. Switch 跑路了 to English?").arg(sysName);
+        switchTxt = QStringLiteral("Switch to English");
+        keepTxt   = QStringLiteral("Keep Chinese");
+    } else {
+        title     = QStringLiteral("语言");
+        msg       = QString("检测到系统语言/区域为 %1。将 跑路了 切换为中文？").arg(sysName);
+        switchTxt = QStringLiteral("切换为中文");
+        keepTxt   = QStringLiteral("保持英文");
+    }
+
+    QMessageBox box(this);
+    box.setIcon(QMessageBox::Question);
+    box.setWindowTitle(title);
+    box.setText(msg);
+    QPushButton *switchBtn = box.addButton(switchTxt, QMessageBox::AcceptRole);
+    box.addButton(keepTxt, QMessageBox::RejectRole);
+    box.setDefaultButton(switchBtn);
+    box.exec();
+
+    if (box.clickedButton() == switchBtn) {
+        m_lang = (int)wanted;
+        settings_set_int(m_a->cfg, "lang", m_lang);
+        i18n_set_lang((I18nLang)m_lang);
+        retranslateUi();            /* 重建菜单/标题/按钮等常驻文字 */
+    }
+    app_persist_settings(m_a);      /* 落盘 lang + lang_autodetect */
 }
 
 void MainWindow::retranslateUi()

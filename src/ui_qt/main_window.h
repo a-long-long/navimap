@@ -160,6 +160,10 @@ private:
     void commitHit(int idx);             /* 选中某条结果：跳过去 */
     void closeSearch();
     void tick();                         /* 主循环一拍：画布 tick + UI 刷新 */
+    /* 启动后探测系统区域/语言：与当前 lang 设置不一致且本 app 支持时，
+     * 弹窗让用户决定是否切换；记录一次决定后不再打扰。仅交互模式（start）触发，
+     * --ui-test/--shot 不调用 start，故不会在无头模式弹窗卡住。 */
+    void checkSystemLanguage();
     void refreshSteps();
     void locateGpxRow(int kind, int idx); /* 双击面板某行：把视口挪到那条轨迹/收藏 */
     void locate();                       /* 定位按钮：回到关注点 */
